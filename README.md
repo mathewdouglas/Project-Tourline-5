@@ -1,6 +1,6 @@
 <p align="center">
   <img src="assets/banner.png" width="1280"
-       alt="Project Tourline 5. The PT logo and a numeral 5 over a night circuit. Unofficial PC port of Gran Turismo 5, built on your PC from your own game.">
+       alt="Project Tourline 5. The PT5 logo centered over a mountain circuit at dusk. Unofficial PC port of Gran Turismo 5, built on your PC from your own game.">
 </p>
 
 # Project Tourline 5
