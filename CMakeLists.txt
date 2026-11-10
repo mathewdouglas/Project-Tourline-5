@@ -292,6 +292,20 @@ if(WIN32)
     target_link_libraries(gt5p PRIVATE
         ws2_32 xinput ole32 bcrypt shell32
         d3d12 dxgi dxguid d3dcompiler)
+    # Optional pinned compiler/validator pair; missing files select FXC at startup.
+    # An ALL target copies dependencies even when the executable is up to date.
+    set(GT5P_DXC_DIR "${CMAKE_SOURCE_DIR}/third_party/dxc")
+    if(EXISTS "${GT5P_DXC_DIR}/dxcompiler.dll" AND EXISTS "${GT5P_DXC_DIR}/dxil.dll")
+        add_custom_target(gt5p_dxc ALL
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:gt5p>/licenses/dxc"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GT5P_DXC_DIR}/dxcompiler.dll" "${GT5P_DXC_DIR}/dxil.dll" "$<TARGET_FILE_DIR:gt5p>"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GT5P_DXC_DIR}/LICENSE-LLVM.txt" "${GT5P_DXC_DIR}/LICENSE-MIT.txt"
+                "${GT5P_DXC_DIR}/LICENSE-MS.txt" "${GT5P_DXC_DIR}/VERSION.txt"
+                "$<TARGET_FILE_DIR:gt5p>/licenses/dxc")
+        add_dependencies(gt5p gt5p_dxc)
+    endif()
     # SDL2.dll is loaded at run time, if present, to read controllers XInput
     # does not know. scripts/get_sdl2.ps1 fetches it into third_party/.
     if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/SDL2.dll")

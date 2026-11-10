@@ -4,7 +4,7 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
-## Phase 34 — Race pack and helper-thread race preparation (2026-11-11, not yet run in game)
+## Phase 35 — Race pack and helper-thread race preparation (2026-11-11, not yet run in game)
 
 Ported from Tourline Prologue Phases 221, 228 and 229, on branch
 `port/deferred-prologue-improvements`. The loading gate used to prepare the
@@ -27,6 +27,64 @@ for byte. `scripts/test/pso_async.py` passes on the rollback path.
 **Not measured:** no GT5 run, no `gt5.exe` link, no loading time, memory or
 picture check. Prologue's loading-time figures are for its own title and are
 not carried over. The live checks are listed in the review document.
+
+## Phase 34 - Optional DXC guest shaders (2026-11-11)
+
+Implemented Prologue's DXC/SM6 path on the isolated GT5 5244db9 runtime, with
+GT5-specific selection, cache and dependency handling. No executable constants,
+SPU code, generated sources or shader translation were replaced. The shared
+runtime remains untouched. The compatibility patch changes only its backend
+section relative to Phase 33; all other 82 sections are byte-for-byte retained.
+
+F1 SHADERS now offers FXC/DXC, saved as `video.shader_compiler`; the environment
+override is `RSX_SHADER_COMPILER`. Restart is required. FXC remains the default.
+The pinned official v1.8.2502 compiler/validator pair and notices are fetched
+with `scripts/get_dxc.py`, hash-checked, then copied beside the engine by CMake.
+The loader selects one guest compiler before compilation, checks device SM6
+support, and falls back to FXC if the pair is missing. Individual shader failures
+never fall back across stage formats. F8 reports the actual compiler/cache.
+
+DXC uses strict HLSL 2018, literal resource-array scalarization and a distinct
+`dxc-1.8.2502-sm60-v1/` child namespace for bytecode, bundles, packs, driver PSOs,
+recipes/indexes and profiles. Existing FXC data is preserved. Synchronous and
+asynchronous compilation map targets/keys consistently. DLL initialization and
+cache resolution use `InitOnce`; compiler objects are released after each call.
+The port's paired helper shaders retain FXC.
+
+The offline script now targets `gt5.exe`, checks both game process names, accepts
+`--compiler`, verifies the requested DXC pair and keeps its log/cache namespace
+consistent. A bounded executable-catalog check extracted 203 programs and
+prepared one program's two variants: two compiled, zero rejected, guest entry
+not executed (`scratch/dxc/offline.log`). See [DXC setup](dxc.md).
+
+**Checks:** release build; production C compiler block with signed DXIL, sparse
+root-signature PSO creation on WARP, concurrent init/compilation, repeatability,
+error propagation, explicit/invalid/unset selection, missing compiler and
+missing-validator fallback; archive integrity/notices; bundle corruption/repair;
+production asynchronous PSO queue; settings/export and F1 save/restore. The
+six-row shader page now fits above its help text. Full patch application and
+reverse-check pass in a clean pinned runtime, with matching backend text after
+Windows checkout EOL normalization. Runtime setup `--check` passes.
+
+**Live:** `dxc34-cold` reaches the menu and High Speed Ring, then runs another
+40 seconds; `dxc34-warm` reaches RaceStart and runs 30 seconds. Window captures
+show road, cars, crowd, HUD and rear-view image. Warm startup prepares 859
+recorded DXC recipes with zero rejections in about 2.3 seconds. These changing
+scenes are not an FPS comparison or a full-race/stall acceptance test. Explicit
+FXC selects the old cache and renders GT Life; that run's timed input misses
+Arcade, so it is not a successful race-route comparison.
+
+**Why DXC is opt-in:** 491 translated sources were captured locally. Two trials
+of the first 100 in the Prologue GPU parity diagnostic execute 20 vertex and
+75 pixel shaders, with zero compile failures; five CPU-fetch vertex shaders
+are unsupported by that harness. Four vertex shaders flag non-finite
+differences and six pixel shaders flag values beyond 1/1024 tolerance, without
+discard-coverage differences. Smooth-texture trials still flag four pixel
+shaders. The FXC-vs-FXC optimization-level control has zero differences across
+6,782,976 values. These artificial inputs do not prove a visible game defect,
+but parity is not established. Reports/corpus remain ignored under
+`scratch/dxc/`. Further analysis and broader rendering acceptance are required
+before switching the default. Phase 32's intermittent freeze remains open.
 
 ## Phase 33 — Shared improvements from Tourline Prologue v0.2.5 (2026-11-11)
 

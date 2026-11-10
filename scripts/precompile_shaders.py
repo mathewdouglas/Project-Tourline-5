@@ -73,6 +73,8 @@ def main():
     parser.add_argument('--unpacker', type=Path, help='GTToolsSharp executable; extracts local GT.VOL to ignored scratch/')
     parser.add_argument('--scope', choices=('all', 'executable'), default='all')
     parser.add_argument('--cache', type=Path, default=ROOT / 'shadercache')
+    parser.add_argument('--compiler', choices=('fxc', 'dxc'), default=os.environ.get('RSX_SHADER_COMPILER', 'fxc'),
+                        help='Compiler to prepare (default: RSX_SHADER_COMPILER or fxc). DXC has a separate cache namespace.')
     parser.add_argument('--catalog', type=Path, help='Catalog destination (default: CACHE/library-v1/SCOPE)')
     parser.add_argument('--catalog-only', action='store_true')
     parser.add_argument('--compile-only', action='store_true', help='Reuse an existing extracted catalog; useful after interruption')
@@ -81,6 +83,7 @@ def main():
     parser.add_argument('--profile-limit', type=int, default=64, help='Maximum learned state profiles (0..256); more takes longer')
     parser.add_argument('--all-profile-combinations', action='store_true', help='Apply every learned state to every program, including different texture-unit usage; much slower')
     args = parser.parse_args()
+    if args.compiler not in ('fxc', 'dxc'): parser.error('RSX_SHADER_COMPILER must be fxc or dxc')
     if not 1 <= args.limit <= 16384: parser.error('--limit must be 1..16384')
     if not 0 <= args.profile_limit <= 256: parser.error('--profile-limit must be 0..256')
     cache = args.cache.resolve(); catalog = (args.catalog or cache / 'library-v1' / args.scope).resolve()
@@ -107,22 +110,32 @@ def main():
         print(f'Extracted {unique} distinct payloads from {records} records into {catalog}', flush=True)
     if not unique: raise SystemExit('No supported SHDS programs found')
     if args.catalog_only: return
-    if b'gt5p.exe' in subprocess.run(['tasklist', '/FI', 'IMAGENAME eq gt5p.exe', '/NH'], capture_output=True).stdout.lower():
-        raise SystemExit('Close the running game before offline compilation')
+    exe = ROOT / 'build/gt5.exe'
+    if not exe.is_file(): raise SystemExit('Build build/gt5.exe before offline compilation')
+    for name in ('gt5.exe', 'gt5p.exe'):
+        if name.encode() in subprocess.run(['tasklist', '/FI', 'IMAGENAME eq ' + name, '/NH'], capture_output=True).stdout.lower():
+            raise SystemExit('Close the running game before offline compilation')
+    if args.compiler == 'dxc':
+        import get_dxc
+        if not all((exe.parent / name).is_file() and get_dxc.sha256((exe.parent / name).read_bytes()) == digest
+                   for name, digest in get_dxc.FILES.values() if name.endswith('.dll')):
+            raise SystemExit('Run scripts/get_dxc.py and rebuild to install the pinned compiler/validator pair beside gt5.exe')
     cache.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     for key in ('PS3_HEADLESS', 'GT5P_NO_PRESENT', 'RSX_LIVE_DRAW'): env.pop(key, None)
     env.update(GT5P_NO_SETTINGS='1', PS3_VERBOSE='0', FS_HIDE='grim/file/contents', RSX_SHADER_WARMUP='1',
-               RSX_SHADER_ASYNC='1', RSX_SHADER_CACHE=str(cache), RSX_SHADER_LIBRARY=str(catalog),
+               RSX_SHADER_ASYNC='1', RSX_SHADER_CACHE=str(cache), RSX_SHADER_COMPILER=args.compiler, RSX_SHADER_LIBRARY=str(catalog),
                RSX_SHADER_LIBRARY_LIMIT=str(args.limit), GT5P_SHADER_PRECOMPILE_ONLY='1')
     env['RSX_SHADER_LIBRARY_PROFILE_LIMIT'] = str(args.profile_limit)
     env['RSX_SHADER_LIBRARY_BROAD'] = '1' if args.all_profile_combinations else '0'
     if args.base_profiles: env['RSX_SHADER_LIBRARY_PROFILES'] = 'base'
     else: env.pop('RSX_SHADER_LIBRARY_PROFILES', None)
-    log = cache / 'precompile.log'
+    effective_cache = cache / 'dxc-1.8.2502-sm60-v1' if args.compiler == 'dxc' else cache
+    effective_cache.mkdir(parents=True, exist_ok=True)
+    log = effective_cache / 'precompile.log'
     print('Preparing shaders before guest execution. This can take several minutes; log:', log, flush=True)
     with log.open('w', encoding='utf-8') as out:
-        proc = subprocess.Popen([str(ROOT / 'build/gt5p.exe')], cwd=ROOT, env=env, stdout=out, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen([str(exe)], cwd=ROOT, env=env, stdout=out, stderr=subprocess.STDOUT)
         try:
             last = 0
             while proc.poll() is None:
@@ -135,6 +148,8 @@ def main():
         finally:
             if proc.poll() is None: proc.terminate(); proc.wait()
     text = log.read_text(encoding='utf-8', errors='replace')
+    if args.compiler == 'dxc' and '[shader-compiler] DXC ' not in text:
+        raise SystemExit(f'DXC was unavailable on this device; inspect {log}. No DXC cache was prepared.')
     summary = re.search(r'\[shader-library\] finished: programs=(\d+) attempts=(\d+) rejected=(\d+) compiled=(\d+)', text)
     if not summary: raise SystemExit(f'Compilation did not finish; inspect {log}')
     if int(summary[3]): print(f'Partial coverage: {summary[3]} input/variant failures were skipped; inspect {log}.', flush=True)

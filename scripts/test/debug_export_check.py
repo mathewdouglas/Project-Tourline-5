@@ -6,6 +6,29 @@ import sys
 import zipfile
 
 exe, root = map(Path, sys.argv[1:])
+for case, value, override, disabled, file_value, effective in (
+    ('default', '', None, False, False, False),
+    ('fxc', '"fxc"', None, False, False, False),
+    ('dxc', '"dxc"', None, False, True, True),
+    ('override_fxc', '"dxc"', 'fxc', False, True, False),
+    ('override_dxc', '"fxc"', 'dxc', False, False, True),
+    ('invalid_file', '"invalid"', None, False, False, False),
+    ('invalid_env', '"dxc"', 'invalid', False, True, False),
+    ('no_settings', '"dxc"', None, True, False, False),
+):
+    folder = root / ('compiler_' + case); folder.mkdir()
+    settings = folder / 'settings.toml'
+    settings.write_text('[video]\n' + ('shader_compiler = ' + value + '\n' if value else ''))
+    env = os.environ.copy()
+    for key in ('RSX_SHADER_COMPILER', 'GT5P_NO_SETTINGS'): env.pop(key, None)
+    env.update(GT5P_SETTINGS=str(settings), TEST_COMPILER_FILE=str(int(file_value)), TEST_COMPILER_EFFECTIVE=str(int(effective)))
+    if override is not None: env['RSX_SHADER_COMPILER'] = override
+    if disabled: env['GT5P_NO_SETTINGS'] = '1'
+    subprocess.run([str(exe), 'compiler-settings'], cwd=folder, env=env, timeout=10, check=True)
+    if not disabled:
+        assert 'shader_compiler = "' + ('fxc' if file_value else 'dxc') + '"' in settings.read_text()
+    print('compiler_' + case + ': passed')
+
 for name, text, expected, override in (
     ('default', '', 0, None),
     ('set', 'trigger_deadzone=5\ntrigger_curve=2\nadaptive_triggers=true\ntrigger_rumble=true\nsdl_rumble=true\n', 5, None),

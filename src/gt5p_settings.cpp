@@ -37,6 +37,7 @@ bool         g_enabled = false;
 /* The variables a setting maps to; those set before the file is applied
  * override it, and the settings page says so. */
 const char* const kEnvNames[] = {
+    "RSX_SHADER_COMPILER",
     "GT5P_RESOLUTION", "RSX_MSAA", "RSX_PRESENT_SYNC", "RSX_SHADER_CACHE", "GT5P_SHADER_INDICATOR", "GT5P_PRELOAD_INDICATOR",
     "PAD_TRIGGER_DEADZONE", "PAD_TRIGGER_CURVE", "PAD_ADAPTIVE_TRIGGERS", "PAD_TRIGGER_RUMBLE", "PAD_SDL_RUMBLE",
     "PAD_NO_SDL", "PAD_NO_KEYBOARD", "PS3_VERBOSE",
@@ -189,7 +190,7 @@ bool known_key(std::string_view section, std::string_view key)
 {
     static const struct { const char* section; const char* key; } kKnown[] = {
         {"video", "resolution"},     {"video", "msaa"},           {"video", "aspect"},
-        {"video", "window"},
+        {"video", "window"}, {"video", "shader_compiler"},
         {"video", "vsync"},          {"video", "shader_cache"},
         {"video", "shader_indicator"}, {"video", "preload_indicator"}, {"video", "shader_precompile"}, {"video", "shader_warmup"}, {"video", "pipeline_async"}, {"video", "race_preload"},
         {"input", "sdl_controllers"}, {"input", "keyboard"}, {"input", "button_prompts"},
@@ -251,6 +252,11 @@ void read_prompts(toml::node_view<const toml::node> n, int& out)
 void parse_into(const toml::table& tbl, Gt5pSettings& s)
 {
     report_unknown_keys(tbl);
+    if (auto n = tbl["video"]["shader_compiler"]) {
+        const auto v = n.value<std::string>();
+        if (v && (*v == "dxc" || *v == "fxc")) s.shader_dxc = *v == "dxc";
+        else warn("video.shader_compiler must be \"dxc\" or \"fxc\"; keeping the default");
+    }
     read_resolution(tbl["video"]["resolution"], s.resolution);
     read_msaa(tbl["video"]["msaa"], s.msaa);
     if (auto n = tbl["video"]["aspect"]) {
@@ -321,6 +327,7 @@ void apply_env(const Gt5pSettings& s)
     set_default_env("RSX_PRESENT_SYNC", s.vsync ? "1" : "0");
     /* "0" turns the cache off; when on, leave RSX_SHADER_CACHE unset so the
      * backend keeps its own default folder. */
+    set_default_env("RSX_SHADER_COMPILER", s.shader_dxc ? "dxc" : "fxc");
     if (!s.shader_cache) set_default_env("RSX_SHADER_CACHE", "0");
     if (!s.shader_indicator) set_default_env("GT5P_SHADER_INDICATOR", "0");
     if (s.preload_indicator) set_default_env("GT5P_PRELOAD_INDICATOR", "1");
@@ -362,6 +369,7 @@ void reflect_env(Gt5pSettings& s)
     if (const char* e = getenv("RSX_PRESENT_SYNC")) s.vsync = atoi(e) != 0;   /* as the backend reads it */
     { const char* e = getenv("GT5P_ULTRAWIDE"); s.ultrawide = e && e[0] && e[0] != '0'; }
     { const char* e = getenv("RSX_WINDOW_MODE"); s.borderless = e && (e[0] == 'b' || e[0] == 'B'); }
+    if (const char* e = getenv("RSX_SHADER_COMPILER")) s.shader_dxc = !strcmp(e, "dxc");
     if (const char* e = getenv("RSX_SHADER_CACHE")) s.shader_cache = !(e[0] == '0' && !e[1]);
     if (const char* e = getenv("GT5P_SHADER_INDICATOR")) s.shader_indicator = e[0] != '0';
     if (const char* e = getenv("GT5P_PRELOAD_INDICATOR")) s.preload_indicator = e[0] == '1';
@@ -469,6 +477,8 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "# Keep compiled shaders in the shadercache folder so they aren't rebuilt\n"
          "# every run (the first visit to a screen can stutter while they are).\n"
          "# [RSX_SHADER_CACHE, \"0\" = off]\n"
+         "# Guest shaders: dxc (SM 6.0) or fxc (SM 5.0). Restart required.\n"
+         "shader_compiler = \"" << (s.shader_dxc ? "dxc" : "fxc") << "\"\n"
          "shader_cache = " << (s.shader_cache ? "true" : "false") << "\n"
          "# Show \"Compiling shaders\" over the game while a draw is waiting on a\n"
          "# shader or pipeline. [GT5P_SHADER_INDICATOR]\n"

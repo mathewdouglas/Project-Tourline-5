@@ -26,6 +26,7 @@ static __declspec(thread) int t_shader_preload;
 static volatile LONG* shader_busy_ctr(int preload){return preload?&g_rsx_shader_preload_busy:&g_rsx_shader_busy;}
 static void shader_work_done(int preload){InterlockedIncrement(preload?&preload_work:&demand_work);}
 static int shc_async_on(void){return 1;}
+static const char* shader_cache_dir(void){return getenv("RSX_SHADER_CACHE");}
 static void ps3_name_thread(const wchar_t* s){(void)s;}
 static void spack_race_begin(void){}
 static void spack_race_end(void){}
