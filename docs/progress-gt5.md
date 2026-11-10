@@ -68,7 +68,7 @@ again after that.
 **Method.** The test build was linked from the main checkout's existing
 object files plus the three changed sources (`main.cpp`, `cellPad.c`, the
 D3D12 backend) compiled with the flags in that checkout's `build.ninja`, so
-the lifted code was not rebuilt. A full `scriptsuild.cmd` build of this
+the lifted code was not rebuilt. A full `scripts/build.cmd` build of this
 branch has not been run.
 
 **Limits.** Arcade Single Race and Time Trial on two tracks only. GT Life
