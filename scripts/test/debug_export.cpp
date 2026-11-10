@@ -51,6 +51,18 @@ int main(int argc, char** argv) {
     std::string mode = argv[1];
     s_fault = mode == "fault";
     gt5p_settings_load();
+    if (mode == "compiler-settings") {
+        const bool file = atoi(getenv("TEST_COMPILER_FILE")) != 0;
+        const bool effective = atoi(getenv("TEST_COMPILER_EFFECTIVE")) != 0;
+        assert(gt5p_settings_file().shader_dxc == file);
+        assert(gt5p_settings().shader_dxc == effective);
+        if (gt5p_settings_enabled()) {
+            auto saved = gt5p_settings_file(); saved.shader_dxc = !file;
+            assert(gt5p_settings_store(saved));
+            assert(gt5p_settings_file().shader_dxc == !file);
+        }
+        return 0;
+    }
     if (mode == "controls-settings") {
         int file = atoi(getenv("TEST_CONTROLS_FILE")), effective = atoi(getenv("TEST_CONTROLS_EFFECTIVE"));
         const auto& f = gt5p_settings_file(); const auto& e = gt5p_settings();

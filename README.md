@@ -49,6 +49,10 @@ in [the port review](docs/prologue-sync-review.md).
 
 `scripts\get_sdl2.ps1` fetches SDL2 for more controllers. `scripts\get_ffmpeg.ps1` fetches FFmpeg for the opening movie. Without FFmpeg the movie stays black. The build copies both beside the executable. Keep `shadercache/`. It belongs to this machine.
 
+Optional **DXC shader compilation** is available under F1 > Shaders after running
+`scripts/get_dxc.py` and rebuilding. FXC remains the default pending GT5 shader
+parity acceptance. [Setup, cache separation and validation](docs/dxc.md).
+
 ## Known problems
 
 - About every other race freezes for about 2.5 seconds, at varying points on the track. It still happens with vsync off. Phase 32 (2026-10-30) found the SPU lanes waiting in the runtime's lock-line lock. What holds that lock for the length of the freeze is still open.

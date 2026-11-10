@@ -26,6 +26,7 @@ struct Gt5pSettings {
     bool borderless = false;    /* a borderless window over the monitor (RSX_WINDOW_MODE) */
     bool vsync        = true;   /* wait for the monitor's vblank when presenting */
     bool shader_cache = true;   /* keep compiled shaders in shadercache/ between runs */
+    bool shader_dxc = false;    /* optional guest SM 6.0; retain FXC pending GT5 parity acceptance */
     bool shader_indicator = true;   /* "Compiling shaders" over the game while a draw waits on a shader */
     bool preload_indicator = false; /* the quieter "Loading shaders" badge for background preload work */
     bool shader_warmup = true;      /* prepare recorded pipelines during startup in the background */

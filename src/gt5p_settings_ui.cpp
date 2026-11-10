@@ -169,6 +169,12 @@ const std::vector<Item>& items()
           "RSX_RACE_PREWARM", kOnOff,
           [](const Gt5pSettings& s) { return s.race_preload ? 1 : 0; },
           [](Gt5pSettings& s, int v) { s.race_preload = v != 0; }, nullptr },
+        { L"SHADERS", L"Shader compiler",
+          L"DXC builds guest shaders for modern graphics cards. FXC restores the older compiler. "
+          L"Each keeps its own cache; switching requires a restart and new shaders must be prepared.",
+          "RSX_SHADER_COMPILER", { {0, L"FXC"}, {1, L"DXC"} },
+          [](const Gt5pSettings& s) { return s.shader_dxc ? 1 : 0; },
+          [](Gt5pSettings& s, int v) { s.shader_dxc = v != 0; }, nullptr },
         { L"INPUT", L"PlayStation / other controllers",
           L"Read DualSense, DualShock, Switch and other controllers through SDL2.dll. Xbox "
           L"controllers work either way.",
@@ -379,8 +385,15 @@ struct Slot { int x0, x1, y; };
 std::vector<Slot> layout(const std::vector<int>& r)
 {
     std::vector<Slot> out;
-    int nbtn = 0, y = kRowY;
-    for (int id : r) nbtn += is_button(id);
+    int nbtn = 0, nitems = 0, y = kRowY;
+    for (int id : r) {
+        nbtn += is_button(id);
+        nitems += id >= 0 && items()[id].key < 0;
+    }
+    /* Six shader rows must leave space for the selected row's help. Keyboard
+     * bindings retain their separate two-column layout. */
+    const int available_pitch = nitems > 1 ? (kHelpY - 12 - kFieldH - kRowY) / (nitems - 1) : kRowH;
+    const int pitch = available_pitch < kRowH ? available_pitch : kRowH;
     int bx = kW / 2 - (nbtn * kBtnW + (nbtn - 1) * kBtnGap) / 2;
     for (int id : r) {
         if (id == kRowHead) out.push_back({ kPx0 + 40, kPx1 - 40, kBarY });
@@ -389,7 +402,7 @@ std::vector<Slot> layout(const std::vector<int>& r)
             const int x0 = col ? kW / 2 + 10 : kPx0 + 30;
             out.push_back({ x0, x0 + (kPx1 - kPx0) / 2 - 40, kKeyY + (k % 8) * kKeyH });
         }
-        else if (id >= 0) { out.push_back({ kPx0 + 40, kPx1 - 40, y }); y += kRowH; }
+        else if (id >= 0) { out.push_back({ kPx0 + 40, kPx1 - 40, y }); y += pitch; }
         else { out.push_back({ bx, bx + kBtnW, kBtnY }); bx += kBtnW + kBtnGap; }
     }
     return out;

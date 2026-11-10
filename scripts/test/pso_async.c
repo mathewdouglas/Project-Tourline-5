@@ -31,6 +31,7 @@ static DWORD caller,driver;
 static DWORD delay_ms=100;
 static HANDLE allow_driver;
 static char folder[1024];
+static const char* shader_cache_dir(void){return getenv("RSX_SHADER_CACHE");}
 static D3D12_GRAPHICS_PIPELINE_STATE_DESC template;
 static void* vertex;static void* pixel;
 static SRWLOCK warm_lock=SRWLOCK_INIT;

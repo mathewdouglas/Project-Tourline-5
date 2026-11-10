@@ -36,7 +36,7 @@ boot milestone upstream reaches.
 Treat every statement about BCUS98158 as a hypothesis unless it appears under
 "Measured on the disc build" below.
 
-## Current GT5 continuation (2026-11-11, GT5 Phase 33)
+## Current GT5 continuation (2026-11-11, GT5 Phase 34)
 
 This branch targets **Gran Turismo 5 BCUS98114-v104**. The Prologue history
 below is retained as evidence. Read [docs/progress-gt5.md](docs/progress-gt5.md)
@@ -56,6 +56,13 @@ ported. Native control-assignment and opening-option hooks still need GT5
 measurements; never copy their Prologue addresses. New controls and feedback
 options are neutral/off by default. Existing explicit preload-off settings
 are preserved. All rollbacks and validation are in the review document.
+
+DXC is implemented as an optional compiler (F1 SHADERS, or
+`RSX_SHADER_COMPILER=dxc`). Fetch the pinned DLL pair with `scripts/get_dxc.py`
+and rebuild. FXC stays the default pending GT5 parity acceptance. DXC stores
+all compiler-dependent caches under `dxc-1.8.2502-sm60-v1/`; do not move old FXC
+recipes into it. See [docs/dxc.md](docs/dxc.md) and Phase 34 for the synthetic
+differences, live checks and offline preparation contract.
 
 ## Start here: historical Prologue state (2026-10-21, Phase 108)
 

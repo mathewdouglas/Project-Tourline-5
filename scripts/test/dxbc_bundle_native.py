@@ -26,6 +26,7 @@ block=source[first:source.index('/* RSX_SHADER_PACK (on;',first)]
 #include <string.h>
 typedef uint64_t u64;typedef uint32_t u32;typedef uint8_t u8;
 static void ps3_name_thread(const wchar_t* s) { (void)s; }
+static const char* shader_cache_dir(void) { return getenv("RSX_SHADER_CACHE"); }
 #include "bundle.inc"
 int main(int argc,char** argv) {
     assert(argc==3);_putenv_s("RSX_SHADER_CACHE",argv[1]);
