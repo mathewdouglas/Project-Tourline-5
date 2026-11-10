@@ -69,6 +69,17 @@ string(JSON GT5P_PACER_LR ERROR_VARIABLE GT5P_PACER_LR_ERR GET "${GT5P_T}" frame
 if(GT5P_PACER_LR_ERR)
     set(GT5P_PACER_LR "")
 endif()
+# Screens of a title without .gpb scripts: files that mark them (cellPad
+# PAD_MILESTONE_FILES) and which of those start a race load or are a menu
+# (backend RSX_SCOPE_LABELS). Measured per executable; absent: none.
+string(JSON GT5P_SCREEN_FILES ERROR_VARIABLE GT5P_SCREEN_FILES_ERR GET "${GT5P_T}" screen_files)
+if(GT5P_SCREEN_FILES_ERR)
+    set(GT5P_SCREEN_FILES "")
+endif()
+string(JSON GT5P_SCOPE_LABELS ERROR_VARIABLE GT5P_SCOPE_LABELS_ERR GET "${GT5P_T}" scope_labels)
+if(GT5P_SCOPE_LABELS_ERR)
+    set(GT5P_SCOPE_LABELS "")
+endif()
 # vtable of the title's mListBox widget: the settings page finds the race
 # pause bar by it (Phase 117); absent: none.
 string(JSON GT5P_ASPECT_ADDR ERROR_VARIABLE GT5P_ASPECT_ADDR_ERR GET "${GT5P_T}" aspect_16_9_float)
@@ -224,6 +235,8 @@ set(GT5P_MAIN_DEFS
     "GT5P_BOOT_FROM=\"${GT5P_BOOT_FROM}\""
     "GT5P_GCM_CTRL_BASE=${GT5P_GCM_CTRL_BASE}u"
     "GT5P_PACER_LR=\"${GT5P_PACER_LR}\""
+    "GT5P_SCREEN_FILES=\"${GT5P_SCREEN_FILES}\""
+    "GT5P_SCOPE_LABELS=\"${GT5P_SCOPE_LABELS}\""
     "GT5P_LISTBOX_VT=\"${GT5P_LISTBOX_VT}\""
     "GT5P_ASPECT_ADDR=\"${GT5P_ASPECT_ADDR}\""
     "GT5P_UI_ASPECT_ADDR=\"${GT5P_UI_ASPECT_ADDR}\""

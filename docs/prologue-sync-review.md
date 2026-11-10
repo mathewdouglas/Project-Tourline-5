@@ -216,21 +216,19 @@ needed are listed at the end.
   Only the `rsx_d3d12_backend.c` section changed; the other 82 sections are
   byte-identical to `8b6f586`.
 
-### Live checks still needed
+### Live result on GT5
 
-1. Build `gt5.exe` against the refreshed patch.
-2. A race load with a learned set, twice: the first should log
-   `helper threads ... (files)` then `pack stored`; the second
-   `pack hit` and `(pack)`. Compare `[race-prewarm] finished ... elapsed_ms`
-   with `RSX_RACE_PREWARM_THREADS=1 RSX_RACE_PREWARM_PACK=0`.
-3. Whether four below-normal helpers during loading disturb GT5's own
-   loading threads, pager or audio (underruns in the loading screen). If so,
-   lower the default or keep it at 1 for GT5.
-4. The cost of writing the pack just after a race starts, on this machine's
-   memory. `RSX_RACE_PREWARM_PACK_WRITE=0` is the switch if it shows as a
-   hitch.
-5. Working set before and after a load with a full-size pack.
-6. `race.ps1`-style captures after a pack-hit load: same picture as before.
+Run on GT5 afterwards (GT5 Phase 36 in [progress-gt5.md](progress-gt5.md)).
+The race gate had never fired on GT5, because it keys on Prologue's `.gpb`
+screen names; GT5 screen files were measured and wired in first. With that:
+four helpers prepared 775 learned race pipelines in 640 ms from files and
+the pack was written (35.9 MB); a later load hit the pack and prepared 781
+in 93 ms after a 17 ms read, none rejected; the race picture is correct.
+
+Still open: GT Life and other modes (not measured), DXC, working set with a
+larger set, and whether the gate ever blocks long enough to notice.
+Prologue's loading bar is not needed: GT5 draws its own, and the gate is
+under a second here.
 
 ### Merged with the DXC work
 

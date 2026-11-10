@@ -146,7 +146,7 @@ $GT5BootHold = Get-GT5Boot
 # of the full path, since PDIPFS base names are two characters). The
 # difficulty and colour screens read no new file. gt5boot.ps1 always sets these.
 $GT5MilestoneFiles = "installed00.dat,Arcade=9/HV/GE,TrackList=9/7B/M3,CarList=9/9U/4I," +
-    "Transmission=5B/PF,RaceLoad=5K/E1,RaceStart=55/04"
+    "Transmission=5B/PF,RaceLoad=5K/E1,RaceAssets=9/OC/B7,RaceStart=55/04"
 
 # Arcade > Single Race > Beginner > High Speed Ring > car list > colour >
 # transmission > race. The menu's icon bar shows for about 8 s after

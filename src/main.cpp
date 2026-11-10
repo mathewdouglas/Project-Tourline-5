@@ -850,6 +850,18 @@ int main(int argc, char* argv[])
       if (GT5P_PACER_LR[0] && !(pad && pad[0] == '1') && !getenv("PS3_USLEEP_SKIP_LR"))
           _putenv_s("PS3_USLEEP_SKIP_LR", GT5P_PACER_LR); }
 
+    /* A title that reads hashed paths names no screens, so the renderer never
+     * learned which pipelines belong to a race and never prepared them while
+     * a race loads: Gran Turismo 5 filed every pipeline under the menu. The
+     * target's measured screen files (config/targets.json) name them here.
+     * GT5P_RACE_SCOPE=0 leaves both unset, as before. A PAD_MILESTONE_FILES
+     * or RSX_SCOPE_LABELS already in the environment wins. */
+    { const char* scope = getenv("GT5P_RACE_SCOPE");
+      if (GT5P_SCREEN_FILES[0] && GT5P_SCOPE_LABELS[0] && !(scope && scope[0] == '0')) {
+          if (!getenv("PAD_MILESTONE_FILES")) _putenv_s("PAD_MILESTONE_FILES", GT5P_SCREEN_FILES);
+          if (!getenv("RSX_SCOPE_LABELS")) _putenv_s("RSX_SCOPE_LABELS", GT5P_SCOPE_LABELS);
+      } }
+
     /* The mListBox vtable, for the settings page's race-pause check
      * (gt5p_settings_ui.cpp, Phase 117). */
     if (GT5P_LISTBOX_VT[0] && !getenv("GT5P_LISTBOX_VTABLE")) _putenv_s("GT5P_LISTBOX_VTABLE", GT5P_LISTBOX_VT);

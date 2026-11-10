@@ -68,6 +68,7 @@ static HRESULT create_guest_pso_job(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pd
 static u32 pso_resident_max(void){return PSO_WARM_MAX;}
 static void pso_touch_file(const char* path){(void)path;}
 static u32 pso_warm_keep_only(const char* index){(void)index;return 0;}
+static int u64_cmp(const void* a,const void* b){const u64 x=*(const u64*)a,y=*(const u64*)b;return x<y?-1:x>y;}
 static void spack_race_begin(void){}
 static void spack_race_end(void){}
 static volatile LONG s_spack_active=1;   /* the menu pack is not under test */
@@ -221,6 +222,7 @@ int main(int argc,char** argv){
         char race[1200],menu[1200];snprintf(race,sizeof race,"%s/race-v1.txt",m);snprintf(menu,sizeof menu,"%s/menu-v1.txt",m);
         f=fopen(race,"w");CHECK(f);fputs("000000000000000b\n000000000000000d\n000000000000000a\n000000000000000a\n000000000000000c\n",f);fclose(f);
         f=fopen(menu,"w");CHECK(f);fputs("000000000000000a\n",f);fclose(f);
+        _putenv_s("RSX_PSO_MENU_EXCLUDE_RACE","0");
         pso_recipe_maintain(m,race,menu);
         snprintf(p,sizeof p,"%s/%s",m,names[1]);CHECK(GetFileAttributesA(p)==INVALID_FILE_ATTRIBUTES);
         snprintf(p,sizeof p,"%s/%s",m,names[3]);CHECK(GetFileAttributesA(p)==INVALID_FILE_ATTRIBUTES);
@@ -229,9 +231,18 @@ int main(int argc,char** argv){
         CHECK(!strcmp(text,"000000000000000a\n000000000000000d\n"));
         memset(text,0,sizeof text);f=fopen(menu,"r");CHECK(f);fread(text,1,sizeof text-1,f);fclose(f);
         CHECK(!strcmp(text,"000000000000000a\n"));
+        /* Default: a pipeline in the race set leaves the menu set; others stay. */
+        _putenv_s("RSX_PSO_MENU_EXCLUDE_RACE","");
+        f=fopen(race,"w");CHECK(f);fputs("000000000000000d\n",f);fclose(f);
+        f=fopen(menu,"w");CHECK(f);fputs("000000000000000d\n000000000000000a\n",f);fclose(f);
+        pso_recipe_maintain(m,race,menu);
+        memset(text,0,sizeof text);f=fopen(menu,"r");CHECK(f);fread(text,1,sizeof text-1,f);fclose(f);
+        CHECK(!strcmp(text,"000000000000000a\n"));
+        memset(text,0,sizeof text);f=fopen(race,"r");CHECK(f);fread(text,1,sizeof text-1,f);fclose(f);
+        CHECK(!strcmp(text,"000000000000000d\n"));
         _putenv_s("RSX_RACE_PREWARM_WAIT_MS","30000");
     }
-    puts("PASS: recipe maintenance prunes unused recipes/bytecode and compacts indexes newest-first");
+    puts("PASS: recipe maintenance prunes unused recipes/bytecode, compacts indexes newest-first and moves race members out of the menu set");
     /* Saturation must never fall back to driver creation on the caller. */
     delay_ms=0;ResetEvent(allow_driver);
     for(u64 i=1000;i<1000+PSO_ASYNC_MAX+2;i++)CHECK(pso_queue_get(i,&template,&pso)==E_PENDING);

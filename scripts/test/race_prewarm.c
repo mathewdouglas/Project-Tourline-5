@@ -120,6 +120,7 @@ int main(int argc,char** argv){
     _putenv_s("RSX_SHADER_CACHE",cache);
     _putenv_s("RSX_PSO_RECIPE_KEEP_DAYS","0");   /* this test owns the index order and its repeats */
     _putenv_s("RSX_PSO_HITCH_MS","0");
+    _putenv_s("RSX_SCOPE_LABELS","GameLoad:load,GameMenu:menu,Odd:other");
     IDXGIFactory4* factory=NULL;IDXGIAdapter* adapter=NULL;
     CHECK(SUCCEEDED(CreateDXGIFactory1(&IID_IDXGIFactory4,(void**)&factory)));
     CHECK(SUCCEEDED(factory->lpVtbl->EnumWarpAdapter(factory,&IID_IDXGIAdapter,(void**)&adapter)));
@@ -303,6 +304,18 @@ int main(int argc,char** argv){
     }
     session_end();
     puts("PASS: demand jobs complete beside eight helpers; 20 overlapping reloads all finish; 20 mid-load shutdowns return with no waiter or thread left");
+
+    /* 12. Screen labels of a title without .gpb scripts (RSX_SCOPE_LABELS). */
+    _putenv_s("RSX_RACE_PREWARM_PACK","0");_putenv_s("RSX_RACE_PREWARM_THREADS","");
+    pso_warm_clear();pso_race_notify("GameMenu");CHECK(!s_pso_race_active && s_menu_active);
+    pso_race_notify("Unlisted");pso_race_notify("GameLoad:load");pso_race_notify("Game");pso_race_notify("Odd");
+    CHECK(!s_pso_race_active && s_menu_active && resident_count(N)==0);
+    pso_race_notify("GameLoad");
+    CHECK(s_pso_race_active && !s_menu_active && resident_count(N)==N && WaitForSingleObject(s_race_ready,0)==WAIT_OBJECT_0);
+    pso_race_notify("GameLoad");CHECK(s_pso_race_active);   /* a second marker of the same load passes the open gate */
+    pso_race_notify("GameMenu");CHECK(!s_pso_race_active && s_menu_active);
+    wait_released();session_end();
+    puts("PASS: a load label opens race scope and runs the gate; a menu label ends it; unlisted and malformed labels do nothing");
 
     /* Leave a pack of the full set for the Python cross-check. */
     _putenv_s("RSX_RACE_PREWARM_PACK","");_putenv_s("RSX_RACE_PREWARM_THREADS","");

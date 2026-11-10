@@ -62,6 +62,8 @@
     "title_id": "BCUS98114",
     "exe_name": "gt5",
     "code_end": "0x011752A4",
+    "screen_files": "installed00.dat,Arcade=9/HV/GE,TrackList=9/7B/M3,CarList=9/9U/4I,Transmission=5B/PF,RaceLoad=5K/E1,RaceAssets=9/OC/B7,RaceStart=55/04",
+    "scope_labels": "RaceLoad:load,RaceAssets:load,Arcade:menu,TrackList:menu,CarList:menu",
     "seeds": "config/extra_seeds_bcus98114_v104.json",
     "setjmp": "0x00D49E94",
     "longjmp": "0x00D49FB8",

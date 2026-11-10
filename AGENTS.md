@@ -64,7 +64,7 @@ all compiler-dependent caches under `dxc-1.8.2502-sm60-v1/`; do not move old FXC
 recipes into it. See [docs/dxc.md](docs/dxc.md) and Phase 34 for the synthetic
 differences, live checks and offline preparation contract.
 
-**Race pack and helper prewarm (GT5 Phase 35, not yet run in game).** The
+**Race pack and helper prewarm (GT5 Phase 35, run in game in Phase 36).** The
 loading gate prepares the learned race set on four helper threads
 (`RSX_RACE_PREWARM_THREADS`, `=1` old) from one file,
 `shadercache/warmup-v1/race-pack-v1.bin` (`RSX_RACE_PREWARM_PACK=0` old,
@@ -75,6 +75,17 @@ tracked. Test: `scripts/test/race_prewarm.py` (WARP, synthetic).
 still owed are in the review document's "Follow-up" section.
 `patches/incremental/` holds single-change copies of runtime edits that are
 already inside the main patch; `setup_runtime.py` does not read them.
+
+**GT5 race scope (GT5 Phase 36).** GT5 has no `.gpb` screen names, so the
+renderer never learned or prepared a race set until its screen files were
+measured. `config/targets.json` (`screen_files`, `scope_labels`) names them
+for BCUS98114-v104 and `src/main.cpp` sets `PAD_MILESTONE_FILES` and
+`RSX_SCOPE_LABELS` from it (`GT5P_RACE_SCOPE=0` off). They are measured for
+Arcade races only; never reuse them for another executable. Race members now
+leave the menu index (`RSX_PSO_MENU_EXCLUDE_RACE=0` old). Race pack verified
+live: see Phase 36. `PAD_FILE_LOG=2` logs every file stat/open, for finding a
+screen's marker file. A private test build can be linked from another
+checkout's objects without rebuilding the lifted code: Phase 36 notes.
 
 ## Start here: historical Prologue state (2026-10-21, Phase 108)
 

@@ -4,7 +4,83 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
-## Phase 35 — Race pack and helper-thread race preparation (2026-11-11, not yet run in game)
+## Phase 36 — GT5 race scope: the race set is learned and prepared (2026-11-11)
+
+**Found.** On GT5 the renderer never knew a race was loading. Race scope and
+the loading gate key on Prologue's `.gpb` screen scripts; GT5 reads hashed
+PDIPFS paths, so no name ever matched. Evidence from earlier runs: `race index
+0->0` on every boot, no `[race-prewarm]` line, and a menu index of 9,094
+entries cut to its 8,192 cap. Every race pipeline was filed as a menu
+pipeline. The race pack and helper threads of Phase 35 could not run at all,
+and neither could the race shader pack (Prologue Phase 103).
+
+**Measured on BCUS98114-v104** (private build, `PAD_FILE_LOG=2`, which logs
+every stat/open; five scripted runs, Arcade mode):
+
+| File (PDIPFS tail) | Read when | Runs |
+| --- | --- | --- |
+| `5K/E1` | start of a Single Race load | every first load of a session; not on a Time Trial load later in the same session |
+| `9/OC/B7` | 4 to 15 s into every race load | every load measured, including that Time Trial load |
+| `9/HV/GE`, `9/7B/M3`, `9/9U/4I` | Arcade, track list and car list screens, on every visit | re-read after leaving a race |
+| `55/04` | race start from the grid, every time | all |
+| `9/RA/HH` | the starting-grid screen, also when a race is left for it | most |
+
+A run on the next track in the list read 11 different asset files and the
+same markers, so the markers are not per track. Leaving a race returns to the
+grid screen without reading a menu file; leaving the grid reads the Arcade
+screen. Going back to the main menu reads no file at all.
+
+**Changed.**
+- cellPad: a labelled `PAD_MILESTONE_FILES` entry is passed to the listener
+  on every read (`PAD_LABEL_HOOK=0` marks only). `PAD_FILE_LOG=2` logs every
+  stat/open.
+- Backend: `RSX_SCOPE_LABELS` gives labels a role. `<label>:load` acts as a
+  race load (race scope, loading gate); `<label>:menu` as a menu screen.
+- `config/targets.json` holds the measured `screen_files` and `scope_labels`
+  for BCUS98114-v104; `src/main.cpp` sets both variables from them
+  (`GT5P_RACE_SCOPE=0` off; a value already in the environment wins).
+  `RaceLoad` and `RaceAssets` are loads; `Arcade`, `TrackList` and `CarList`
+  are menus.
+- Index maintenance moves race members out of the menu index
+  (`RSX_PSO_MENU_EXCLUDE_RACE=0` keeps them in both). The startup pass still
+  prepares them, in its race phase.
+
+**Live, High Speed Ring, 720p, scratch copy of the FXC cache, preload off:**
+
+| Run | Race set | Gate | Log |
+| --- | --- | --- | --- |
+| learn | 0 -> 775 | open at once | set recorded |
+| second | 775 | 640 ms, 4 helpers, files | pack stored, 35.9 MB |
+| third | 781 (6 new) | 187 ms, files | pack stale, rewritten |
+| fourth | 781 | 93 ms, pack hit, 17 ms read | 0 rejected |
+| defaults only, two loads in one session | 781 then 786 | 109 ms pack hit; second load from files | race scope ended at the Arcade screen |
+
+Race pictures after a pack-hit load show track, cars, HUD and mirror. A boot
+with preload on then rewrote the menu index from 8,193 to 7,379 entries.
+`race_prewarm.py` (16 checks) and `pso_async.py` (7 groups) pass.
+
+**Also seen.** With preload on, the menu-time pass prepared 8,192 "menu"
+pipelines in 199 s and one five-second window at the main menu had 72
+frames. One scripted run lost its Right press there and entered GT Life.
+The menu set shrinks as races re-learn their pipelines; it was not measured
+again after that.
+
+**Method.** The test build was linked from the main checkout's existing
+object files plus the three changed sources (`main.cpp`, `cellPad.c`, the
+D3D12 backend) compiled with the flags in that checkout's `build.ninja`, so
+the lifted code was not rebuilt. A full `scriptsuild.cmd` build of this
+branch has not been run.
+
+**Limits.** Arcade Single Race and Time Trial on two tracks only. GT Life
+events, licences, special events, online and replays were not measured:
+if they do not read `5K/E1` or `9/OC/B7` they get no race scope, as before;
+if they do, race scope lasts until an Arcade, track-list or car-list screen
+is read, so GT Life menus visited after such a race would be learned as race
+pipelines. No timing comparison against the single-thread path was made on
+GT5: the gate is under a second either way at this set size. Not tested with
+DXC. GT5 draws its own loading progress bar, so Prologue's bar is not needed.
+
+## Phase 35 — Race pack and helper-thread race preparation (2026-11-11; run in game in Phase 36)
 
 Ported from Tourline Prologue Phases 221, 228 and 229, on branch
 `port/deferred-prologue-improvements`. The loading gate used to prepare the
