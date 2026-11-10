@@ -289,6 +289,11 @@ if(GT5P_ENABLE_SPU AND GT5P_TARGET STREQUAL "BCUS98158" AND WIN32 AND CMAKE_C_CO
 endif()
 
 if(WIN32)
+    enable_language(RC)
+    configure_file(src/pt5.rc.in "${CMAKE_CURRENT_BINARY_DIR}/pt5.rc" @ONLY)
+    target_sources(gt5p PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/pt5.rc")
+    set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/pt5.rc" PROPERTIES
+        OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/assets/branding/pt5.ico")
     target_link_libraries(gt5p PRIVATE
         ws2_32 xinput ole32 bcrypt shell32
         d3d12 dxgi dxguid d3dcompiler)

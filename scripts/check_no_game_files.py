@@ -24,10 +24,12 @@ import sys
 
 MAX_BYTES = 1_000_000          # largest legitimate file today is ~160 KB of text
 MAX_BINARY_BYTES = 64_000      # no binary file belongs here at all, bar a small image
-# The README title image. It is project branding, not game data, and stays
-# under the text limit. Same exception as Tourline Prologue.
+# Project branding, not game data. Each explicitly named asset stays under
+# the text limit; other binary files retain the smaller limit.
 BRAND_ICONS = {
     "assets/banner.png",
+    "assets/branding/pt5-logo.png",
+    "assets/branding/pt5.ico",
 }
 # The ps3recomp local-changes patch (patches/*.patch) is our own source diff and
 # passed 1 MB in Phase 60. Text diffs there get a larger limit; anything else
