@@ -1,9 +1,66 @@
 # Changelog
 
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
-versions follow [SemVer](https://semver.org/). Nothing is tagged yet.
+versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-11-11
+
+The first tagged release of **Project Tourline 5**, the Gran Turismo 5
+(BCUS98114, 01.04 update executable `BCUS98114-v104`) target of this port.
+It is a **source release**: there is no player ZIP and no prebuilt
+executable. Build it with [Building from source](README.md#building-from-source)
+against your own copy of the game. Pre-alpha: GT5 boots to the main menu,
+plays its movies and sound, and Arcade races load and drive; known faults,
+including the intermittent race freeze (GT5 Phase 32), are open. The full
+record is [docs/progress-gt5.md](docs/progress-gt5.md).
+
+### Added
+- Ports from Tourline Prologue v0.2.5, adapted to GT5 (GT5 Phase 33; review in
+  [docs/prologue-sync-review.md](docs/prologue-sync-review.md)): analog
+  trigger pressure past the digital threshold, a PPU join-lifetime fix,
+  trigger dead zone and response curves, optional SDL vibration and trigger
+  feedback (off by default), the 128-byte pad capability fix, cheaper shader
+  text, a source-keyed shader bundle, separate demand and preload shader
+  badges, above-normal process priority, an optional texture LRU (off) and
+  bounded hitch tracing. Each has an environment switch that restores the
+  old behaviour.
+- Optional DXC (Shader Model 6) guest shader compiler with its own cache
+  directory (GT5 Phase 34; [docs/dxc.md](docs/dxc.md)). FXC stays the
+  default; select DXC in F1 > Shaders. `scripts/get_dxc.py` fetches the
+  pinned DLL pair.
+- Race preparation on helper threads and a one-file race pipeline pack,
+  `shadercache/warmup-v1/race-pack-v1.bin` (GT5 Phase 35). Switches:
+  `RSX_RACE_PREWARM_THREADS=1`, `RSX_RACE_PREWARM_PACK=0`.
+- GT5 race scope (GT5 Phase 36). The renderer now recognises GT5's race
+  loads from measured screen files (`screen_files`, `scope_labels` in
+  `config/targets.json`), so it learns the race pipeline set and prepares it
+  while a race loads. Measured live on High Speed Ring: 781 pipelines ready
+  in 93 ms from the pack. `GT5P_RACE_SCOPE=0` turns it off. Measured for
+  Arcade races only.
+- The PT5 logo as the executable and window icon, with version information
+  in the executable.
+- Isolated runtime setup: `scripts/setup_runtime.py` prepares
+  `../ps3recomp-tourline5` (ps3recomp `5244db9` plus
+  `patches/ps3recomp-5244db9-local.patch`).
+
+### Changed
+- Preload known shaders is on by default for new settings files. An
+  existing explicit `shader_warmup = false` stays false.
+- Pipelines learned in a race leave the menu preparation set
+  (`RSX_PSO_MENU_EXCLUDE_RACE=0` keeps them in both).
+
+### Known limits
+- No player package or installer; source build only.
+- DXC is not yet the default: synthetic comparisons found output
+  differences against FXC (see docs/dxc.md).
+- GT Life, licence tests, special events and online modes were not measured
+  for race scope.
+- Native control-assignment and opening-movie options from Prologue need
+  GT5 measurements and are not included.
+
+## Earlier work (untagged)
 
 ### Disc build (BCUS98158), October 2026: Phases 17 to 72
 
