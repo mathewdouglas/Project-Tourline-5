@@ -15,7 +15,7 @@ built on [ps3recomp](https://github.com/sp00nznet/ps3recomp). The game's PowerPC
 executable is lifted to C, compiled with clang-cl, and linked against the
 ps3recomp runtime, which stands in for the PS3 operating system.
 
-- `origin` is the working fork, `mathewdouglas/GT5P`.
+- `origin` is the working fork, `mathewdouglas/Project-Tourline-5`.
 - `upstream` is `sp00nznet/GT5P`.
 
 Upstream status is pre-alpha: it boots, loads 116 assets from the game's packed
@@ -36,7 +36,28 @@ boot milestone upstream reaches.
 Treat every statement about BCUS98158 as a hypothesis unless it appears under
 "Measured on the disc build" below.
 
-## Start here: state of play (2026-10-21, Phase 108)
+## Current GT5 continuation (2026-11-11, GT5 Phase 33)
+
+This branch targets **Gran Turismo 5 BCUS98114-v104**. The Prologue history
+below is retained as evidence. Read [docs/progress-gt5.md](docs/progress-gt5.md)
+and [docs/prologue-sync-review.md](docs/prologue-sync-review.md) first.
+
+The default runtime is now the isolated `../ps3recomp-tourline5`, pinned by
+`config/ps3recomp.json` to 5244db9 plus this branch's compatibility patch.
+Run `.venv\Scripts\python scripts/setup_runtime.py` to create it, or `--check`
+to verify it. `PS3RECOMP_DIR` overrides build, lift and test paths. The shared
+`../ps3recomp-gt5p-master` was left untouched; its older references below are
+historical. Refresh `patches/ps3recomp-5244db9-local.patch` from the isolated
+runtime after changes, preserving raw bytes, and verify clean application.
+Do not substitute Prologue's v0.18 patch: it lacks GT5-specific runtime fixes.
+
+Selected shared changes through Tourline Prologue v0.2.5 (`7d0ab12`) are
+ported. Native control-assignment and opening-option hooks still need GT5
+measurements; never copy their Prologue addresses. New controls and feedback
+options are neutral/off by default. Existing explicit preload-off settings
+are preserved. All rollbacks and validation are in the review document.
+
+## Start here: historical Prologue state (2026-10-21, Phase 108)
 
 Read this section first when picking the work up in a new session on this
 machine. Everything below it is the long record; [docs/progress.md](docs/progress.md)

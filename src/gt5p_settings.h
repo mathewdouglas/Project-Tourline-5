@@ -26,8 +26,9 @@ struct Gt5pSettings {
     bool borderless = false;    /* a borderless window over the monitor (RSX_WINDOW_MODE) */
     bool vsync        = true;   /* wait for the monitor's vblank when presenting */
     bool shader_cache = true;   /* keep compiled shaders in shadercache/ between runs */
-    bool shader_indicator = true;   /* "Compiling shaders" over the game while it is busy */
-    bool shader_warmup = false;     /* prepare recorded pipelines during startup in the background */
+    bool shader_indicator = true;   /* "Compiling shaders" over the game while a draw waits on a shader */
+    bool preload_indicator = false; /* the quieter "Loading shaders" badge for background preload work */
+    bool shader_warmup = true;      /* prepare recorded pipelines during startup in the background */
     bool pipeline_async = true;    /* build driver pipelines on one background worker */
     bool race_preload = true;      /* prepare learned race pipelines during loading */
     bool shader_precompile = true;  /* compile new shaders on background threads, all at once */
@@ -35,6 +36,11 @@ struct Gt5pSettings {
     /* [input] */
     bool sdl_controllers = true;    /* PlayStation / Switch / generic pads via SDL2.dll */
     bool keyboard        = true;    /* keyboard as pad 1 when no controller is connected */
+    int trigger_deadzone = 0;       /* 0..20 percent; rescale the remaining travel */
+    int trigger_curve = 0;          /* 0 linear, 1 gentle, 2 quick */
+    bool adaptive_triggers = false; /* fixed DualSense resistance, experimental hardware */
+    bool trigger_rumble = false;    /* supported Xbox triggers: existing game motor signals */
+    bool sdl_rumble = false;        /* forward game body motors through dynamic SDL2 */
     int button_prompts   = 0;       /* 0 auto, 1 PlayStation, 2 Xbox, 3 Nintendo, 4 keyboard (gt5p_glyphs.h) */
 
     /* [keyboard]: the key (Windows virtual-key code, 0 none) for each button,
@@ -56,6 +62,7 @@ struct Gt5pSettings {
     /* [debug] */
     int verbose_log = -1;       /* -1 auto (quiet), 0 off, 1 on */
     bool debug_export = false;  /* opt in to bounded recent logs and F3 reports */
+
 };
 
 /* The settings in effect, environment overrides included. Built-in defaults

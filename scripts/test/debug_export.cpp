@@ -51,6 +51,17 @@ int main(int argc, char** argv) {
     std::string mode = argv[1];
     s_fault = mode == "fault";
     gt5p_settings_load();
+    if (mode == "controls-settings") {
+        int file = atoi(getenv("TEST_CONTROLS_FILE")), effective = atoi(getenv("TEST_CONTROLS_EFFECTIVE"));
+        const auto& f = gt5p_settings_file(); const auto& e = gt5p_settings();
+        assert(f.trigger_deadzone == file && f.trigger_curve == (file ? 2 : 0));
+        assert(e.trigger_deadzone == effective);
+        assert(f.adaptive_triggers == (file != 0) && f.trigger_rumble == (file != 0) && f.sdl_rumble == (file != 0));
+        auto saved = f; saved.preload_indicator = true;
+        assert(gt5p_settings_store(saved));
+        assert(gt5p_settings_file().preload_indicator);
+        return 0;
+    }
     if (mode == "pipeline-settings") {
         const bool file = std::string(getenv("TEST_PIPELINE_FILE")) == "1";
         const bool effective = std::string(getenv("TEST_PIPELINE_EFFECTIVE")) == "1";

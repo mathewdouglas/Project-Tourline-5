@@ -5,6 +5,7 @@ New-Item -ItemType Directory -Path $dir | Out-Null
 $build = Join-Path $dir 'build.cmd'
 @"
 @echo off
+set "PATH=C:\Program Files (x86)\Microsoft Visual Studio\Installer;%PATH%"
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul
 if errorlevel 1 exit /b 1
 "C:\Program Files\LLVM\bin\clang-cl.exe" /nologo /O2 /MD /std:c++20 /EHsc /D_CRT_SECURE_NO_WARNINGS /I"$root/src" /I"$root/build" /I"$root/external/tomlplusplus" /Fo"$dir/" /Fe"$dir/test.exe" "$PSScriptRoot/debug_export.cpp" "$root/src/gt5p_debug_export.cpp" "$root/src/gt5p_settings.cpp" "$root/src/gt5p_keymap.cpp" /link user32.lib gdi32.lib shell32.lib

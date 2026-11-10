@@ -12,11 +12,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # =============================================================================
 # ps3recomp runtime
 # =============================================================================
-set(PS3RECOMP_DIR "${CMAKE_SOURCE_DIR}/../ps3recomp" CACHE PATH "Path to ps3recomp")
+set(PS3RECOMP_DIR "${CMAKE_SOURCE_DIR}/../ps3recomp-tourline5" CACHE PATH "Path to ps3recomp")
 
 if(NOT EXISTS "${PS3RECOMP_DIR}/CMakeLists.txt")
     message(FATAL_ERROR
         "ps3recomp not found at ${PS3RECOMP_DIR}\n"
+        "Prepare the pinned GT5 runtime with: python scripts/setup_runtime.py\n"
         "Clone it from https://github.com/sp00nznet/ps3recomp\n"
         "Or set -DPS3RECOMP_DIR=/path/to/ps3recomp")
 endif()

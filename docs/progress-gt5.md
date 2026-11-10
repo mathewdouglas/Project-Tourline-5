@@ -4,6 +4,42 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Phase 33 — Shared improvements from Tourline Prologue v0.2.5 (2026-11-11)
+
+Reviewed the source range from common ancestor `7ca5059` through Prologue
+`7d0ab12` (236 commits including merges). The complete adoption/defer record,
+source commits, rollback switches and validation are in
+[prologue-sync-review.md](prologue-sync-review.md).
+
+Ported analog pressure and PPU join-lifetime fixes; trigger response and
+optional SDL feedback; the 128-byte capability response; cheaper shader text
+and sample sharing; separate preload/demand badges; source-keyed shader
+bundling; process priority; optional texture LRU and bounded hitch diagnostics.
+New settings enable preload by default, preserving existing explicit false.
+The default runtime is isolated in `../ps3recomp-tourline5`, still on the GT5
+5244db9 base with this branch's compatibility patch. The shared runtime was
+left untouched. No GT5 addresses or generated sources were replaced.
+
+**Measured:** delayed PPU exits pass 128 iterations and original/rollback
+reproduce premature slot reuse. Trigger/capability/feedback fixtures pass;
+physical vibration is not verified. Two WARP vertex comparisons total
+3,899,392 output values with zero differences. Fragment arithmetic, volume
+lookups, async PSO queue, bundle corruption/repair and settings/export checks
+pass. Release `gt5.exe` builds. F1 Controls/Feedback values save correctly;
+Controls, Feedback and Debug captures were inspected.
+
+**GT5 run:** `prologue-sync-race` reaches MusicDecode, Arcade, TrackList,
+CarList, Transmission, RaceLoad and RaceStart, then runs another 40 seconds.
+Window shots show the track, cars, names, HUD and rear-view image. The shader
+bundle imports the old files while retaining them. This first run compiles new
+shader text: it is not an FPS comparison or a full-race/stall acceptance test.
+Phase 32's intermittent 2.5-second freeze remains open.
+
+Prologue's native assignment/opening hooks, catalogue, player release,
+DXC/interpreter migration and texture/PSO preparation redesign need GT5-specific
+work and were deferred. The existing GT5 milestone system and 256-event input
+scripts were explicitly retained when porting the newer input implementation.
+
 ## Open race rendering bugs (user report, 2026-10-29)
 
 Seen before the Phase 23 fixes; not caused by them.

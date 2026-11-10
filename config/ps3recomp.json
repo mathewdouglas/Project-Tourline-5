@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/sp00nznet/ps3recomp.git",
+  "version": "5244db9",
+  "commit": "5244db92669b54831c6d3ebb7a96d58c4dbfa6df",
+  "directory": "ps3recomp-tourline5",
+  "patch": "patches/ps3recomp-5244db9-local.patch"
+}

@@ -9,6 +9,15 @@ wrong far more often than the measurements under them. Before a conclusion goes
 in here, run the one command that would falsify it; label anything untested as a
 hypothesis in the text itself.
 
+## GT5 continuation — Prologue v0.2.5 shared ports (2026-11-11)
+
+Project Tourline 5 selectively adopts compatible Prologue work through
+`7d0ab12`, retaining its own 5244db9 runtime base and GT5-specific changes.
+The measured checks and actual GT5 race smoke are in
+[GT5 Phase 33](progress-gt5.md); the full adopted/deferred review is in
+[prologue-sync-review.md](prologue-sync-review.md). Prologue performance and
+executable-specific preparation findings below do not establish GT5 support.
+
 ## Phase 133 - Anisotropic filtering (2026-10-22)
 
 The user reported distant objects blurry, then sharp up close, and asked

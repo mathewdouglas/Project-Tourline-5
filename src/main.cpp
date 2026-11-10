@@ -823,6 +823,22 @@ int main(int argc, char* argv[])
      * motion, Phase 102). PS3_PPU_CORES=topo for one thread per core. */
     if (!getenv("PS3_PPU_CORES")) _putenv_s("PS3_PPU_CORES", "topo-ht");
 
+    /* Those guest threads share four logical CPUs, and the scheme above gives most of them normal host
+     * priority or less (the thread that prepares frames is "normal", the title's timer service "idle").
+     * In a normal-class process any other program's CPU work that Windows places on those CPUs runs at the
+     * same level or above and takes whole scheduler slices from them, while the rest of the machine is
+     * idle for them because they may not move: runs of 100 to 300 ms frames with the renderer waiting for
+     * commands (Phase 237). One class up, every game thread except the idle band is above an ordinary
+     * program's threads and the order among the game's own threads is unchanged.
+     * GT5P_PRIORITY_CLASS=normal for the old class, =high for one more. Not for offline preparation. */
+    { const char* cls = getenv("GT5P_PRIORITY_CLASS");
+      const char* offline = getenv("GT5P_SHADER_PRECOMPILE_ONLY");
+      const DWORD want = cls && !_stricmp(cls, "normal") ? 0
+                       : cls && !_stricmp(cls, "high")   ? HIGH_PRIORITY_CLASS
+                       : ABOVE_NORMAL_PRIORITY_CLASS;
+      if (want && !(offline && offline[0] && strcmp(offline, "0")) && SetPriorityClass(GetCurrentProcess(), want))
+          fprintf(stderr, "[sched] process priority class: %s\n", want == HIGH_PRIORITY_CLASS ? "high" : "above normal"); }
+
     /* The title's frame pacer pads each frame with a sleep up to the slowest
      * of the last four (up to 50 ms) once one passes a vblank. On a console
      * frame times vary by microseconds; here an SPU wait or a preempted
@@ -989,7 +1005,14 @@ int main(int argc, char* argv[])
          * from it (/dev_hdd0/game/<id>/...). */
         {
             char sfo[512];
-            snprintf(sfo, sizeof sfo, "%s/%sPARAM.SFO", vfs, game_dir);
+            /* The player launcher supplies an absolute GT5P_GAME_DIR while
+             * PS3_VFS_ROOT points at writable user data on another drive.
+             * Match cellFs's absolute-mapping handling for this direct read. */
+            const bool absolute_game_dir = game_dir[0] == '/' || game_dir[0] == '\\' ||
+                (game_dir[0] && game_dir[1] == ':' &&
+                 (game_dir[2] == '/' || game_dir[2] == '\\'));
+            if (absolute_game_dir) snprintf(sfo, sizeof sfo, "%sPARAM.SFO", game_dir);
+            else snprintf(sfo, sizeof sfo, "%s/%sPARAM.SFO", vfs, game_dir);
             cellGame_init_from_paramsfo(sfo);
         }
     }
@@ -1198,6 +1221,8 @@ int main(int argc, char* argv[])
 
     if (const char* only = getenv("GT5P_SHADER_PRECOMPILE_ONLY"); only && !strcmp(only, "1")) {
         printf("[shader-library] offline preparation returned; guest entry was not executed\n");
+        const char* flush = getenv("GT5P_OFFLINE_FLUSH");
+        if (!(flush && !strcmp(flush, "0"))) { fflush(stderr); fflush(stdout); }
         return 0;
     }
 

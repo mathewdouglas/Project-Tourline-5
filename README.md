@@ -41,6 +41,12 @@ A first boot with only the update package's `PDIPFS` files, and with `GT.VOL` in
 
 The keyboard is used when no controller is connected: arrows, Z Cross, X Circle, A Square, S Triangle, Q/W L1/R1, 1/2 L2/R2, Enter Start, Tab Select. **F1** opens settings. They are saved in `gt5p_settings.toml` at the repository root. **F3** opens the profiler.
 
+F1 **Controls** has trigger dead-zone and response-curve options. **Feedback**
+offers optional SDL vibration, Xbox trigger rumble and fixed DualSense trigger
+resistance; these default off. The shared improvements adopted from Tourline
+Prologue, their rollback switches and remaining GT5 prerequisites are recorded
+in [the port review](docs/prologue-sync-review.md).
+
 `scripts\get_sdl2.ps1` fetches SDL2 for more controllers. `scripts\get_ffmpeg.ps1` fetches FFmpeg for the opening movie. Without FFmpeg the movie stays black. The build copies both beside the executable. Keep `shadercache/`. It belongs to this machine.
 
 ## Known problems
@@ -58,9 +64,9 @@ The measurement record is [docs/progress-gt5.md](docs/progress-gt5.md). [CHANGEL
 
 The supported game is the 01.04 update executable above. A source build needs your own dump, Windows 10/11 x64, Visual Studio 2022 (C++ workload), LLVM 18+ (`clang-cl`), CMake 3.20+, Ninja and Python 3.10+.
 
-`scripts\build.cmd` compiles against a ps3recomp checkout at `../ps3recomp-gt5p-master` unless `PS3RECOMP_DIR` is set. Per-build addresses live in [config/targets.json](config/targets.json). The 01.04 key is `BCUS98114-v104`. `code_end` is `0x011752A4`.
+Run `.venv\Scripts\python scripts/setup_runtime.py` first. It prepares the pinned runtime and this branch's GT5 compatibility patch in `../ps3recomp-tourline5`, without changing another project's runtime. `--check` verifies it. `scripts\build.cmd` uses that checkout unless `PS3RECOMP_DIR` is set. Per-build addresses live in [config/targets.json](config/targets.json). The 01.04 key is `BCUS98114-v104`. `code_end` is `0x011752A4`.
 
-`scripts/gen_hle_stubs.py` imports its ELF helper from a sibling checkout named `ps3recomp`. Use the same toolkit for that import, the lifter commands and the build.
+The HLE and SPU lift scripts use the same runtime, including `PS3RECOMP_DIR` overrides. Use that toolkit for all lifter commands and the build.
 
 From your own disc and the decrypted 01.04 executable:
 
@@ -69,7 +75,7 @@ echo BCUS98114-v104 > input/target
 
 python scripts/jumptables.py --write
 python scripts/code_labels.py --write
-T=../ps3recomp-gt5p-master/tools
+T=${PS3RECOMP_DIR:-../ps3recomp-tourline5}/tools
 python $T/find_functions.py input/EMAIN.ELF --json --seed-json config/extra_seeds_bcus98114_v104.json --output analysis/functions.json
 python -c "import json; f=json.load(open('analysis/functions.json')); json.dump([x for x in f if int(x['start'],16) < 0x11752A4], open('analysis/functions_code.json','w'))"
 python scripts/gen_hle_stubs.py input/EMAIN.ELF analysis/hle_stubs.json

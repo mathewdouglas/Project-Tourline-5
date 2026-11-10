@@ -58,6 +58,7 @@ extern volatile uint32_t g_pad_inject_buttons;  /* cellPad.c: pressed for the ti
 void pad_set_keyboard_enabled(int on);          /* cellPad.c */
 void rsx_d3d12_set_present_sync(int interval);  /* rsx_d3d12_backend.c */
 void gt5p_shader_indicator_enable(int on);      /* gt5p_shaderbusy.cpp */
+void gt5p_preload_indicator_enable(int on);
 extern void (*g_pad_screen_hook)(const char*);  /* cellPad.c: every file the title opens */
 int  rsx_d3d12_overlay_available(void);         /* rsx_d3d12_backend.c */
 void rsx_d3d12_backbuffer_size(int* w, int* h);
@@ -148,9 +149,10 @@ const std::vector<Item>& items()
           [](const Gt5pSettings& s) { return s.shader_precompile ? 1 : 0; },
           [](Gt5pSettings& s, int v) { s.shader_precompile = v != 0; }, nullptr },
         { L"SHADERS", L"Preload known shaders",
-          L"Prepare learned menu, then race pipelines while the game starts and the movie "
-          L"plays. Live draws take priority. First visits still learn. Needs shader cache "
-          L"and background pipelines; uses more memory.",
+          L"Prepare learned menu, then race pipelines in the background while the game starts "
+          L"and the movie plays (on by default). Live draws take priority. First visits still "
+          L"learn. Needs shader cache and background pipelines; uses more memory. Takes effect "
+          L"after a restart.",
           "RSX_SHADER_WARMUP", kOnOff,
           [](const Gt5pSettings& s) { return s.shader_warmup ? 1 : 0; },
           [](Gt5pSettings& s, int v) { s.shader_warmup = v != 0; }, nullptr },
@@ -188,6 +190,31 @@ const std::vector<Item>& items()
           [](const Gt5pSettings& s) { return s.button_prompts; },
           [](Gt5pSettings& s, int v) { s.button_prompts = v; },
           [](int v) { gt5p_glyphs_set_style(v); } },
+        { L"CONTROLS", L"Trigger dead zone",
+          L"Removes the start of both triggers and rescales the remaining travel. Default 0% preserves existing input. Restart to apply.",
+          "PAD_TRIGGER_DEADZONE", { {0, L"0%"}, {2, L"2%"}, {5, L"5%"}, {10, L"10%"}, {15, L"15%"}, {20, L"20%"} },
+          [](const Gt5pSettings& s) { return (int)s.trigger_deadzone; },
+          [](Gt5pSettings& s, int v) { s.trigger_deadzone = v; }, nullptr },
+        { L"CONTROLS", L"Trigger response",
+          L"Linear preserves existing response. Gentle gives finer control near rest; Quick reaches high pressure sooner. Both keep full travel. Restart to apply.",
+          "PAD_TRIGGER_CURVE", { {0, L"Linear"}, {1, L"Gentle"}, {2, L"Quick"} },
+          [](const Gt5pSettings& s) { return (int)s.trigger_curve; },
+          [](Gt5pSettings& s, int v) { s.trigger_curve = v; }, nullptr },
+        { L"FEEDBACK", L"DualSense fixed resistance",
+          L"Experimental: fixed resistance on both DualSense triggers through SDL2, while focused and input is active. No vehicle telemetry. Bluetooth may need a controller power cycle before other apps can use DirectInput. Unsupported devices ignore it. Restart to apply.",
+          "PAD_ADAPTIVE_TRIGGERS", kOnOff,
+          [](const Gt5pSettings& s) { return (int)s.adaptive_triggers; },
+          [](Gt5pSettings& s, int v) { s.adaptive_triggers = v; }, nullptr },
+        { L"FEEDBACK", L"Xbox trigger rumble",
+          L"Experimental: sends the game's large/small motor commands to supported left/right Xbox trigger motors through SDL2. No ABS or wheel-slip telemetry. Restart to apply.",
+          "PAD_TRIGGER_RUMBLE", kOnOff,
+          [](const Gt5pSettings& s) { return (int)s.trigger_rumble; },
+          [](Gt5pSettings& s, int v) { s.trigger_rumble = v; }, nullptr },
+        { L"FEEDBACK", L"SDL controller vibration",
+          L"Forwards the game's vibration commands to controller body motors. Also enable vibration in the game's own controller options. Bluetooth DualSense uses enhanced reports; power cycle it before using DirectInput in another app if needed. Restart to apply.",
+          "PAD_SDL_RUMBLE", kOnOff,
+          [](const Gt5pSettings& s) { return (int)s.sdl_rumble; },
+          [](Gt5pSettings& s, int v) { s.sdl_rumble = v; }, nullptr },
         KEY_ITEM(0, L"Cross"),  KEY_ITEM(1, L"Circle"), KEY_ITEM(2, L"Square"), KEY_ITEM(3, L"Triangle"),
         KEY_ITEM(4, L"L1"),     KEY_ITEM(5, L"R1"),     KEY_ITEM(6, L"L2"),     KEY_ITEM(7, L"R2"),
         KEY_ITEM(8, L"L3"), KEY_ITEM(9, L"R3"), KEY_ITEM(10, L"Start"), KEY_ITEM(11, L"Select"),
@@ -213,11 +240,20 @@ const std::vector<Item>& items()
           [](const Gt5pSettings& s) { return s.anisotropy; },
           [](Gt5pSettings& s, int v) { s.anisotropy = v; }, nullptr },
         { L"GAME", L"Shader compile indicator",
-          L"Show \"Compiling shaders\" in the corner while the game builds shaders.",
+          L"Show \"Compiling shaders\" in the corner while a draw is waiting on a shader or "
+          L"pipeline. Background preloading is not counted here.",
           "GT5P_SHADER_INDICATOR", kOnOff,
           [](const Gt5pSettings& s) { return s.shader_indicator ? 1 : 0; },
           [](Gt5pSettings& s, int v) { s.shader_indicator = v != 0; },
           [](int v) { gt5p_shader_indicator_enable(v); } },
+        { L"GAME", L"Shader preload indicator",
+          L"Show a smaller, quieter \"Loading shaders\" in the corner while the game prepares "
+          L"known shaders in the background. Off by default; \"Compiling shaders\" takes its place "
+          L"when both would show.",
+          "GT5P_PRELOAD_INDICATOR", kOnOff,
+          [](const Gt5pSettings& s) { return s.preload_indicator ? 1 : 0; },
+          [](Gt5pSettings& s, int v) { s.preload_indicator = v != 0; },
+          [](int v) { gt5p_preload_indicator_enable(v); } },
         { L"PERFORMANCE", L"Frame clock",
           L"The vblank the game paces its frames to. 59.94 Hz is the console's (30 fps at "
           L"most). 62.5 Hz allows 31 fps, but a frame that just misses two vblanks drops to 20.",
@@ -1483,7 +1519,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         case VK_PRIOR: switch_section(-1); break;
         case VK_NEXT:  switch_section(+1); break;
         case VK_ESCAPE: case VK_BACK: back(); break;
-        case VK_F1: set_open(false); break;
+        case VK_F1: set_open(!s_open); break;
         default: return 0;
         }
         redraw();

@@ -584,13 +584,15 @@ extern "C" void rsx_d3d12_debug_dump_to(FILE*);
 extern "C" void pad_debug_milestones_to(FILE*);
 extern "C" void gt5p_debug_main(FILE*);
 extern "C" volatile LONG g_rsx_shader_busy, g_rsx_shaders_pending, g_rsx_shaders_compiled, g_rsx_pipelines_built;
+extern "C" volatile LONG g_rsx_shader_preload_busy, g_rsx_shader_preload_total, g_rsx_shader_demand_total;
 
 /* Each live section gets its own guard so a damaged pointer does not discard
  * the remaining report. No guest/renderer lock or thread suspension here. */
 extern "C" void gt5p_debug_snapshot(FILE* out)
 {
-    fprintf(out, "Shaders: busy=%ld pending=%ld compiled=%ld pipelines=%ld\n",
-        g_rsx_shader_busy, g_rsx_shaders_pending, g_rsx_shaders_compiled, g_rsx_pipelines_built);
+    fprintf(out, "Shaders: busy=%ld pending=%ld compiled=%ld pipelines=%ld preload_busy=%ld preload_total=%ld demand_total=%ld\n",
+        g_rsx_shader_busy, g_rsx_shaders_pending, g_rsx_shaders_compiled, g_rsx_pipelines_built,
+        g_rsx_shader_preload_busy, g_rsx_shader_preload_total, g_rsx_shader_demand_total);
     __try { pad_debug_milestones_to(out); }
     __except(EXCEPTION_EXECUTE_HANDLER) { fprintf(out, "Milestones unavailable\n"); }
     __try { gt5p_debug_main(out); }

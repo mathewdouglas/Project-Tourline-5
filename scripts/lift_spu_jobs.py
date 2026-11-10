@@ -27,7 +27,7 @@ import target
 from dis import read
 
 ROOT = Path(__file__).resolve().parent.parent
-TOOLS = ROOT.parent / "ps3recomp" / "tools"
+TOOLS = Path(os.environ.get("PS3RECOMP_DIR", ROOT.parent / "ps3recomp-tourline5")) / "tools"
 DUMPS = ROOT / "analysis" / "spu" / "dump"
 TASKS = ROOT / "analysis" / "spu" / "taskdump"   # SPURS task ELFs (see main)
 OUT = ROOT / "generated" / "spu_lifted"

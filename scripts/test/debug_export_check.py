@@ -6,13 +6,32 @@ import sys
 import zipfile
 
 exe, root = map(Path, sys.argv[1:])
+for name, text, expected, override in (
+    ('default', '', 0, None),
+    ('set', 'trigger_deadzone=5\ntrigger_curve=2\nadaptive_triggers=true\ntrigger_rumble=true\nsdl_rumble=true\n', 5, None),
+    ('invalid', 'trigger_deadzone=21\ntrigger_curve=3\nadaptive_triggers="yes"\n', 0, None),
+    ('override', 'trigger_deadzone=5\ntrigger_curve=2\nadaptive_triggers=true\ntrigger_rumble=true\nsdl_rumble=true\n', 5, '10'),
+):
+    folder = root / ('controls_' + name); folder.mkdir()
+    settings = folder / 'settings.toml'; settings.write_text('[input]\n' + text)
+    env = os.environ.copy()
+    for key in ('PAD_TRIGGER_DEADZONE','PAD_TRIGGER_CURVE','PAD_ADAPTIVE_TRIGGERS','PAD_TRIGGER_RUMBLE','PAD_SDL_RUMBLE','GT5P_NO_SETTINGS'):
+        env.pop(key,None)
+    if override is not None: env['PAD_TRIGGER_DEADZONE'] = override
+    env.update(GT5P_SETTINGS=str(settings),TEST_CONTROLS_FILE=str(expected),TEST_CONTROLS_EFFECTIVE=override or str(expected))
+    subprocess.run([str(exe),'controls-settings'],cwd=folder,env=env,timeout=10,check=True)
+    saved = settings.read_text()
+    assert 'trigger_deadzone = ' + str(expected) in saved and 'preload_indicator = true' in saved
+    print('controls_' + name + ': passed')
+
 for case, value, override, disabled, file_value, effective in (
-    ('default', '', None, False, False, False),
+    ('default', '', None, False, True, True),
+    ('explicit_off', 'false', None, False, False, False),
     ('on', 'true', None, False, True, True),
     ('override_off', 'true', '0', False, True, False),
     ('override_on', 'false', '1', False, False, True),
-    ('invalid', '"yes"', None, False, False, False),
-    ('no_settings', 'true', '1', True, False, False),
+    ('invalid', '"yes"', None, False, True, True),
+    ('no_settings', 'true', '1', True, True, True),
 ):
     folder = root / ('warmup_' + case); folder.mkdir()
     settings = folder / 'settings.toml'

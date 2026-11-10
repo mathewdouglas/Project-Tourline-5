@@ -4,7 +4,7 @@
 #   scripts\test\settings_test.ps1          page drawn into the game's picture
 #                                           (shots are of the game window)
 #   scripts\test\settings_test.ps1 -Legacy  the page's own window (GT5P_SETTINGS_UI_LEGACY=1)
-param([switch]$Legacy)
+param([switch]$Legacy, [string]$Exe = '')
 Add-Type -AssemblyName System.Drawing
 Add-Type @'
 using System; using System.Runtime.InteropServices; using System.Text;
@@ -17,6 +17,7 @@ public class SetUi {
  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; } }
 '@
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+if (!$Exe) { $Exe = if (Test-Path "$root/build/gt5.exe") { "$root/build/gt5.exe" } else { "$root/build/gt5p.exe" } }
 $dir = "$root\scratch\settings_t"
 New-Item -ItemType Directory -Force $dir | Out-Null
 $toml = "$dir\test.toml"
@@ -26,7 +27,7 @@ $shotClass = if ($Legacy) { "gt5p_settings" } else { "ps3recomp_d3d12" }
 $env:GT5P_SETTINGS = $toml; $env:GT5P_SETTINGS_UI = "1"; $env:PS3_VERBOSE = "0"; $env:FS_HIDE = "grim/file/contents"
 Remove-Item Env:GT5P_NO_SETTINGS -ErrorAction SilentlyContinue
 Remove-Item Env:PS3_HEADLESS -ErrorAction SilentlyContinue
-$p = Start-Process -FilePath "$root\build\gt5p.exe" -WorkingDirectory $root -PassThru `
+$p = Start-Process -FilePath $Exe -WorkingDirectory $root -PassThru `
     -RedirectStandardOutput "$dir\out.txt" -RedirectStandardError "$dir\err.txt"
 function cap($tag) {
     $h = [SetUi]::FindWindow($shotClass, [NullString]::Value)
@@ -55,9 +56,9 @@ try {
     if (-not (Select-String -LiteralPath $toml -Pattern '^window = "borderless"$' -Quiet)) { throw 'Window setting was not saved' }
     key 0x27; key 0x26 2          # back to windowed, up to Resolution
     Start-Sleep -Milliseconds 300; cap "res_1080"
-    key 0x22; key 0x28 2; key 0x27   # Page Down to Shaders, down to Preload: off -> on (restart required)
+    key 0x22; key 0x28 2; key 0x27   # Page Down to Shaders, down to Preload: on -> off (restart required)
     Start-Sleep -Milliseconds 300; cap "warmup_on"
-    if (-not (Select-String -LiteralPath $toml -Pattern '^shader_warmup = true$' -Quiet)) {
+    if (-not (Select-String -LiteralPath $toml -Pattern '^shader_warmup = false$' -Quiet)) {
         throw 'Startup shader preload setting was not saved'
     }
     key 0x28; key 0x27          # background pipelines: on -> off
@@ -74,6 +75,16 @@ try {
     key 0x26 3; key 0x0D          # up to Background shader compilation; Enter opens its list
     Start-Sleep -Milliseconds 300; cap "list_open"
     key 0x1B                      # Esc closes the list
+    key 0x22 2                    # Input, Controls
+    key 0x28; key 0x27             # Trigger response: linear -> gentle
+    if (-not (Select-String -LiteralPath $toml -Pattern '^trigger_curve = 1$' -Quiet)) { throw 'Trigger response not saved' }
+    cap 'controls'; key 0x22       # Feedback
+    key 0x27
+    if (-not (Select-String -LiteralPath $toml -Pattern '^adaptive_triggers = true$' -Quiet)) { throw 'Adaptive triggers not saved' }
+    key 0x27; key 0x28 2; key 0x27
+    if (-not (Select-String -LiteralPath $toml -Pattern '^sdl_rumble = true$' -Quiet)) { throw 'SDL rumble not saved' }
+    cap 'feedback'; key 0x27       # Restore opt-in feedback off before quitting
+    key 0x22 4; cap 'debug'        # Keyboard, Game, Performance, Debug
     key 0x1B                      # Esc: close
     Start-Sleep -Milliseconds 500; cap "closed"
 } finally {

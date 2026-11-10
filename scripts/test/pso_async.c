@@ -19,7 +19,11 @@ typedef uint32_t u32; typedef uint64_t u64;
 typedef struct {D3D12_INPUT_ELEMENT_DESC desc;char name[32];} PsoWarmInput;
 typedef struct {u64 hash,vs_hash,ps_hash;u32 vs_bytes,ps_bytes;D3D12_GRAPHICS_PIPELINE_STATE_DESC desc;PsoWarmInput input[32];} PsoWarmRecipe;
 static struct {ID3D12Device* device;ID3D12RootSignature* vp_root_sig;} s_d3d;
-static volatile LONG g_rsx_shaders_pending, g_rsx_shader_busy, calls;
+static volatile LONG g_rsx_shaders_pending, g_rsx_shader_busy, g_rsx_shader_preload_busy, calls;
+/* Mirrors the backend: preload work counts apart from a waiting draw's. */
+static __declspec(thread) int t_shader_preload;
+static volatile LONG* shader_busy_ctr(int preload){return preload?&g_rsx_shader_preload_busy:&g_rsx_shader_busy;}
+static volatile LONG preload_calls,demand_calls;
 static u32 s_pso_warm_loaded,s_pso_warm_rejected;
 static volatile LONG trace_count;
 static u32 trace[1024];
@@ -45,6 +49,7 @@ static u64 guest_pso_hash(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pd){(void)pd
 static int guest_pso_recipe_hash_ok(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pd,u64 h){return guest_pso_hash(pd)==h;}
 static HRESULT create_guest_pso_cached(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pd,ID3D12PipelineState** out){
     LONG t=InterlockedIncrement(&trace_count)-1;if(t<1024)trace[t]=pd->SampleMask;
+    InterlockedIncrement(t_shader_preload?&preload_calls:&demand_calls);
     InterlockedIncrement(&calls);driver=GetCurrentThreadId();CHECK(driver!=caller);
     CHECK(WaitForSingleObject(allow_driver,5000)==WAIT_OBJECT_0);Sleep(delay_ms);
     HRESULT result=s_d3d.device->lpVtbl->CreateGraphicsPipelineState(s_d3d.device,pd,&IID_ID3D12PipelineState,(void**)out);
@@ -163,13 +168,15 @@ int main(int argc,char** argv){
     ResetEvent(allow_driver);LONG start_trace=trace_count;began=GetTickCount64();pso_startup_begin();
     CHECK(GetTickCount64()-began<80);
     while(trace_count==start_trace) {CHECK(GetTickCount64()-began<3000);Sleep(1);}
-    CHECK(s_startup_active && g_rsx_shader_busy==1);
+    CHECK(s_startup_active && g_rsx_shader_preload_busy==1 && g_rsx_shader_busy==0);
     D3D12_GRAPHICS_PIPELINE_STATE_DESC urgent=template;urgent.SampleMask=123;
     CHECK(pso_queue_get(3,&urgent,&pso)==E_PENDING);SetEvent(allow_driver);
     CHECK(SUCCEEDED(poll(3,&pso)));pso->lpVtbl->Release(pso);
     while(s_startup_active) {CHECK(GetTickCount64()-began<5000);Sleep(1);}
     CHECK(trace[start_trace]==~0u && trace[start_trace+1]==123);
-    CHECK(s_pso_warm_loaded>=2 && s_pso_warm_rejected==1 && g_rsx_shader_busy==0);
+    CHECK(s_pso_warm_loaded>=2 && s_pso_warm_rejected==1 && g_rsx_shader_busy==0 && g_rsx_shader_preload_busy==0);
+    /* The recipes ran as preload work; the draw queued during one did not. */
+    CHECK(preload_calls>=2 && demand_calls>=1);
     puts("PASS: startup returns immediately; menu recipes lead; live draws preempt the remaining scan; damaged records are rejected");
     /* Race loading cancels startup: its race-set phase never runs (its
      * rejection count stays put) while the loading gate prepares the set. */
@@ -238,7 +245,7 @@ int main(int argc,char** argv){
     SetEvent(allow_driver);pso_queue_stop();
     CHECK(WaitForMultipleObjects(2,loaders,TRUE,3000)==WAIT_OBJECT_0 && loaders_returned==2);
     CloseHandle(loaders[0]);CloseHandle(loaders[1]);
-    CHECK(g_rsx_shaders_pending==0 && g_rsx_shader_busy==0 && s_pso_source_bytes==0 && s_race_waiters==0);
+    CHECK(g_rsx_shaders_pending==0 && g_rsx_shader_busy==0 && g_rsx_shader_preload_busy==0 && s_pso_source_bytes==0 && s_race_waiters==0);
     puts("PASS: queue/source/resident budgets stay bounded; shutdown releases concurrent loading gates and pending ownership");
     if(warm)warm->lpVtbl->Release(warm);CloseHandle(allow_driver);
     vs->lpVtbl->Release(vs);ps->lpVtbl->Release(ps);s_d3d.vp_root_sig->lpVtbl->Release(s_d3d.vp_root_sig);
