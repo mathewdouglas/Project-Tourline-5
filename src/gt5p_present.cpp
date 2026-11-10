@@ -34,11 +34,39 @@
 #include "ps3emu/thread_name.h"
 #include "gt5p_settings.h"
 #include "gt5p_debug_export.h"
+#include "pt5_resources.h"
 #include "ps3emu/timeline.h"
 
 #ifndef GT5P_DEFAULT_WINDOW_TITLE
 #define GT5P_DEFAULT_WINDOW_TITLE "Gran Turismo 5 Prologue (ps3recomp)"
 #endif
+
+/* Apply the executable's branding after the backend has created its window.
+ * Keep this in the port so a shared runtime never needs project-specific art.
+ * GT5P_WINDOW_ICON=0 retains the backend's default window icon. */
+static BOOL CALLBACK apply_project_icon(HWND window, LPARAM)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(window, &pid);
+    if (pid != GetCurrentProcessId()) return TRUE;
+    wchar_t cls[64] = {};
+    GetClassNameW(window, cls, 64);
+    if (wcscmp(cls, L"ps3recomp_d3d12")) return TRUE;
+    const HINSTANCE instance = GetModuleHandleW(nullptr);
+    const int kinds[] = { ICON_BIG, ICON_SMALL };
+    for (int kind : kinds) {
+        const bool is_small = kind == ICON_SMALL;
+        const HICON icon = (HICON)LoadImageW(instance, MAKEINTRESOURCEW(IDI_PT5), IMAGE_ICON,
+            GetSystemMetrics(is_small ? SM_CXSMICON : SM_CXICON),
+            GetSystemMetrics(is_small ? SM_CYSMICON : SM_CYICON), LR_SHARED);
+        if (!icon) continue;
+        SetClassLongPtrW(window, is_small ? GCLP_HICONSM : GCLP_HICON, (LONG_PTR)icon);
+        DWORD_PTR result = 0;
+        SendMessageTimeoutW(window, WM_SETICON, kind, (LPARAM)icon,
+                            SMTO_ABORTIFHUNG, 500, &result);
+    }
+    return FALSE;
+}
 
 /* GT5P_THREADS=1: every 2 s, print each PPU thread's state and the guest
  * address of its last syscall/HLE call. "Runs its job loop but never loads
@@ -812,6 +840,8 @@ static DWORD WINAPI present_thread(LPVOID)
     int rsx_ok = !headless && (backend_init(title) == 0);
     fprintf(stderr, "[rsx] backend init %s\n",
             headless ? "skipped -- headless" : rsx_ok ? "OK -- window open" : "FAILED");
+    const char* window_icon = getenv("GT5P_WINDOW_ICON");
+    if (rsx_ok && (!window_icon || strcmp(window_icon, "0"))) EnumWindows(apply_project_icon, 0);
     const int drain = rsx_ok || headless;
 
     /* GT5P_PRESENT_PROF=1: every 5 s, where this thread's time went. */
