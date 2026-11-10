@@ -52,7 +52,7 @@ components, but their complete behavior is not verified for this executable.
 | Native Modern controls and Opening Movie links (`1c7cb3e`, `4dd582f`) | Their measured functions, vtables and profile layout belong to Prologue. GT5 settings addresses must be measured. Host trigger shaping/feedback work independently; existing GT5 opening behavior remains. The modern-row null-name crash (`d872f39`) occurs in that deferred UI, so its unsafe row logic was not introduced. |
 | Generic shader interpreter and adaptive budget (Phases 216/220/224) | Depends on newer backend resource layouts, prepared interpreter classes, embed/build tools and broader parity checks. Prologue itself documents incomplete parity and performance limits. |
 | DXC / SM6 compiler migration, translation modes and cleanup offers (Phases 227/231) | Requires a DXC dependency/package policy, GT5 shader parity and independent cache namespaces/preparation contracts. FXC remains the compiler. No old-cache cleanup is performed. |
-| Placed textures, texture allocation/staging pools, fast PSO lookup, parallel race preparation and the newer recipe pack (Phase 221/228) | These interact with GT5's border cubes, copy/volatile texture lifetimes, async queue, pipeline descriptors and render-thread ownership. Retain those bespoke paths until adapted and GPU-validated. The source-keyed bytecode bundle above is independent and was ported. |
+| Placed textures, texture allocation/staging pools and fast PSO lookup (Phase 221) | These interact with GT5's border cubes, copy/volatile texture lifetimes, pipeline descriptors and render-thread ownership. Retain those bespoke paths until adapted and GPU-validated. Parallel race preparation and the race pack from the same phases were ported afterwards: see "Follow-up" below. |
 | Background/quick preparation, translated membership, loading bar and deferred launcher notifications (Phases 223â€“236) | Depends on the catalogue/helper/launcher and newer race gate counters. Existing GT5 preparation remains. The separate background-preload badge is available. |
 | Release bumps, Prologue READMEs/changelogs, publication proofs, route sweeps and historical diagnostics | Retained as source evidence, not copied as statements of GT5 support or performance. Only independent diagnostics with functioning GT5 backends were adopted. |
 
@@ -119,3 +119,129 @@ scripts\build.cmd -DGT5P_TARGET=BCUS98114-v104
 
 Local evidence is under `scratch/prologue-sync/`, `scratch/pv/prologue-sync-race.*`
 and `scratch/settings_t/`; these contain private diagnostics and are ignored.
+
+## Follow-up: race pack and helper-thread race preparation, 2026-11-11
+
+Branch `port/deferred-prologue-improvements`, from `8b6f586`. One deferred
+group was taken: Prologue Phases 221 (helper threads), 228 (race pack) and
+229 (menu-time warmup reads the pack). It was chosen because it is confined
+to the pipeline queue between the `PSO_ASYNC_BEGIN`/`END` markers plus two
+small helpers above it. It does not touch texture, copy, FIFO, SPU or pager
+code, and it creates pipelines only through the creation function the worker
+already used.
+
+**Not validated in the game.** No game or GPU run was made for this branch (a
+parallel session was using them). Everything below is measured on synthetic
+pipelines with D3D12 WARP. `gt5.exe` was not linked: the patched backend was
+compiled to an object file with the build's own flags. The live checks still
+needed are listed at the end.
+
+### Adopted
+
+| Change | Source | GT5 adaptation and rollback |
+| --- | --- | --- |
+| Race set prepared on helper threads during the loading gate | Phase 221 | `RSX_RACE_PREWARM_THREADS` (1..8, default 4). `=1` restores one recipe per worker turn. The pso-worker keeps serving demand jobs. A new load or shutdown stops helpers between recipes. |
+| One file for the race set, `warmup-v1/race-pack-v1.bin` | Phase 228 | `RSX_RACE_PREWARM_PACK=0` neither reads nor writes it. `RSX_RACE_PREWARM_PACK_WRITE=0` reads an existing pack but never writes one. The renderer writes it after a load whose pack was missing or stale. |
+| Menu-time warmup takes its race phase from the pack | Phase 229 | Same switches. Still one pipeline per worker turn with the 1 ms pause. |
+| Preparation time split and gate progress counters | Phases 221, 230 | Printed with `[race-prewarm] finished` and in the F8 report line `Race prewarm:`. `g_rsx_race_load_done/total/waiting` are exported for a later progress bar. |
+| Python pack reader/writer | Phase 228 | `scripts/race_preload_pack.py check|build <shadercache>`. Optional: the renderer writes the pack itself. |
+
+### Where this differs from Prologue's code
+
+- **The pack bytes are released after use.** Prologue keeps the file's bytes
+  (150 to 250 MB for a full set) for the rest of the run. Here the worker
+  drops them once the load or the warmup's race phase finishes, since those
+  pipelines are then resident; the next load reads the file again. This
+  machine has little free memory in a race (Phase 104). `RSX_RACE_PACK_KEEP=1`
+  keeps them.
+- **Repeated index lines no longer defeat the pack.** `race-v1.txt` can list a
+  hash twice until the next compaction. Prologue's membership check then
+  rejected the pack on every load and rewrote it. Index reads for the pack and
+  the helpers now keep each hash once.
+- **A stale pack repairs itself.** If the driver refuses a packed blob (as
+  after a driver update) or a member cannot be served, that member goes
+  through the per-file cache, and the pack is rewritten once in that run.
+  Prologue kept using the stale bytes for as long as the index was unchanged.
+- **No pack is written from a cancelled load or at shutdown,** and the writer
+  stops between pipelines when the game exits. It writes the tables and then
+  the payload, instead of building a second copy of the file in memory.
+- **`RSX_PSO_DISK=0` also turns the pack off,** so that switch still means no
+  driver blob is read from disk.
+- **The thread count is read at each load,** not cached, so a test can change
+  it. The helper that finishes last releases the gate; a start in which
+  helpers finish before the starter does is handled explicitly.
+- **GT5's own code is kept:** `create_preload_pso_cached` (which saves and
+  restores the preload flag), the recipe hash check that accepts keys from
+  before the root signature joined them, the resident cap of 8192 and
+  `RSX_PSO_RACE_EVICT`.
+
+### Not taken from the same phases
+
+| Item | Finding |
+| --- | --- |
+| Loading bar under the logo (Phase 230) | Its position is measured against Prologue's loading screen. The counters it reads are ported; the bar needs a GT5 loading-screen measurement. |
+| Preparation-time pack writer hook, translated membership lists | Depend on Prologue's preparation helper and catalogue, which are deferred above. |
+| `RSX_TEX_POOL`, placed textures, staging ring | Texture resource lifetimes; unchanged. |
+| Persistent fast pipeline lookup | Keyed on the renderer's in-memory pipeline key and an engine epoch. GT5's key fields differ; not examined further in this pass. |
+
+### Validation (synthetic, WARP)
+
+- `scripts/test/race_prewarm.py` compiles the real backend code from its
+  hashing helpers to the end of the queue: hashing, driver-blob cache, recipe
+  files, queue, pack and helpers. Nothing below the driver is a stand-in.
+  48 pipelines sharing 4 shaders. It passed in 6 of 6 consecutive runs:
+  - both rollback switches together keep the old path and write nothing;
+  - four helpers prepare the set from files and the pack is written;
+  - with every recipe, bytecode and blob file moved away, the pack alone
+    prepares all 48 with 48 cached-blob driver calls, and its bytes are freed;
+  - a reordered index with repeated lines still hits, in the live order;
+  - a changed index, a flipped byte, a truncated file and a bad header are
+    each rejected, files serve the load, and the rewrite reproduces the
+    original bytes;
+  - a refused driver blob and a damaged packed recipe each fall back for that
+    member only;
+  - the menu-time warmup prepares the race phase from the pack alone, and the
+    later gate makes no driver call;
+  - a demand job completes beside eight helpers; 20 overlapping reloads all
+    finish; 20 shutdowns in the middle of a load return within the limit
+    with no waiter or thread left.
+- The Python tool reads the renderer's pack and rebuilds it byte for byte
+  from the same files, and rejects the same damage.
+- `scripts/test/pso_async.py` still passes all seven groups. It now pins
+  `RSX_RACE_PREWARM_THREADS=1` and `RSX_RACE_PREWARM_PACK=0`, so it covers the
+  rollback path; its ordering checks assume one worker.
+- The refreshed patch applies to a clean 5244db9 clone and reproduces the
+  private runtime tree exactly (`setup_runtime.py --check` passes on both).
+  Only the `rsx_d3d12_backend.c` section changed; the other 82 sections are
+  byte-identical to `8b6f586`.
+
+### Live checks still needed
+
+1. Build `gt5.exe` against the refreshed patch.
+2. A race load with a learned set, twice: the first should log
+   `helper threads ... (files)` then `pack stored`; the second
+   `pack hit` and `(pack)`. Compare `[race-prewarm] finished ... elapsed_ms`
+   with `RSX_RACE_PREWARM_THREADS=1 RSX_RACE_PREWARM_PACK=0`.
+3. Whether four below-normal helpers during loading disturb GT5's own
+   loading threads, pager or audio (underruns in the loading screen). If so,
+   lower the default or keep it at 1 for GT5.
+4. The cost of writing the pack just after a race starts, on this machine's
+   memory. `RSX_RACE_PREWARM_PACK_WRITE=0` is the switch if it shows as a
+   hitch.
+5. Working set before and after a load with a full-size pack.
+6. `race.ps1`-style captures after a pack-hit load: same picture as before.
+
+### Overlap with the DXC work
+
+The runtime patch changes only in `libs/video/rsx_d3d12_backend.c`:
+`pso_warm_read_recipe` (split), `create_guest_pso_cached_ex` (timing lines),
+a new `create_guest_pso_with_blob`, `pso_race_notify` (counters),
+`pso_prepare_recipe`, the `pso_startup_*` functions, `pso_worker_main`
+(replaced, with the new pack and helper code above it) and `pso_queue_debug`.
+`patches/incremental/race-prewarm-pack.patch` is that change alone, for
+applying onto a runtime that already carries other edits. The pack finds
+driver blobs in the directory above `warmup-v1`, and recipes and bytecode
+through `pso_warm_dir`. If the DXC work gives caches a new namespace, the
+pack follows `pso_warm_dir` and needs no format change, but check that the
+blob directory is still its parent. The pack stores DXBC or DXIL bytes
+without interpreting them.

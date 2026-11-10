@@ -80,6 +80,18 @@ static int pso_warm_read_recipe(const char* path,PsoWarmRecipe* r){
 static void* pso_warm_read_code(const char* dir,u64 hash,u32 bytes){
     (void)dir;void* p=malloc(bytes);memcpy(p,hash==1?vertex:pixel,bytes);return p;
 }
+/* The race pack and helper threads have their own end-to-end test
+ * (race_prewarm.py); this one keeps the one-recipe-per-turn worker path. */
+static volatile LONG64 s_prep_us_blob,s_prep_us_pack;
+static u64 pso_hash_bytes(u64 h,const void* bytes,size_t n){
+    const unsigned char* p=(const unsigned char*)bytes;while(n--){h^=*p++;h*=1099511628211ull;}return h;
+}
+static int pso_warm_recipe_valid(const PsoWarmRecipe* r){(void)r;return 0;}
+static int pso_warm_write(const char* path,const void* data,size_t bytes){(void)path;(void)data;(void)bytes;return 0;}
+static HRESULT create_guest_pso_with_blob(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pd,const void* blob,size_t n,
+    ID3D12PipelineState** out,int retain,int* refused){
+    (void)blob;(void)n;(void)retain;if(refused)*refused=0;return create_guest_pso_cached(pd,out);
+}
 #include "queue.inc"
 static ID3DBlob* compile(const char* text,const char* target){
     ID3DBlob *blob=NULL,*err=NULL;
@@ -94,6 +106,7 @@ static HRESULT poll(u64 hash,ID3D12PipelineState** pso){
     while((hr=pso_queue_get(hash,&template,pso))==E_PENDING){CHECK(GetTickCount64()-began<5000);Sleep(1);}return hr;
 }
 int main(int argc,char** argv){
+    _putenv_s("RSX_RACE_PREWARM_THREADS","1");_putenv_s("RSX_RACE_PREWARM_PACK","0");
     _putenv_s("RSX_SHADER_WARMUP_BACKGROUND","0");CHECK(!pso_startup_background());
     _putenv_s("RSX_SHADER_WARMUP_BACKGROUND","1");CHECK(pso_startup_background());
     _putenv_s("GT5P_SHADER_PRECOMPILE_ONLY","1");CHECK(!pso_startup_background());

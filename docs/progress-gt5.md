@@ -4,6 +4,30 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Phase 34 — Race pack and helper-thread race preparation (2026-11-11, not yet run in game)
+
+Ported from Tourline Prologue Phases 221, 228 and 229, on branch
+`port/deferred-prologue-improvements`. The loading gate used to prepare the
+learned race set one pipeline per worker turn, opening a recipe, two bytecode
+files and a driver blob for each. It now uses four helper threads
+(`RSX_RACE_PREWARM_THREADS`, `=1` old) and one file,
+`shadercache/warmup-v1/race-pack-v1.bin` (`RSX_RACE_PREWARM_PACK=0` old).
+The renderer writes the pack after a load whose pack was missing or stale.
+The menu-time warmup reads the same file for its race phase. Details,
+differences from Prologue's code and the test list are in
+[prologue-sync-review.md](prologue-sync-review.md), "Follow-up".
+
+**Measured (synthetic only):** `scripts/test/race_prewarm.py` runs the real
+backend code on D3D12 WARP with 48 pipelines: 6 of 6 runs pass. With every
+per-file input moved away, the pack alone prepares all 48. Damaged, stale and
+reordered packs, a refused driver blob, overlapping reloads and shutdown
+during a load are covered. The Python tool rebuilds the renderer's pack byte
+for byte. `scripts/test/pso_async.py` passes on the rollback path.
+
+**Not measured:** no GT5 run, no `gt5.exe` link, no loading time, memory or
+picture check. Prologue's loading-time figures are for its own title and are
+not carried over. The live checks are listed in the review document.
+
 ## Phase 33 — Shared improvements from Tourline Prologue v0.2.5 (2026-11-11)
 
 Reviewed the source range from common ancestor `7ca5059` through Prologue

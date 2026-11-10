@@ -1,2 +1,3 @@
 # Runtime patch context contains mixed line endings; preserve its literal bytes.
 patches/*.patch -text
+patches/incremental/*.patch -text

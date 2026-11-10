@@ -166,6 +166,14 @@ background.
 Direct controls: `RSX_PSO_ASYNC=0` restores synchronous driver creation;
 `RSX_RACE_PREWARM=0` disables race-set learning/preparation;
 `RSX_RACE_PREWARM_WAIT_MS=0` keeps preparation but removes the loading wait.
+`RSX_RACE_PREWARM_THREADS` (1..8, default 4) sets how many helper threads
+prepare the set; `=1` restores one pipeline per worker turn.
+`RSX_RACE_PREWARM_PACK=0` ignores `warmup-v1/race-pack-v1.bin`, the one-file
+copy of the race set that the renderer writes after a race load and reads at
+the next one; `RSX_RACE_PREWARM_PACK_WRITE=0` reads it but never writes it.
+The pack is derived from the recipe, bytecode and blob files, which stay in
+place: deleting it is safe. `scripts/race_preload_pack.py check <shadercache>`
+verifies it. Test: `scripts/test/race_prewarm.py`.
 The waiting budget is clamped to 0..60000 ms. Race preparation requires the
 shader cache and background pipeline creation. F8 reports include queue and
 preparation counters. Tests: `scripts/test/pso_async.py`,

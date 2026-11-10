@@ -57,6 +57,18 @@ measurements; never copy their Prologue addresses. New controls and feedback
 options are neutral/off by default. Existing explicit preload-off settings
 are preserved. All rollbacks and validation are in the review document.
 
+**Race pack and helper prewarm (GT5 Phase 34, not yet run in game).** The
+loading gate prepares the learned race set on four helper threads
+(`RSX_RACE_PREWARM_THREADS`, `=1` old) from one file,
+`shadercache/warmup-v1/race-pack-v1.bin` (`RSX_RACE_PREWARM_PACK=0` old,
+`RSX_RACE_PREWARM_PACK_WRITE=0` read-only, `RSX_RACE_PACK_KEEP=1` keeps its
+bytes). The renderer writes the pack itself; it is derived data, never
+tracked. Test: `scripts/test/race_prewarm.py` (WARP, synthetic).
+`scripts/test/pso_async.py` covers the rollback path only. The live checks
+still owed are in the review document's "Follow-up" section.
+`patches/incremental/` holds single-change copies of runtime edits that are
+already inside the main patch; `setup_runtime.py` does not read them.
+
 ## Start here: historical Prologue state (2026-10-21, Phase 108)
 
 Read this section first when picking the work up in a new session on this
