@@ -6,9 +6,42 @@ release packager put it beside `tourline5.exe` at the player folder's root.
 See RecompLauncher's [developer guide](https://github.com/elripalda/RecompLauncher/blob/main/docs/DEVELOPERS.md).
 
 Play starts **tourline5.exe**, preserving GT5's disc/update selection, identity
-checks, storage locks and managed F1 restarts. There is no `game` or `prepare`
-section: the native launcher already imports and verifies BCUS98114's 01.04
-installed data and executable. First-time setup still uses its dialogs.
+checks, storage locks and managed F1 restarts. Easy Setup uses named `inputs`
+and a noninteractive `prepare` hook. Direct launches without RecompLauncher
+still open the built-in storage/game-file dialogs when setup is needed.
+
+## Easy Setup
+
+Drop the following into RecompLauncher's Easy Setup inputs:
+
+1. The extracted **BCUS98114 v02.00 disc folder**, or its `PS3_GAME` folder.
+2. The **01.04 installed data** folder, or the RPCS3 folder containing it.
+3. If it cannot be found there, the optional **update 01.04 EBOOT.elf or
+   installed rpcs3.exe**. A matching ELF inside the selected update is found
+   automatically. For a standard RPCS3 layout, `rpcs3.exe` alongside
+   `dev_hdd0` is also found automatically and decrypts a temporary copy.
+
+The disc alone is insufficient: this port uses the installed update's data
+and executable. ISO files must be extracted first. Newer updates, other
+regions and the original disc executable are refused by native setup.
+Sources stay in place; only installed data and the verified ELF are imported.
+Keep the disc folder available for play.
+
+RecompLauncher runs `tourline5.exe --recomplauncher-prepare --game DISC
+--game-data UPDATE [--executable=ELF_OR_RPCS3]` before Play. This uses the
+same staged copy, executable hash and commit/rollback checks as built-in
+setup. It uses default or remembered storage without a picker, emits
+`progress` lines while importing/verifying and exits without starting the
+game. Missing or invalid inputs fail with stderr and `logs/setup.err`;
+they never open another setup dialog. The preparation timeout is two hours
+to allow large imports on slower drives. No shared key or file destinations
+are declared in the manifest: RecompLauncher passes selected paths directly.
+
+After preparation, Play starts the native launcher normally. Existing setup
+is remembered by both launch paths. Use Change storage.cmd to relocate it.
+RecompLauncher reruns preparation when setup inputs or the installed version
+change. Older RecompLauncher versions that do not support named inputs can
+still use the built-in setup on Play.
 
 The settings page edits `gt5p_settings.toml`: resolution, aspect, window mode,
 MSAA, V-Sync, filtering, smooth colour, shader preload/compiler, skip movie,
@@ -55,6 +88,11 @@ Package tests check ZIP and CMake staging and refuse an engine-only start.
 The setup test compiles the launcher and fixture engine into private scratch
 folders, checks junction repair/removal and rollback/override behavior, and
 retains the existing setup, migration, restart, locking and rejection checks.
+It also runs the actual manifest's prepare arguments with optional inputs
+present/absent, automatic ELF/RPCS3 discovery, progress output, failed
+decryption, wrong executables and subsequent native Play. GUI setup is enabled
+in those fixtures to catch accidental dialogs, and preparation must not run
+the game engine. Failed imports preserve the previous setup and settings.
 It never starts a real game or changes a real player profile.
 
 `scripts/test/storage_link_probe.cpp` and `storage_link.py --probe PATH` also
@@ -63,5 +101,5 @@ target, drive roots, preserving real folders and refusing network targets.
 
 An actual RecompLauncher Developer tools import and player-page check remain
 manual acceptance work. No catalogue registration or public release is made
-by this change. Keyboard bindings, guided setup, saves configuration and
-Big Picture-specific behavior remain as in Prologue's initial integration.
+by this change. Keyboard bindings, saves configuration and Big Picture-specific
+behavior remain as in Prologue's initial integration.

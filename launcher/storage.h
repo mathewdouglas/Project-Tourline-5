@@ -32,6 +32,7 @@ struct CopyState {
     std::atomic<bool> cancel{false}, done{false};
     std::atomic<uint64_t> copied{0};
     uint64_t total = 0, completed = 0;
+    ULONGLONG last_progress_ms = 0;
     std::mutex mutex;
     std::wstring current;
     std::exception_ptr error;
@@ -40,6 +41,12 @@ static DWORD CALLBACK copy_progress(LARGE_INTEGER, LARGE_INTEGER transferred, LA
     LARGE_INTEGER, DWORD, DWORD, HANDLE, HANDLE, LPVOID parameter) {
     auto& state = *static_cast<CopyState*>(parameter);
     state.copied = state.completed + static_cast<uint64_t>(transferred.QuadPart);
+    const auto now = GetTickCount64();
+    if (easy_setup && now - state.last_progress_ms >= 250) {
+        state.last_progress_ms = now;
+        setup_progress(0.20 + 0.65 * state.copied / std::max<uint64_t>(state.total, 1),
+                       "Copying and verifying installed update data");
+    }
     return state.cancel ? PROGRESS_CANCEL : PROGRESS_CONTINUE;
 }
 static HRESULT CALLBACK copy_dialog(HWND window, UINT notice, WPARAM button, LPARAM, LONG_PTR parameter) {

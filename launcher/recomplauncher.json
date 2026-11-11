@@ -515,5 +515,56 @@
         "input/sdl_rumble": "false"
       }
     }
-  ]
+  ],
+  "inputs": [
+    {
+      "id": "disc",
+      "label": "GT5 US disc BCUS98114 v02.00 (extracted folder or PS3_GAME)",
+      "role": "disc",
+      "formats": [
+        {
+          "type": "folder"
+        }
+      ]
+    },
+    {
+      "id": "update",
+      "label": "Installed GT5 01.04 data (RPCS3 folder or dev_hdd0/game/BCUS98114)",
+      "role": "update",
+      "formats": [
+        {
+          "type": "folder"
+        }
+      ]
+    },
+    {
+      "id": "executable",
+      "label": "Executable / RPCS3: update 01.04 EBOOT.elf or rpcs3.exe (if not found in update folder)",
+      "optional": true,
+      "formats": [
+        {
+          "type": "file",
+          "extensions": [
+            "elf",
+            "exe"
+          ]
+        }
+      ]
+    }
+  ],
+  "prepare": {
+    "program": [
+      "tourline5.exe"
+    ],
+    "args": [
+      "--recomplauncher-prepare",
+      "--game",
+      "{input:disc}",
+      "--game-data",
+      "{input:update}",
+      "--executable={input:executable}"
+    ],
+    "label": "Importing and verifying GT5 01.04 data",
+    "timeout": 7200
+  }
 }

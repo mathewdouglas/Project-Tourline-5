@@ -15,6 +15,13 @@ folder. Setup follows Tourline Prologue's storage and file-selection flow:
    decrypt a temporary copy of `EBOOT.BIN`. A matching ELF already beside the
    installed update is detected automatically.
 
+In **RecompLauncher**, use Easy Setup instead: drop the extracted disc folder
+and the installed 01.04 update/RPCS3 folder into their inputs. Add an update
+`EBOOT.elf` or `rpcs3.exe` in the optional executable input if not found there.
+Preparation imports/verifies the files without additional dialogs, then Play
+uses the same native launcher. Direct launches keep the built-in prompts.
+See [RecompLauncher integration](recomplauncher.md).
+
 GT5 needs the installed update as well as the disc. In RPCS3, first boot
 installs the disc's `INSDIR\DATA000.PKG` (01.04). Select that installation;
 the disc executable and newer updates are different builds. Setup checks
