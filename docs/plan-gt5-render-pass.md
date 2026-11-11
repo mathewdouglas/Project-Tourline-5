@@ -44,10 +44,12 @@ passes ~5 ms. The ~52 FPS average comes from slower stretches of the lap
 ## Eiger Nordwand in rain (measured, Phase 45)
 
 ~47 FPS with the default; no change or combination below separates from it
-(run-to-run spread ~5 FPS). Workload 4 is 2.2 ms a frame there. The game
-thread polls ring-job progress for most of the frame and continues when the
-FIFO walker delivers the frame's user command, which follows a workload 1
-pass whose trigger is not yet known.
+(run-to-run spread ~5 FPS). Workload 4 is 2.2 ms a frame there. **Cause
+(measured):** one serial loop in workload 0's body `0x01697100` (LS
+0x7F10-0x8948, ~20,000 iterations and ~15 ms a frame) releases workload 1
+about 12 ms after the flip; the frame's marker and the game thread's last
+~6 ms follow. A delay injected into the loop raised frame time by 105% of
+the injected total. The loop does not run at High Speed Ring.
 
 ## Changes in Phase 44 and their status
 
@@ -63,9 +65,10 @@ pass whose trigger is not yet known.
 
 ## Next steps, in order
 
-0. **Eiger: what releases workload 1** before the frame's user command
-   (Phase 45; no PPU kick is recorded): `SPURS_KEVLOG=1` and the writer
-   of workload 1's ready count.
+0. **Eiger: speed up body `0x01697100`'s loop** (Phase 45): an offline
+   benchmark from a captured state, then cheaper `cflts`/`frsqest`/`frest`/
+   `fma`/`shufb` helpers, then a native loop with a check mode. Also wake
+   the SPURS kernel on an SPU's ready-count store (0.8 ms a frame).
 1. **Race timeline of a slow stretch**: pick the window from a frame test's
    `frames.csv` (the late intervals cluster by lap position) and place
    `PS3_TIMELINE` there. Does the frame wait on wid4, the walk, or the game

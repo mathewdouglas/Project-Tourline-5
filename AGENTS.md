@@ -96,9 +96,10 @@ slower; `PS3_USLEEP_GCM_WAKE=1` and `SPU_DRAIN_RET_FAST` (on, exact) show no
 measurable change. Plan: [docs/plan-gt5-render-pass.md](docs/plan-gt5-render-pass.md).
 **Eiger Nordwand in rain (Phase 45)** runs ~47 FPS, and no change or
 combination beats the default (spread ~5 FPS; `scratch\go.ps1 -Eiger` in the
-Phase 44 worktree drives there). There the game thread polls ring-job
-progress until a workload 1 pass and the frame's user command; what releases
-that pass is open. `GT5P_SPU_FMA` takes `1` (all `spu_fma_images`, now four
+Phase 44 worktree drives there). Cause, measured by delay injection: one
+serial loop in workload 0's body `0x01697100` (LS 0x7F10-0x8948, ~20,000
+iterations, ~15 ms a frame) gates workload 1 and the frame; it does not run
+at High Speed Ring. Speeding up that loop is the next step. `GT5P_SPU_FMA` takes `1` (all `spu_fma_images`, now four
 bodies) or body names (`b0196FF40` = the old `1`); `SPURS_LANE_RETRY_MAX`
 and `SPURS_LANE_KICK_WAKE` are measured experiments, off.
 

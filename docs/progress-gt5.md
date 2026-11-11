@@ -55,7 +55,8 @@ the race, 182 frames, mean 21.8 ms):
   the FIFO walker raises the frame's user command (`U` at 13.01, delivered
   on `gFKsE` at 13.13). That command follows a workload 1 pass (10.61-12.15)
   and a 1.1 ms walk. No kick is recorded between the previous workload 1
-  pass ending (6.48) and that dispatch: what releases it is **open**.
+  pass ending (6.48) and that dispatch: a workload-0 lane releases it
+  (below).
 - One workload-0 lane runs at ~98% of a core in bodies `0x01697100`,
   `0x016B5B00` and `0x016D2700` (real float work: normalise, reciprocal
   square root, a grid lookup), in single lane runs of seconds; the other
@@ -84,10 +85,50 @@ the race, 182 frames, mean 21.8 ms):
 Runtime changes are in the main patch (applied to a fresh 5244db9: identical
 tree, reverse check passes) and in `patches/incremental/spu-render-pass.patch`.
 
-**Next:** find what releases the workload 1 pass that precedes the frame's
-user command (no PPU kick is recorded): `SPURS_KEVLOG=1` around it, and
-which thread or SPU stores workload 1's ready count. Until that is known,
-lane, FMA and wake changes do not reach Eiger's frame.
+**The cause: one serial SPU loop in workload 0.**
+
+1. *Who releases workload 1* (`erl1`: `SPU_ROWLOG=4FFC2000`, the `PDI`
+   instance's ready-count line, with `PS3_TIMELINE`; each write becomes an
+   `A` event with writer and SPU pc). Of 461 workload 1 dispatches, 243 follow
+   a store from a workload-0 lane at SPU pc `0x3334` (the job manager
+   kicking a dependent list), 218 a game-thread kick. For the pass before
+   each frame's user command it is a workload-0 lane in 150 of 169 frames,
+   a median 12.0 ms after the flip; the kernel dispatches 0.8 ms later (an
+   SPU store does not wake it; it waits for its 1 ms poll). Then the pass, the
+   walk, the marker, and ~6 ms of game thread work before the next flip.
+2. *What workload 0 does* (`ewid0`, `GT5P_SAMPLE=16 GT5P_SAMPLE_WID=0`).
+   Its lanes use 142% of a core, 31 ms of CPU per 21.8 ms frame. 51% of
+   those samples are body `0x01697100`, almost all in three functions of one
+   loop: `0x83D8` 20%, `0x8298` 18%, `0x7F10` 9% (LS 0x7F10-0x8948,
+   ~470 SPU instructions of vector loads, shuffles, float compare/select,
+   reciprocal (square root) estimates and `cflts`). Lock-line waits are
+   0.5%.
+3. *Causal test* (`edly1`, a temporary probe, not committed: a calibrated
+   spin at the entry of `0x83D8`, on and off in alternate 2 s windows of
+   one boot). `0x83D8` runs ~20,000 times a frame. 4.3 us per call would
+   add 86 ms a frame if every call were on the critical path; frames grew
+   by 90 ms (21.1 -> 111.1 ms median, 15 windows each). **Every call of the
+   loop is on Eiger's critical path.** The loop's time (~15 ms a frame) is
+   most of the 12 ms from the flip to the release of workload 1.
+4. *Specific to Eiger:* the same probe on High Speed Ring (`hdly1`) never
+   fired: the loop does not run there. It starts at Eiger's race start. That
+   it is the rain/weather simulation is a hypothesis (not run without
+   weather change).
+
+**Next:** make that loop faster. Lane counts, FMA copies and wake changes do
+not shorten a single serial loop (the FMA copy of the body, one run, 46.0
+FPS). In order:
+
+1. An offline benchmark of the loop from a captured real state (local store
+   and registers at the entry of `0x7F10`), as `scripts/test/spu_regpromo.py`
+   does with random ones: lets helper changes be timed and checked exactly
+   without the 3-minute route.
+2. Cheaper helpers where the loop spends its time (`cflts` through doubles
+   with clamps, `frsqest`/`frest` as per-lane table lookups, `fma` through
+   doubles without `-mfma`, `shufb`).
+3. A native implementation of the loop with a check mode, as Phase 111 did
+   for Prologue's sorted walk (`GT5P_SPU_NATIVE=2`).
+4. Wake the kernel when an SPU stores a ready count (0.8 ms a frame).
 
 ## Phase 44 - Workload 4's render pass: lane stagger, register promotion (2026-11-11)
 
