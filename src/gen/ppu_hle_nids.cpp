@@ -517,6 +517,8 @@ extern "C" {
     void cellPadSetPortSetting(void);
     void cellPadInfoPressMode(void);
     void cellPadSetPressMode(void);
+    void cellPadInfoSensorMode(void);
+    void cellPadSetSensorMode(void);
     void cellPadGetCapabilityInfo(void);
     void cellPadSetActDirect(void);
     void cellPadClearBuf(void);
@@ -1745,6 +1747,8 @@ extern "C" void ppu_hle_register_all(void) {
     ps3_hle_register(0x578E3C98u, "cellPadSetPortSetting", (void*)cellPadSetPortSetting);
     ps3_hle_register(0x0E2DFAADu, "cellPadInfoPressMode", (void*)cellPadInfoPressMode);
     ps3_hle_register(0xF83F8182u, "cellPadSetPressMode", (void*)cellPadSetPressMode);
+    ps3_hle_register(0x78200559u, "cellPadInfoSensorMode", (void*)cellPadInfoSensorMode);
+    ps3_hle_register(0xBE5BE3BAu, "cellPadSetSensorMode", (void*)cellPadSetSensorMode);
     ps3_hle_register(0xDBF4C59Cu, "cellPadGetCapabilityInfo", (void*)cellPadGetCapabilityInfo);
     ps3_hle_register(0xF65544EEu, "cellPadSetActDirect", (void*)cellPadSetActDirect);
     ps3_hle_register(0x0D5F2C14u, "cellPadClearBuf", (void*)cellPadClearBuf);
