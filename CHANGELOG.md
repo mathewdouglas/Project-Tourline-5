@@ -18,6 +18,13 @@ versions follow [SemVer](https://semver.org/).
   the source retained, managed F1 restarts, and launcher-aware player packaging.
   [Setup instructions](docs/setup.md).
 
+### Changed
+- GT5 audio now uses its own CPU-dispatched FMA mixer/decoder/output images
+  on supported CPUs, with portable fallback (`GT5P_AUDIO_NATIVE=0`).
+- Verified SPU-progress wait loops can yield, and native table clears use
+  bulk writes. A fingerprint-checked FMA render-body copy is available for
+  testing with `GT5P_SPU_FMA=1`, off by default. See GT5 Phase 40 for coverage.
+
 ## [0.1.0] - 2026-11-11
 
 The first tagged release of **Project Tourline 5**, the Gran Turismo 5

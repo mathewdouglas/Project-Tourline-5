@@ -27,7 +27,8 @@ no `Q` sleep events; no race-speed benefit is claimed for that hook. The
 other four waits call the same measured completion query `0x00D1AB10`;
 their waiting paths have no memory writes or service calls. `spin_waits.py`
 checks the actual private source, each single back edge and exact
-patch/restore equivalence. This does not
+patch/restore equivalence, then exercises the production helper's pause,
+yield and timer-sleep tiers with default/on/off settings. This does not
 replace the runtime's atomic/mutex waits or claim to resolve Phase 32's
 job-countdown freeze.
 
@@ -96,6 +97,16 @@ race/HUD/mirror. Audio runs at ~187.5 blocks/s, 0% silent in the recorded
 race windows. These are functional checks, not a controlled FPS improvement
 claim. Hardware FMA agrees with scalar fused arithmetic; rare rounding
 results may differ from the portable double-intermediate approximation.
+The merged `perf40-final` run uses default native audio, bulk clears and all
+five wait hooks, with render FMA off. It reaches gameplay after the latest
+split-storage fix; 1,132 traced render frames again contain no `S` events.
+No `Q` sleeps occur on any thread in that window, so the new hooks are
+wired but this run does not establish a long-wait scheduling benefit.
+Audio remains ~187.5 blocks/s with 0% silent blocks in the race windows;
+one startup underrun is reported, without a growing race underrun count.
+The portable rollback run also reaches gameplay. All 36 settings/export
+checks and the merged split-storage translator regression pass.
+
 All captures, traces, image aliases and caches remain private in scratch.
 
 ## Phase 39 - Disc access with separate player storage (2026-11-11)
