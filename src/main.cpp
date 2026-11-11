@@ -935,6 +935,15 @@ int main(int argc, char* argv[])
      * SPURS_LANE_PIN=0 for the scheduler's placement. */
     if (!getenv("SPURS_LANE_PIN")) _putenv_s("SPURS_LANE_PIN", "2");
 
+    /* GT5 starts all of a job list's lanes together: the 1 ms per lane
+     * stagger (lane k k ms late) cost the car list's render pass, workload
+     * 4, about 2 ms of its ~20 ms; without it the car list draws 237-245
+     * frames per 5 s against 217-227, and High Speed Ring is unchanged
+     * (docs/progress-gt5.md, Phase 44). Prologue keeps the stagger.
+     * SPURS_LANE_STAGGER_MS=1 for the old start. */
+    if (!strcmp(GT5P_TITLE_ID, "BCUS98114") && !getenv("SPURS_LANE_STAGGER_MS") && !getenv("SPURS_LANE_STAGGER_US"))
+        _putenv_s("SPURS_LANE_STAGGER_MS", "0");
+
     /* Shaders not in the disk cache compile on background threads, all of a
      * frame's at once, instead of one by one on the frame thread (Phase 65:
      * an empty cache kept the first dealer page away for over a minute). The

@@ -22,6 +22,18 @@ your own BCUS98114 disc and matching 01.04 installed data/executable.
   [docs/recomplauncher.md](docs/recomplauncher.md). RecompLauncher's own UI is
   not yet checked.
 
+### Changed
+- GT5's SPU job lanes start together (GT5 Phase 44): the Arcade car list draws
+  about 9% more frames; races are unchanged. `SPURS_LANE_STAGGER_MS=1` restores
+  the 1 ms per lane stagger.
+- `GT5P_SPU_FMA` (opt-in) now covers four job bodies: `1` selects all of them,
+  or name bodies (`GT5P_SPU_FMA=b0196FF40` is the previous `1`). No gain
+  measured at Eiger Nordwand (GT5 Phase 45).
+- Eiger Nordwand in rain runs about 8% faster (GT5 Phase 45): its frame waits
+  on one SPU loop, now compiled as a single function with the SPU registers
+  in host vector registers. New required post-SPU-lift step
+  `scripts/spu_region.py`; `GT5P_SPU_REGION=0` restores the old code.
+
 ### Fixed
 - Crash after loading Eiger Nordwand with weather change (GT5 Phase 43): job-body
   functions reached only through run-time tables are now lifted, instead of

@@ -68,7 +68,10 @@ int main(int argc,char** argv){
  assert(swaps==(disabled||!strcmp(mode,"render_only")?0:count-(omit||bad_id||absent?1:0)));
  int body = 0;
 #ifdef TEST_GT5
- if(getenv("GT5P_SPU_FMA") && *getenv("GT5P_SPU_FMA")=='1' && !disabled && !wrong_body && !omit_body)body=1;
+ /* Only the render body's bytes are modelled: it installs for "1" (every
+    listed body) or a list that names it; the others mismatch. */
+ const char* fma=getenv("GT5P_SPU_FMA");
+ if(fma && (!strcmp(fma,"1") || strstr(fma,"b0196FF40")) && !disabled && !wrong_body && !omit_body)body=1;
 #endif
  assert(overrides==2*(swaps+body));
  if(!strcmp(mode,"cpu")||!strcmp(mode,"off"))assert(xreads==0);

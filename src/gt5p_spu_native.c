@@ -171,3 +171,163 @@ void gt5p_spu_clear_words(spu_context* ctx)
     if (!check) for (int i = 0; i < 4; i++) ctx->gpr[15]._u32[i] += (end - 4) - r15;
     if (s_stats) { InterlockedIncrement64(&s_clears); InterlockedAdd64(&s_clear_words, (end - 4 - r15) / 4); native_report2(); }
 }
+
+/* Register promotion of hot lifted functions (GT5 Phase 44).
+ *
+ * scripts/spu_regpromo.py gives each function listed under "spu_regpromo" in
+ * config/targets.json a copy that keeps the SPU registers it uses in C locals
+ * (<fn>_rp), and makes the function's first statement a switch on this mode:
+ * GT5P_SPU_REGPROMO=0 the lifted code as before (default until measured);
+ * 1 the promoted copy; 2 check: every GT5P_SPU_REGPROMO_CHECK_EVERY-th entry
+ * (default 64) runs the original and the promoted body from the same state as
+ * far as their first exit, compares registers, pc, interrupt enable and the
+ * whole local store, puts the state back and lets the original run. Counts
+ * every 5 s; the first 16 mismatches are printed in full. 3: A/B within one
+ * boot, the promoted copy while g_spu_exp is set (SPU_EXP_AB=1 with
+ * SPURS_LANE_CYC=1 flips it every 5 s; scripts/diag/abcyc.py --key exp). */
+volatile int g_gt5p_spu_regpromo = -1;
+int gt5p_spu_regpromo_init(void)
+{
+    const char* e = getenv("GT5P_SPU_REGPROMO");
+    int m = e ? atoi(e) : 0;
+    if (m < 0 || m > 3) m = 0;
+    if (m && g_gt5p_spu_regpromo < 0)
+        fprintf(stderr, "[spu-regpromo] mode %d%s%c", m, m == 2 ? " (check)" : m == 3 ? " (A/B on g_spu_exp)" : "", 10);
+    g_gt5p_spu_regpromo = m;
+    return m;
+}
+
+static SPU_THREAD_LOCAL uint8_t* t_rp_ls0;
+static SPU_THREAD_LOCAL uint8_t* t_rp_lsA;
+static SPU_THREAD_LOCAL unsigned t_rp_n;
+static volatile long long s_rp_checks, s_rp_bad;
+static volatile long s_rp_printed;
+
+static void rp_report(void)
+{
+    static volatile long long t0;
+    long long now = (long long)GetTickCount64(), was = t0;
+    if (!was) { InterlockedCompareExchange64(&t0, now, 0); return; }
+    if (now - was < 5000 || InterlockedCompareExchange64(&t0, now, was) != was) return;
+    fprintf(stderr, "[spu-regpromo] check: %lld compared, %lld differ%c",
+            InterlockedExchange64(&s_rp_checks, 0), InterlockedExchange64(&s_rp_bad, 0), 10);
+}
+
+void gt5p_spu_regpromo_check(spu_context* ctx, void (*orig)(spu_context*),
+                             void (*promo)(spu_context*), uint32_t block)
+{
+    static int every = 0;
+    if (!every) { const char* e = getenv("GT5P_SPU_REGPROMO_CHECK_EVERY"); every = e && atoi(e) > 0 ? atoi(e) : 64; }
+    if ((t_rp_n++ % (unsigned)every) != 0) return;
+    if (!t_rp_ls0) {
+        t_rp_ls0 = (uint8_t*)malloc(SPU_LS_SIZE);
+        t_rp_lsA = (uint8_t*)malloc(SPU_LS_SIZE);
+        if (!t_rp_ls0 || !t_rp_lsA) { free(t_rp_ls0); free(t_rp_lsA); t_rp_ls0 = t_rp_lsA = NULL; return; }
+    }
+    static SPU_THREAD_LOCAL u128 g0[128], gA[128];
+    const uint32_t pc0 = ctx->pc, ie0 = ctx->int_enable;
+    memcpy(g0, ctx->gpr, sizeof g0);
+    memcpy(t_rp_ls0, ctx->ls, SPU_LS_SIZE);
+    orig(ctx);
+    const uint32_t pcA = ctx->pc, ieA = ctx->int_enable;
+    memcpy(gA, ctx->gpr, sizeof gA);
+    memcpy(t_rp_lsA, ctx->ls, SPU_LS_SIZE);
+    memcpy(ctx->gpr, g0, sizeof g0); ctx->pc = pc0; ctx->int_enable = ie0;
+    memcpy(ctx->ls, t_rp_ls0, SPU_LS_SIZE);
+    promo(ctx);
+    int bad_reg = -1;
+    for (int r = 0; r < 128 && bad_reg < 0; r++)
+        if (memcmp(&gA[r], &ctx->gpr[r], sizeof gA[r])) bad_reg = r;
+    int bad_ls = -1;
+    if (memcmp(t_rp_lsA, ctx->ls, SPU_LS_SIZE))
+        for (int a = 0; a < SPU_LS_SIZE; a += 16)
+            if (memcmp(t_rp_lsA + a, ctx->ls + a, 16)) { bad_ls = a; break; }
+    const int bad = bad_reg >= 0 || bad_ls >= 0 || pcA != ctx->pc || ieA != ctx->int_enable;
+    if (bad && InterlockedIncrement(&s_rp_printed) <= 16) {
+        fprintf(stderr, "[spu-regpromo] MISMATCH block 0x%X img=%d: pc %05X/%05X ie %u/%u",
+                block, ctx->image_id, pcA, ctx->pc, ieA, ctx->int_enable);
+        if (bad_reg >= 0)
+            fprintf(stderr, " r%d %08X%08X%08X%08X/%08X%08X%08X%08X", bad_reg,
+                    gA[bad_reg]._u32[0], gA[bad_reg]._u32[1], gA[bad_reg]._u32[2], gA[bad_reg]._u32[3],
+                    ctx->gpr[bad_reg]._u32[0], ctx->gpr[bad_reg]._u32[1],
+                    ctx->gpr[bad_reg]._u32[2], ctx->gpr[bad_reg]._u32[3]);
+        if (bad_ls >= 0) fprintf(stderr, " ls 0x%05X", bad_ls);
+        fprintf(stderr, "%c", 10);
+    }
+    memcpy(ctx->gpr, g0, sizeof g0); ctx->pc = pc0; ctx->int_enable = ie0;
+    memcpy(ctx->ls, t_rp_ls0, SPU_LS_SIZE);
+    InterlockedIncrement64(&s_rp_checks);
+    if (bad) InterlockedIncrement64(&s_rp_bad);
+    rp_report();
+}
+
+/* GT5P_SPU_CAPTURE=<file>: with scripts/diag/spu_capture_patch.py, append
+ * the SPU state (registers, local store, pc) at entry of the patched lifted
+ * function to <file>, for scripts/test/spu_loop_bench.py. The first state is
+ * taken GT5P_SPU_CAPTURE_AFTER_MS after the function's first call (default
+ * 20000: into the race), then one every GT5P_SPU_CAPTURE_GAP_MS (default
+ * 500), GT5P_SPU_CAPTURE_N in all (default 8). The file holds game-derived
+ * data: keep it under scratch/, never track it. Record: "SPUCAP1\0", u32
+ * function address, u32 pc, u32 image id, u32 calls so far, then gpr[128]
+ * and the 256 KB local store as in spu_context. */
+void gt5p_spu_capture(spu_context* ctx, uint32_t addr)
+{
+    static volatile LONG calls, written, init;
+    static LONG n = 8;
+    static ULONGLONG t0, next, gap = 500;
+    static FILE* f;
+    static SRWLOCK lk = SRWLOCK_INIT;
+    if (init == 0) {
+        AcquireSRWLockExclusive(&lk);
+        if (init == 0) {
+            const char* e = getenv("GT5P_SPU_CAPTURE");
+            if (e && *e) f = fopen(e, "wb");
+            ULONGLONG after = 20000;
+            if ((e = getenv("GT5P_SPU_CAPTURE_AFTER_MS"))) after = (ULONGLONG)atol(e);
+            if ((e = getenv("GT5P_SPU_CAPTURE_GAP_MS")) && atol(e) > 0) gap = (ULONGLONG)atol(e);
+            if ((e = getenv("GT5P_SPU_CAPTURE_N"))) n = atol(e);
+            t0 = GetTickCount64(); next = t0 + after;
+            init = f ? 1 : -1;
+        }
+        ReleaseSRWLockExclusive(&lk);
+    }
+    if (init < 0) return;
+    const LONG c = InterlockedIncrement(&calls);
+    if (GetTickCount64() < next) return;
+    AcquireSRWLockExclusive(&lk);
+    if (written < n && GetTickCount64() >= next) {
+        next = GetTickCount64() + gap;
+        const uint32_t hdr[4] = { addr, ctx->pc, (uint32_t)ctx->image_id, (uint32_t)c };
+        fwrite("SPUCAP1", 1, 8, f);
+        fwrite(hdr, sizeof hdr, 1, f);
+        fwrite(ctx->gpr, sizeof ctx->gpr, 1, f);
+        fwrite(ctx->ls, SPU_LS_SIZE, 1, f);
+        fflush(f);
+        if (++written == n) {
+            fclose(f); f = NULL; init = -1;
+            fprintf(stderr, "[spu-capture] %ld states of 0x%X written; %ld calls in %llu ms%c",
+                    (long)n, addr, (long)c, GetTickCount64() - t0, 10);
+        }
+    }
+    ReleaseSRWLockExclusive(&lk);
+}
+
+/* GT5P_SPU_REGION (scripts/spu_region.py, GT5 Phase 45): 1 (default) the
+ * merged copies of the listed lifted loops, with the registers in locals;
+ * 0 the lifted functions as they are; 3 the merged copy while g_spu_exp is
+ * set (SPU_EXP_AB=1 SPURS_LANE_CYC=1 flips it: A/B within one boot).
+ * Measured at Eiger Nordwand: frames 7.5-8% shorter with it, within one
+ * boot; the loops are identical in registers and local store
+ * (scripts/test/spu_loop_bench.py). Only targets that list spu_regions have
+ * merged copies. */
+volatile int g_gt5p_spu_region = -1;
+int gt5p_spu_region_init(void)
+{
+    const char* e = getenv("GT5P_SPU_REGION");
+    int m = e ? atoi(e) : 1;
+    if (m != 1 && m != 3) m = 0;
+    if (m != 1 && g_gt5p_spu_region < 0)
+        fprintf(stderr, "[spu-region] mode %d%s%c", m, m == 3 ? " (A/B on g_spu_exp)" : "", 10);
+    g_gt5p_spu_region = m;
+    return m;
+}
