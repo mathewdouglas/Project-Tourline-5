@@ -4,6 +4,31 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Vertex-cache write tracking prototype (2026-11-12; live checks pending)
+
+Added opt-in Windows page-write tracking to the existing cross-frame raw
+vertex cache. `RSX_VTXCACHE_WRITE_WATCH=1` skips comparisons for clean
+resolved guest ranges; `=2` byte-verifies every clean hit; default/unset/0
+retains the existing path. Shared page generations prevent one cache entry
+from hiding writes from another, and exact resolved IO ranges detect remaps.
+Dirty streams are fully compared before rebaselining; query failures use
+comparisons on every draw. The 4 GB-aligned VM reservation is preserved.
+
+`scripts/test/vertex_write_watch.py` passed with the actual cache functions,
+tracker and reservation loop in rollback, enabled and verification modes,
+including shared pages, same-frame writes after stability, non-contiguous
+mappings, clean remaps, overflow, API failure and deliberately stale data.
+Full-backend C17 syntax and fresh pinned-runtime patch application also pass.
+The main compatibility patch and incremental copy include the change.
+
+**No live speedup or rendering parity is claimed.** Another thread owned
+the game measurements, so no game was launched/stopped and no full game
+build was run. Its private checkout/runtime/build were untouched. Leave
+this off pending zero-mismatch live checks and alternating warm-cache HSR
+A/B runs. Hypothesis: avoiding stream comparisons reduces memory traffic;
+Windows tracking/query overhead may outweigh that benefit. Details,
+rollback and acceptance steps: [vertex-write-watch.md](vertex-write-watch.md).
+
 ## Phase 43 - Eiger Nordwand weather-change crash: unlifted job-body functions (2026-11-11)
 
 **Report.** Arcade, Eiger Nordwand with weather change: the track loaded,

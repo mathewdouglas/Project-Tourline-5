@@ -1,0 +1,306 @@
+--- a/runtime/memory/vm.h
++++ b/runtime/memory/vm.h
+@@ -21,6 +21,8 @@
+ #include <stddef.h>
+ #include <string.h>
+ #include <assert.h>
++#include <stdlib.h>
++#include <stdio.h>
+ 
+ #ifdef _WIN32
+   #define WIN32_LEAN_AND_MEAN
+@@ -183,8 +185,17 @@
+         uint8_t* aligned = (uint8_t*)(((uintptr_t)probe + (uintptr_t)VM_TOTAL_SIZE - 1u)
+                                       & ~((uintptr_t)VM_TOTAL_SIZE - 1u));
+         VirtualFree(probe, 0, MEM_RELEASE);
++        /* Prototype: only opt-in runs pay Windows write-tracking overhead.
++         * Keep the 4 GB alignment and fall back if write tracking is refused. */
++        const char* ww = getenv("RSX_VTXCACHE_WRITE_WATCH");
++        const int track = ww && atoi(ww) > 0 && atoi(ww) <= 2 && !getenv("PS3_NO_WRITE_WATCH");
+         vm_base = (uint8_t*)VirtualAlloc(aligned, (SIZE_T)VM_TOTAL_SIZE,
+-                                         MEM_RESERVE, PAGE_NOACCESS);
++                                         MEM_RESERVE | (track ? MEM_WRITE_WATCH : 0), PAGE_NOACCESS);
++        if (!vm_base && track) {
++            fprintf(stderr, "[write-watch] reservation refused; using byte comparisons\n");
++            vm_base = (uint8_t*)VirtualAlloc(aligned, (SIZE_T)VM_TOTAL_SIZE,
++                                             MEM_RESERVE, PAGE_NOACCESS);
++        }
+     }
+     if (!vm_base) return CELL_ENOMEM;
+ 
+--- a/libs/video/rsx_d3d12_backend.c
++++ b/libs/video/rsx_d3d12_backend.c
+@@ -32,6 +32,7 @@
+ #define WIN32_LEAN_AND_MEAN
+ #endif
+ #include <windows.h>
++#include "rsx_write_watch.h"
+ 
+ /* D3D12 headers */
+ #include <d3d12.h>
+@@ -933,7 +934,8 @@
+ typedef struct { u32 S, loc, lo, hi; } GfStream;
+ typedef struct { u32 dst, src_lo, base, region; int reused, cached; } GfPlace;
+ typedef struct { u64 key; u32 seen, streak, gen, vmin, vmax, hib;
+-                 u32 cvmin, cvmax, chib, dst, src_lo, len, region, clean, vframe; u8 used, copy, vol, miss; } VcEnt;
++                 u32 cvmin, cvmax, chib, dst, src_lo, len, region, clean, vframe; u8 used, copy, vol, miss;
++                 RsxWwSnapshot watch; } VcEnt;
+ #define VC_N 8192u
+ static VcEnt* s_vc;  static u32 s_vc_count;
+ static u32 s_vper_bytes = 64u << 20;
+@@ -1048,6 +1050,7 @@
+ }
+ static void xf_frame_end(void);      /* RSX_XFSTAT */
+ static void vc_frame_end(void);
++static void vc_watch_stats(void);
+ static void ix_frame_reset(void)
+ {
+     s_vp_ib_off = 0;
+@@ -1146,6 +1149,7 @@
+                 (unsigned long long)s_vs_gfreuse, (unsigned long long)s_vs_gfext, s_vs_gfextb / 1e6, s_vs_gfsepb / 1e6, 10);
+     if (s_vs_gfn)
+         fprintf(stderr, "[vtxstat]   gpu fetch: %llu uploads left to the CPU as sparse%c", (unsigned long long)s_vs_gfsparse, 10);
++    vc_watch_stats();
+     if (s_vs_gfn && vc_on())
+         fprintf(stderr, "[vtxstat]   vertex cache: %llu stream hits (%llu not compared, %.1f MB compared), %llu copies (%.1f MB), %llu changed, %llu to the ring, %llu restarts, %u streams, %.1f of %u MB used%c",
+                 (unsigned long long)s_vs_vchit, (unsigned long long)s_vs_vcfree, s_vs_vchitb / 1e6, (unsigned long long)s_vs_vccopy, s_vs_vccopyb / 1e6,
+@@ -15419,6 +15423,83 @@
+     }
+     return 0;
+ }
++/* RSX_VTXCACHE_WRITE_WATCH=1: compare only streams whose guest pages changed.
++ * =2: also byte-check every skipped comparison. Off by default pending live A/B.
++ * The FIFO owner is the only caller; replay never harvests write bits. */
++static RsxWriteWatch s_vwatch;
++static u64 s_vwatch_hits, s_vwatch_bytes, s_vwatch_bad;
++static int vc_watch_mode(void)
++{
++    static int mode = -1;
++    if (mode < 0) {
++        const char* e = getenv("RSX_VTXCACHE_WRITE_WATCH");
++        mode = e ? atoi(e) : 0;
++        if (mode < 0 || mode > 2) mode = 0;
++        extern u8* vm_base;
++        if (mode) {
++            if (!rsx_ww_init(&s_vwatch, vm_base, 0x100000000ull)) s_vwatch.failed = 1;
++            fprintf(stderr, "[write-watch] vertex cache mode %d (2 verifies every hit)\n", mode);
++        }
++    }
++    return mode;
++}
++static void vc_watch_stats(void)
++{
++    if (!vc_watch_mode()) return;
++    fprintf(stderr, "[write-watch] cumulative hits=%llu clean-bytes=%llu queries=%llu dirty-pages=%llu failures=%llu mismatches=%llu fallback=%d\n",
++            s_vwatch_hits, s_vwatch_bytes, s_vwatch.queries, s_vwatch.dirty_pages,
++            s_vwatch.failures, s_vwatch_bad, s_vwatch.failed);
++}
++/* Resolve every IO page, not only the first: guest mappings need not be
++ * contiguous, and a remap must invalidate a snapshot of otherwise clean pages. */
++static u32 vraw_watch_ranges(u32 loc, u32 off, u32 len, RsxWwRange r[RSX_WW_RANGES])
++{
++    extern u32 cellGcmResolveLocated(int local, u32 offset);
++    if (!len || len > RSX_WW_MAX_BYTES || (u64)off + len > 0x100000000ull) return 0;
++    u32 count = 0;
++    while (len) {
++        u32 in = off & 0xFFFFFu, n = 0x100000u - in;
++        if (n > len) n = len;
++        const u32 ea = cellGcmResolveLocated(loc ? 0 : 1, off & ~0xFFFFFu);
++        if (ea == 0xFFFFFFFFu || (u64)ea + in + n > 0x100000000ull) return 0;
++        const u32 start = ea + in;
++        if (count && (u64)r[count - 1].ea + r[count - 1].len == start) r[count - 1].len += n;
++        else {
++            if (count == RSX_WW_RANGES) return 0;
++            r[count].ea = start; r[count].len = n; ++count;
++        }
++        off += n; len -= n;
++    }
++    return count;
++}
++static void vraw_watch_begin(u32 loc, u32 off, u32 len, RsxWwSnapshot* out)
++{
++    out->stamp = 0;
++    if (!vc_watch_mode()) return;
++    RsxWwRange ranges[RSX_WW_RANGES];
++    const u32 count = vraw_watch_ranges(loc, off, len, ranges);
++    rsx_ww_begin(&s_vwatch, ranges, count, out);
++}
++/* Validate the WHOLE stored stream when it changed, before rebaselining its
++ * snapshot. Validating just this draw's subrange cannot bless the other bytes. */
++static int vc_watch_reuse(VcEnt* e, u32 loc, int strict)
++{
++    RsxWwRange ranges[RSX_WW_RANGES];
++    const u32 count = vraw_watch_ranges(loc, e->src_lo, e->len, ranges);
++    if (rsx_ww_same(&s_vwatch, ranges, count, &e->watch)) {
++        if ((vc_watch_mode() == 2 || strict) && vraw_cmp(s_vper_mirror + e->dst, loc, e->src_lo, e->len)) {
++            ++s_vwatch_bad; rsx_ww_fail(&s_vwatch); e->watch.stamp = 0;
++            fprintf(stderr, "[write-watch] MISMATCH loc=%u off=%08X len=%u; skipping disabled\n", loc, e->src_lo, e->len);
++            return 0;
++        }
++        ++s_vwatch_hits; s_vwatch_bytes += e->len;
++        return 1;
++    }
++    vraw_watch_begin(loc, e->src_lo, e->len, &e->watch); /* before compare */
++    s_vs_vchitb += e->len;
++    if (vraw_cmp(s_vper_mirror + e->dst, loc, e->src_lo, e->len)) { e->watch.stamp = 0; return 0; }
++    return 1;
++}
+ /* Guest bytes into ring offset `off` of this frame's half: the mirror, then
+  * the upload heap. */
+ static int vraw_put(u32 off, u32 loc, u32 src, u32 len)
+@@ -15548,6 +15629,16 @@
+     static int strict = -1;
+     if (strict < 0) { const char* v = getenv("RSX_VTXCACHE_VERIFY"); strict = (v && v[0] == 'd') ? 1 : 0; }
+     if (e->copy && vmin >= e->cvmin && vmax <= e->cvmax && hib <= e->chib) {
++        if (vc_watch_mode()) {
++            if (vc_watch_reuse(e, t->loc, strict)) {
++                pl->dst = pbase + e->dst; pl->src_lo = e->src_lo; pl->base = e->cvmin;
++                pl->region = e->region; pl->reused = 1; pl->cached = 1;
++                s_vs_vchit++;
++                return 1;
++            }
++            /* A dirty stream falls through to invalidate/re-copy below.
++             * Never use the legacy once-per-frame shortcut in watch mode. */
++        } else {
+         if (!strict && e->clean >= 8u) {
+             /* Stable: the whole copy once a frame. */
+             if (e->vframe != s_vc_frame) {
+@@ -15569,6 +15660,7 @@
+             s_vs_vchit++; s_vs_vchitb += n;
+             return 1;
+         }
++        }
+         s_vs_vcmiss++;
+         e->copy = 0; e->clean = 0;
+         if (++e->miss >= 4) { e->vol = 1; return 0; }   /* rewritten too often: leave it to the ring */
+@@ -15583,7 +15675,8 @@
+         s_vper_gen++; s_vper_off = 0; s_vper_resume = s_vc_frame + 3u; s_vs_vcflush++;
+         return 0;
+     }
+-    if (!vraw_copy(s_vper_mirror + dst, t->loc, src_lo, len)) return 0;
++    vraw_watch_begin(t->loc, src_lo, len, &e->watch); /* harvest before the read */
++    if (!vraw_copy(s_vper_mirror + dst, t->loc, src_lo, len)) { e->watch.stamp = 0; return 0; }
+     memcpy(s_vraw_mapped + (size_t)2 * VRAW_BYTES + dst, s_vper_mirror + dst, len);
+     if (dst < s_vper_dirty_lo) s_vper_dirty_lo = dst;
+     if (dst + len > s_vper_dirty_hi) s_vper_dirty_hi = dst + len;
+@@ -17719,6 +17812,7 @@
+ 
+     { extern void (*g_pad_milestone_hook)(const char*); g_pad_milestone_hook = NULL; }
+     rt_stop();
++    rsx_ww_close(&s_vwatch);
+     if (s_hitch_file) { fclose(s_hitch_file); s_hitch_file=NULL; }
+     pso_queue_stop();
+     dxb_shutdown();
+--- /dev/null
++++ b/libs/video/rsx_write_watch.h
+@@ -0,0 +1,110 @@
++/* Windows page-write tracking for renderer caches. Single renderer owner.
++ * Inspired by MormonFTP-hub/gt5-recomp's shared page generations; implemented
++ * independently for this backend's raw vertex streams and IO-page mappings.
++ *
++ * All consumers MUST share this state: resetting Windows' bits independently
++ * would hide writes from another entry using the same page. Harvest before
++ * copying/comparing, never after: writes during that read remain detectable.
++ * Keep each entry's exact resolved ranges, since IO mappings can change even
++ * when the new pages have not been written. Failure disables skipping for the
++ * session. No guest-store instrumentation or page protections are installed.
++ */
++#ifndef RSX_WRITE_WATCH_H
++#define RSX_WRITE_WATCH_H
++#include <windows.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define RSX_WW_RANGES 10u
++#define RSX_WW_MAX_BYTES (8u << 20)
++#define RSX_WW_QUERY_PAGES ((RSX_WW_MAX_BYTES >> 12) + 2u)
++typedef struct { uint32_t ea, len; } RsxWwRange;
++typedef struct {
++    uint64_t stamp, cookie;
++    uint32_t count;
++    RsxWwRange range[RSX_WW_RANGES];
++} RsxWwSnapshot;
++typedef struct {
++    unsigned char* base;
++    uint64_t size, serial, cookie;
++    uint64_t* pages;
++    void* written[RSX_WW_QUERY_PAGES];
++    uint64_t queries, dirty_pages, failures;
++    int failed;
++} RsxWriteWatch;
++
++static void rsx_ww_close(RsxWriteWatch* w)
++{
++    free(w->pages); w->pages = NULL; w->base = NULL;
++    ++w->cookie; /* invalidate snapshots even when the same VA is reused */
++}
++static int rsx_ww_init(RsxWriteWatch* w, unsigned char* base, uint64_t size)
++{
++    rsx_ww_close(w);
++    w->failed = 0; w->serial = 1; w->size = size;
++    if (!base || ((uintptr_t)base & 4095u) || !size || size > 0x100000000ull) return 0;
++    w->pages = (uint64_t*)calloc((size_t)((size + 4095u) >> 12), sizeof(uint64_t));
++    if (!w->pages) return 0;
++    w->base = base;
++    return 1;
++}
++static int rsx_ww_fail(RsxWriteWatch* w)
++{
++    w->failed = 1; ++w->failures;
++    return 0;
++}
++static int rsx_ww_harvest(RsxWriteWatch* w, const RsxWwRange* r, uint32_t count)
++{
++    if (!w->pages || w->failed || !count || count > RSX_WW_RANGES) return 0;
++    uint64_t total = 0;
++    /* Validate everything before any reset. */
++    for (uint32_t i = 0; i < count; ++i) {
++        total += r[i].len;
++        if (!r[i].len || (uint64_t)r[i].ea + r[i].len > w->size || total > RSX_WW_MAX_BYTES)
++            return 0;
++    }
++    for (uint32_t i = 0; i < count; ++i) {
++        const uint64_t lo = (uint64_t)r[i].ea & ~4095ull;
++        const uint64_t hi = ((uint64_t)r[i].ea + r[i].len + 4095u) & ~4095ull;
++        ULONG_PTR n = RSX_WW_QUERY_PAGES;
++        ULONG gran = 0;
++        ++w->queries;
++        if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, w->base + lo, (SIZE_T)(hi - lo),
++                          w->written, &n, &gran) || gran != 4096u || n > RSX_WW_QUERY_PAGES)
++            return rsx_ww_fail(w);
++        if (n) {
++            if (++w->serial == 0) return rsx_ww_fail(w);
++            for (ULONG_PTR k = 0; k < n; ++k) {
++                const uintptr_t p = (uintptr_t)w->written[k];
++                if (p < (uintptr_t)w->base + lo || p >= (uintptr_t)w->base + hi || (p & 4095u))
++                    return rsx_ww_fail(w);
++                w->pages[(p - (uintptr_t)w->base) >> 12] = w->serial;
++            }
++            w->dirty_pages += n;
++        }
++    }
++    return 1;
++}
++/* Call immediately BEFORE the bytes that this snapshot describes are read. */
++static int rsx_ww_begin(RsxWriteWatch* w, const RsxWwRange* r, uint32_t count, RsxWwSnapshot* s)
++{
++    s->stamp = 0;
++    if (!rsx_ww_harvest(w, r, count)) return 0;
++    s->stamp = w->serial; s->cookie = w->cookie; s->count = count;
++    memcpy(s->range, r, count * sizeof(*r));
++    return 1;
++}
++static int rsx_ww_same(RsxWriteWatch* w, const RsxWwRange* r, uint32_t count, const RsxWwSnapshot* s)
++{
++    if (!s->stamp || s->cookie != w->cookie || count != s->count || count > RSX_WW_RANGES ||
++        memcmp(s->range, r, count * sizeof(*r)) || !rsx_ww_harvest(w, r, count)) return 0;
++    for (uint32_t i = 0; i < count; ++i) {
++        const uint64_t first = (uint64_t)r[i].ea >> 12;
++        const uint64_t end = ((uint64_t)r[i].ea + r[i].len + 4095u) >> 12;
++        for (uint64_t p = first; p < end; ++p)
++            if (w->pages[p] > s->stamp) return 0;
++    }
++    return 1;
++}
++#endif
