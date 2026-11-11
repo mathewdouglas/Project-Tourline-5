@@ -86,6 +86,11 @@ inputs, pinned downloads) and `scripts/release/package_player.py`
 (allowlist; never game files). Releases carry the ZIP; the tag is
 `v<CMake project VERSION>`.
 
+**GT5 race freeze fixed (Phase 42).** Lock-line waiters sleep after 1 ms
+(`SPU_LOCKLINE_SLEEP_US`, 0 = old spin), so an IDLE-priority PPU holder is no
+longer starved: 0 freezes in 6 HSR races against 3 in 5. `[lockline]` names
+long holds. Tests: `scripts/test/fzhunt.ps1` (live), `lockline_inversion.py`.
+
 **GT5 ultrawide (Phase 41).** 21:9 works on GT5: `aspect_16_9_float`,
 `ui_aspect_16_9_float` and `scene_camera_aspect_16_9_float` are measured for
 v104 in `config/targets.json`. Race, car list and menu checked at 1080p/1440p;

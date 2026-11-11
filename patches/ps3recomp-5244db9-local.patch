@@ -42769,7 +42769,7 @@ index 0b235d02..94a1a7f6 100644
  #endif
 \ No newline at end of file
 diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
-index 7ac619f3..e2bf3c4e 100644
+index 7ac619f..4ce6091 100644
 --- a/runtime/spu/spu_coherency.c
 +++ b/runtime/spu/spu_coherency.c
 @@ -15,6 +15,7 @@
@@ -42780,7 +42780,89 @@ index 7ac619f3..e2bf3c4e 100644
  
  #ifdef __cplusplus
  extern "C" {
-@@ -72,32 +73,62 @@ void spu_lockline_unlock(void) { atomic_flag_clear_explicit(&g_lockline, memory_
+@@ -38,17 +39,79 @@ static volatile long g_lockline = 0;
+  * pause, and yield after a long wait. The bare exchange loop let GH3's four
+  * idle job-policy pollers saturate the line and delay every other SPU atomic
+  * -- FMOD's mixer task among them, 25-40 ms at a time. */
++/* Who holds the lock and since when (GetTickCount64 ms), written by the
++ * holder right after it acquires. Diagnostic only: a freeze whose SPU lanes
++ * all wait here (GT5 Phase 32) needs the holder named. Read racily. */
++static volatile unsigned long g_lockline_owner = 0;
++static volatile unsigned long long g_lockline_since = 0;
++/* SPU_LOCKLINE_WARN_MS=<ms> (default 250, 0 = off): a waiter that has
++ * waited that long prints itself, the holder and how long it has held. */
++static void lockline_long_wait(ULONGLONG waited)
++{
++    static int warn_ms = -1;
++    static volatile long printed = 0;
++    if (warn_ms < 0) { const char* e = getenv("SPU_LOCKLINE_WARN_MS"); warn_ms = e ? atoi(e) : 250; }
++    if (!warn_ms || waited < (ULONGLONG)warn_ms) return;
++    if (_InterlockedIncrement(&printed) > 64) return;
++    const unsigned long own = g_lockline_owner;
++    const unsigned long long since = g_lockline_since;
++    const ULONGLONG now = GetTickCount64();
++    fprintf(stderr, "[lockline] tid=%lu prio=%d waited %llu ms; holder tid=%lu held %llu ms\n",
++            GetCurrentThreadId(), GetThreadPriority(GetCurrentThread()), (unsigned long long)waited, own,
++            since ? (unsigned long long)(now - since) : 0ull);
++}
++/* SPU_LOCKLINE_SLEEP_US=<us> (default 1000; 0 = never, the old behaviour):
++ * a waiter that has waited this long sleeps 1 ms per round instead of
++ * SwitchToThread. The holder can be a guest thread mapped to IDLE host
++ * priority (GT5 Phase 32/41: a PPU thread's coherent store), preempted inside
++ * its few-microsecond critical section. SwitchToThread never yields to a
++ * lower-priority thread, so with ~18 waiters spinning at normal/above-normal
++ * priority the holder only ran when Windows' starvation boost picked it,
++ * 1-4 s later: the race freeze. Sleeping frees the waiter's core. */
++static long long lockline_sleep_ticks(void)
++{
++    static long long ticks = -1;
++    if (ticks < 0) {
++        const char* e = getenv("SPU_LOCKLINE_SLEEP_US");
++        const long long us = e ? atoll(e) : 1000;
++        LARGE_INTEGER f; QueryPerformanceFrequency(&f);
++        ticks = us > 0 ? us * f.QuadPart / 1000000 : 0;
++    }
++    return ticks;
++}
+ void spu_lockline_lock(void)
+ {
+     unsigned spins = 0;
++    ULONGLONG t0 = 0, warned = 0;
++    LARGE_INTEGER q0; q0.QuadPart = 0;
+     while (_InterlockedExchange(&g_lockline, 1)) {
+         do {
+             _mm_pause();
+-            if (++spins >= 4096) { spins = 0; SwitchToThread(); }
++            if (++spins >= 4096) {
++                spins = 0;
++                const long long st = lockline_sleep_ticks();
++                LARGE_INTEGER q; QueryPerformanceCounter(&q);
++                if (!q0.QuadPart) q0 = q;
++                if (st && q.QuadPart - q0.QuadPart >= st) Sleep(1);
++                else SwitchToThread();
++                const ULONGLONG now = GetTickCount64();
++                if (!t0) t0 = now;
++                else if (now - t0 >= 250 && now - warned >= 1000) { warned = now; lockline_long_wait(now - t0); }
++            }
+         } while (g_lockline);
+     }
++    g_lockline_owner = GetCurrentThreadId();
++    g_lockline_since = GetTickCount64();
++}
++void spu_lockline_unlock(void) { g_lockline_owner = 0; _InterlockedExchange(&g_lockline, 0); }
++/* For a stall dump: the holder's host thread id (0 = free) and ms held. */
++unsigned long spu_lockline_holder(unsigned long long* held_ms)
++{
++    const unsigned long own = g_lockline_owner;
++    const unsigned long long since = g_lockline_since;
++    if (held_ms) *held_ms = (own && since) ? GetTickCount64() - since : 0;
++    return g_lockline ? own : 0;
+ }
+-void spu_lockline_unlock(void) { _InterlockedExchange(&g_lockline, 0); }
+ #else
+ #include <stdatomic.h>
+ static atomic_flag g_lockline = ATOMIC_FLAG_INIT;
+@@ -72,32 +135,62 @@ void spu_lockline_unlock(void) { atomic_flag_clear_explicit(&g_lockline, memory_
  #define SPU_COH_LINES       (1u << (32 - SPU_COH_LINE_SHIFT))   /* 2^25 lines */
  #define SPU_COH_BITMAP_SZ   (SPU_COH_LINES / 8)                 /* 4 MiB */
  
@@ -42853,7 +42935,7 @@ index 7ac619f3..e2bf3c4e 100644
      }
      /* More live SPU contexts than the registry holds. The ones already in it
       * still get their events; this one would silently never wake, so say so. */
-@@ -105,7 +136,7 @@ void spu_coh_reserve(spu_context* ctx, uint32_t ea)
+@@ -105,7 +198,7 @@ void spu_coh_reserve(spu_context* ctx, uint32_t ea)
        if (!warned) { warned = 1;
            fprintf(stderr, "[spu-coh] more than %d reserving SPU contexts -- "
                            "spu=0x%X will not receive lock-line events\n",
@@ -42862,7 +42944,7 @@ index 7ac619f3..e2bf3c4e 100644
            fflush(stderr); } }
  }
  
-@@ -129,7 +160,7 @@ void spu_coh_unregister(spu_context* ctx)
+@@ -129,7 +222,7 @@ void spu_coh_unregister(spu_context* ctx)
       * spu_coh_notify_write, reading a freed thread stack. */
      spu_lockline_lock();
      for (int i = 0; i < SPU_COH_MAX_CTX; i++)
@@ -42871,7 +42953,7 @@ index 7ac619f3..e2bf3c4e 100644
      spu_lockline_unlock();
  }
  
-@@ -149,17 +180,141 @@ void spu_coh_forget_range(uintptr_t lo, uintptr_t hi)
+@@ -149,17 +242,141 @@ void spu_coh_forget_range(uintptr_t lo, uintptr_t hi)
              if (_n++ < 16)
                  fprintf(stderr, "[spu-coh] leaked ctx %p (img=%d) dropped at thread exit\n",
                          (void*)c, s_coh_ctxs[i]->image_id);
@@ -43016,7 +43098,7 @@ index 7ac619f3..e2bf3c4e 100644
  }
  
  /* A DMA PUT is issued BY an SPU, and hardware does not take that SPU's own
-@@ -175,7 +330,10 @@ int spu_coh_is_reserved(uint32_t addr)
+@@ -175,7 +392,10 @@ int spu_coh_is_reserved(uint32_t addr)
  void spu_coh_notify_write_except(uint32_t ea, const void* self)
  {
      uint32_t line = ea & ~127u;
@@ -43027,7 +43109,7 @@ index 7ac619f3..e2bf3c4e 100644
          spu_context* c = s_coh_ctxs[i];
          if (!c || (const void*)c == self) continue;
          if (c->resv_valid && (c->resv_ea & ~127u) == line) {
-@@ -190,7 +348,10 @@ void spu_coh_notify_write_except(uint32_t ea, const void* self)
+@@ -190,7 +410,10 @@ void spu_coh_notify_write_except(uint32_t ea, const void* self)
  void spu_coh_notify_write(uint32_t ea)
  {
      uint32_t line = ea & ~127u;
@@ -43039,10 +43121,20 @@ index 7ac619f3..e2bf3c4e 100644
          if (!c) continue;
          if (c->resv_valid && (c->resv_ea & ~127u) == line) {
 diff --git a/runtime/spu/spu_coherency.h b/runtime/spu/spu_coherency.h
-index ca76ccd1..26d0f811 100644
+index eafb52a..0582e98 100644
 --- a/runtime/spu/spu_coherency.h
 +++ b/runtime/spu/spu_coherency.h
-@@ -55,6 +55,12 @@ void spu_coh_reserve(spu_context* ctx, uint32_t ea);
+@@ -42,6 +42,9 @@ extern "C" {
+  * reserved. The critical sections are two 128-byte memcpy and a memcmp. */
+ void spu_lockline_lock(void);
+ void spu_lockline_unlock(void);
++/* Diagnostic: the lock's holder (host thread id, 0 when free) and how many
++ * milliseconds it has held it. Windows builds only. */
++unsigned long spu_lockline_holder(unsigned long long* held_ms);
+ 
+ /* Mark `ea`'s 128-byte line as SPU-reserved and remember `ctx` as a possible
+  * reservation holder. Called from the SPU's GETLLAR with the lock held.
+@@ -55,6 +58,12 @@ void spu_coh_reserve(spu_context* ctx, uint32_t ea);
   * lookup guarded by a global that is zero until the first GETLLAR. */
  int spu_coh_is_reserved(uint32_t addr);
  
@@ -43055,15 +43147,6 @@ index ca76ccd1..26d0f811 100644
  /* A store by the PPU landed on `ea`'s line. Raise SPU_EVENT_LR on every SPU
   * whose live reservation covers it, drop that reservation, and wake the host
   * thread in case it is parked in `rdch SPU_RdEventStat`.
-@@ -65,7 +71,7 @@ void spu_coh_notify_write(uint32_t ea);
- /* Remove a context from the reserving set. MUST be called before a
-  * transient (stack-allocated) spu_context goes out of scope. */
- void spu_coh_unregister(spu_context* ctx);
--void spu_coh_forget_range(uintptr_t lo, uintptr_t hi);  /* thread exit */
-+void spu_coh_forget_range(uintptr_t lo, uintptr_t hi);  /* thread exit */
- /* As above, but leaves `self`'s own reservation alone: an SPU's own MFC
-  * write does not cost it its reservation on hardware. */
- void spu_coh_notify_write_except(uint32_t ea, const void* self);
 diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
 index 8d8e4aac..49da6e60 100644
 --- a/runtime/spu/spu_context.h

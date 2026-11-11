@@ -652,6 +652,40 @@ extern "C" void gt5p_debug_snapshot(FILE* out)
 }
 extern "C" volatile unsigned long g_spurs_lane_tid[16][8];   /* cellSpurs.c: pool lane host threads */
 extern "C" void gt5p_memsnap_write(void);   /* gt5p_settings_ui.cpp */
+extern "C" unsigned long spu_lockline_holder(unsigned long long* held_ms);
+/* One host thread's call stack (offsets from the executable base, or
+ * module!offset), suspended while it is walked. Resolve with
+ * scripts/diag/maplook.py against build/gt5.map. */
+static void stall_print_stack(const char* tag, DWORD tid)
+{
+    const unsigned long long base = (unsigned long long)GetModuleHandleA(NULL);
+    HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, tid);
+    if (!th) return;
+    char line[1024]; int n = snprintf(line, sizeof line, "[stall]   %s tid=%lu prio=%d:", tag, tid, GetThreadPriority(th));
+    if (SuspendThread(th) != (DWORD)-1) {
+        CONTEXT c; memset(&c, 0, sizeof c); c.ContextFlags = CONTEXT_FULL;
+        if (GetThreadContext(th, &c)) {
+            for (int f = 0; f < 14 && c.Rip && n < (int)sizeof line - 40; f++) {
+                HMODULE m = NULL; char mn[64] = "";
+                if (c.Rip >= base && c.Rip < base + 0x10000000ull)
+                    n += snprintf(line + n, sizeof line - n, " +%llX", c.Rip - base);
+                else if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                            (LPCSTR)c.Rip, &m) && GetModuleBaseNameA(GetCurrentProcess(), m, mn, sizeof mn))
+                    n += snprintf(line + n, sizeof line - n, " %s!%llX", mn, c.Rip - (unsigned long long)m);
+                else n += snprintf(line + n, sizeof line - n, " ?%llX", c.Rip);
+                DWORD64 ib = 0;
+                PRUNTIME_FUNCTION rf = RtlLookupFunctionEntry(c.Rip, &ib, NULL);
+                if (!rf) { c.Rip = *(DWORD64*)c.Rsp; c.Rsp += 8; continue; }
+                void* hd = NULL; DWORD64 ef = 0;
+                RtlVirtualUnwind(UNW_FLAG_NHANDLER, ib, c.Rip, rf, &c, &hd, &ef, NULL);
+            }
+        }
+        ResumeThread(th);
+    }
+    CloseHandle(th);
+    fprintf(stderr, "%s\n", line);
+}
+
 static void stall_dump_check(unsigned presents_total)
 {
     static int on = -1;
@@ -707,36 +741,18 @@ static void stall_dump_check(unsigned presents_total)
     /* Each SPURS pool lane's host call stack (offsets from the executable
      * base, or module!offset), so a lane that holds still between snapshots
      * shows what it is blocked in. Resolve with scripts/diag/maplook.py's map. */
-    { const unsigned long long base = (unsigned long long)GetModuleHandleA(NULL);
-      for (int w = 0; w < 16; w++) for (int l = 0; l < 8; l++) {
-          const DWORD tid = g_spurs_lane_tid[w][l];
-          if (!tid) continue;
-          HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, tid);
-          if (!th) continue;
-          char line[1024]; int n = snprintf(line, sizeof line, "[stall]   lane-stack wid=%d lane=%d tid=%lu:", w, l, tid);
-          if (SuspendThread(th) != (DWORD)-1) {
-              CONTEXT c; memset(&c, 0, sizeof c); c.ContextFlags = CONTEXT_FULL;
-              if (GetThreadContext(th, &c)) {
-                  for (int f = 0; f < 14 && c.Rip && n < (int)sizeof line - 40; f++) {
-                      HMODULE m = NULL; char mn[64] = "";
-                      if (c.Rip >= base && c.Rip < base + 0x10000000ull)
-                          n += snprintf(line + n, sizeof line - n, " +%llX", c.Rip - base);
-                      else if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                                  (LPCSTR)c.Rip, &m) && GetModuleBaseNameA(GetCurrentProcess(), m, mn, sizeof mn))
-                          n += snprintf(line + n, sizeof line - n, " %s!%llX", mn, c.Rip - (unsigned long long)m);
-                      else n += snprintf(line + n, sizeof line - n, " ?%llX", c.Rip);
-                      DWORD64 ib = 0;
-                      PRUNTIME_FUNCTION rf = RtlLookupFunctionEntry(c.Rip, &ib, NULL);
-                      if (!rf) { c.Rip = *(DWORD64*)c.Rsp; c.Rsp += 8; continue; }
-                      void* hd = NULL; DWORD64 ef = 0;
-                      RtlVirtualUnwind(UNW_FLAG_NHANDLER, ib, c.Rip, rf, &c, &hd, &ef, NULL);
-                  }
-              }
-              ResumeThread(th);
-          }
-          CloseHandle(th);
-          fprintf(stderr, "%s\n", line);
-      } }
+    for (int w = 0; w < 16; w++) for (int l = 0; l < 8; l++) {
+        const DWORD tid = g_spurs_lane_tid[w][l];
+        if (!tid) continue;
+        char tag[64]; snprintf(tag, sizeof tag, "lane-stack wid=%d lane=%d", w, l);
+        stall_print_stack(tag, tid);
+    }
+    /* The SPU lock-line lock's holder (Phase 32: every lane of a frozen race
+     * waits on it). Its thread id matches a [THREAD] hosttid above. */
+    { unsigned long long held = 0;
+      const unsigned long holder = spu_lockline_holder(&held);
+      fprintf(stderr, "[stall] lockline holder tid=%lu held %llu ms\n", holder, held);
+      if (holder) stall_print_stack("lockline-holder-stack", holder); }
     cellSpurs_debug_dump();
     spurs_pm_debug_dump();
     cellGcm_debug_dump();

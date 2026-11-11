@@ -14,3 +14,4 @@ of replacing a whole section of the main patch.
 | File | Change | Base |
 | --- | --- | --- |
 | `race-prewarm-pack.patch` | Race pack and helper-thread race preparation (`libs/video/rsx_d3d12_backend.c` only) | main patch at `8b6f586` |
+| `lockline-sleep.patch` | Lock-line waiters sleep after 1 ms, holder recorded (GT5 Phase 42; `runtime/spu/spu_coherency.*`) | main patch at `625dd76` |

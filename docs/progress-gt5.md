@@ -4,6 +4,65 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Phase 42 - The 2.5 s race freeze fixed: lock-line priority inversion (2026-11-11)
+
+Phase 32's freeze (roughly every second race, 1-4 s, all render lanes waiting
+on the runtime's lock-line lock) is fixed. Runtime change in
+`runtime/spu/spu_coherency.c` (main patch, and
+`patches/incremental/lockline-sleep.patch`).
+
+**The holder, measured.** The lock now records its holder's host thread id
+and acquire time. A waiter blocked for 250 ms or more prints both
+(`[lockline]`, `SPU_LOCKLINE_WARN_MS`, 0 = off), and the stall dump prints the
+holder and its host stack (`[stall] lockline holder`,
+`lockline-holder-stack`). Baseline, six High Speed Ring races
+(`fzhunt.ps1 -Prefix fzA`, five reached the race):
+
+- Three froze (max frame interval 2.84, 4.31 and 1.41 s). In both freezes
+  with a dump, one holder held the lock for over a second while about 18
+  threads waited (host priority 0 or +1).
+- The holder was guest thread 27 (entry `0x018DDBE0`) in both runs, at host
+  priority **-15 (IDLE)**. Its stack: a lifted PPU store (`func_00A560CC`, via
+  `func_00A2FB94` and `func_0049664C`) in `vm_write32` ->
+  `spu_coh_notify_write`, or at `spu_lockline_unlock+0`. That is a coherent
+  guest store, a critical section of microseconds: the thread was runnable
+  but not running.
+- Cause: the waiters spun with `_mm_pause` and `SwitchToThread`, which never
+  yields to a lower-priority thread. With the cores full of higher-priority
+  spinners, the IDLE-priority holder ran only when Windows' starvation boost
+  picked it, seconds later.
+
+**The fix.** A waiter that has waited 1 ms (`SPU_LOCKLINE_SLEEP_US`, QPC,
+checked every 4096 pauses) calls `Sleep(1)` instead of `SwitchToThread`, so
+its core is free for the holder. Short waits are unchanged.
+`SPU_LOCKLINE_SLEEP_US=0` restores the old spin.
+
+**Measured** (`scripts/test/fzhunt.ps1`, HSR, throttle held, 50 s windows,
+`RSX_PRESENT_SYNC=0`, stall dumps after 1 s):
+
+| Build / switch | Races | Max interval >= 1 s | Lock waits >= 250 ms |
+| --- | ---: | ---: | ---: |
+| Before (`fzA`) | 5 | 3 (2.84, 4.31, 1.41 s) | 4 races |
+| Fix, default (`fzB`) | 6 | 0 (worst 349 ms) | 0 |
+| Fix, `SPU_LOCKLINE_SLEEP_US=0` (`fzC`) | 4 | 1 (1.19 s; another 429 ms) | 2 races |
+
+Mean FPS in the windows: before 42.4-49.5, fix 42.1-51.3. The windows'
+content differs from run to run; this is not a frame test. The remaining 349 ms
+and 120 ms intervals have no lock wait behind them and are not analysed.
+
+**Synthetic regression.** `scripts/test/lockline_inversion.py` builds the
+runtime's real `spu_coherency.c` with a driver that pins an IDLE-priority
+holder and three above-normal waiters to one CPU, the holder preempted inside
+its 2 ms critical section. With the old spin the last waiter got the lock
+after 2559 ms (the freeze's length). With the default, it took 15 ms: one
+`Sleep(1)` at the default 15.6 ms timer resolution. The game sets 1 ms.
+
+**Not done.** Why guest thread 27 maps to IDLE (the priority-scheduling map,
+`PS3_PPU_PRIO_SCHED`) is left alone: the lock no longer depends on it. Not
+checked: other tracks and modes, long sessions, and CPU use while waiters
+sleep. `scripts/test/fzhunt.ps1` now runs from this checkout, runs every
+race unless `-StopOnFreeze`, and summarises each run.
+
 ## Phase 41 - Ultrawide 21:9 on GT5 (2026-11-11)
 
 The Prologue ultrawide path (Phases 121-126) needs three aspect constants per
@@ -516,7 +575,7 @@ Seen before the Phase 23 fixes; not caused by them.
 4. ~~After a collision the hit car's textures break into rainbow colours.~~
    Fixed, Phase 26.
 
-## Phase 32 — The 2.5 s race freeze: a stalled job-count decrement (2026-10-30, open)
+## Phase 32 — The 2.5 s race freeze: a stalled job-count decrement (2026-10-30; fixed in Phase 42)
 
 **Shape.** Roughly every second race has one or more freezes of 2.4-2.85 s
 (near-constant length) at varying track points. Independent of vsync

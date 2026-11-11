@@ -1,0 +1,100 @@
+diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
+index e2bf3c4..4ce6091 100644
+--- a/runtime/spu/spu_coherency.c
++++ b/runtime/spu/spu_coherency.c
+@@ -39,17 +39,79 @@ static volatile long g_lockline = 0;
+  * pause, and yield after a long wait. The bare exchange loop let GH3's four
+  * idle job-policy pollers saturate the line and delay every other SPU atomic
+  * -- FMOD's mixer task among them, 25-40 ms at a time. */
++/* Who holds the lock and since when (GetTickCount64 ms), written by the
++ * holder right after it acquires. Diagnostic only: a freeze whose SPU lanes
++ * all wait here (GT5 Phase 32) needs the holder named. Read racily. */
++static volatile unsigned long g_lockline_owner = 0;
++static volatile unsigned long long g_lockline_since = 0;
++/* SPU_LOCKLINE_WARN_MS=<ms> (default 250, 0 = off): a waiter that has
++ * waited that long prints itself, the holder and how long it has held. */
++static void lockline_long_wait(ULONGLONG waited)
++{
++    static int warn_ms = -1;
++    static volatile long printed = 0;
++    if (warn_ms < 0) { const char* e = getenv("SPU_LOCKLINE_WARN_MS"); warn_ms = e ? atoi(e) : 250; }
++    if (!warn_ms || waited < (ULONGLONG)warn_ms) return;
++    if (_InterlockedIncrement(&printed) > 64) return;
++    const unsigned long own = g_lockline_owner;
++    const unsigned long long since = g_lockline_since;
++    const ULONGLONG now = GetTickCount64();
++    fprintf(stderr, "[lockline] tid=%lu prio=%d waited %llu ms; holder tid=%lu held %llu ms\n",
++            GetCurrentThreadId(), GetThreadPriority(GetCurrentThread()), (unsigned long long)waited, own,
++            since ? (unsigned long long)(now - since) : 0ull);
++}
++/* SPU_LOCKLINE_SLEEP_US=<us> (default 1000; 0 = never, the old behaviour):
++ * a waiter that has waited this long sleeps 1 ms per round instead of
++ * SwitchToThread. The holder can be a guest thread mapped to IDLE host
++ * priority (GT5 Phase 32/41: a PPU thread's coherent store), preempted inside
++ * its few-microsecond critical section. SwitchToThread never yields to a
++ * lower-priority thread, so with ~18 waiters spinning at normal/above-normal
++ * priority the holder only ran when Windows' starvation boost picked it,
++ * 1-4 s later: the race freeze. Sleeping frees the waiter's core. */
++static long long lockline_sleep_ticks(void)
++{
++    static long long ticks = -1;
++    if (ticks < 0) {
++        const char* e = getenv("SPU_LOCKLINE_SLEEP_US");
++        const long long us = e ? atoll(e) : 1000;
++        LARGE_INTEGER f; QueryPerformanceFrequency(&f);
++        ticks = us > 0 ? us * f.QuadPart / 1000000 : 0;
++    }
++    return ticks;
++}
+ void spu_lockline_lock(void)
+ {
+     unsigned spins = 0;
++    ULONGLONG t0 = 0, warned = 0;
++    LARGE_INTEGER q0; q0.QuadPart = 0;
+     while (_InterlockedExchange(&g_lockline, 1)) {
+         do {
+             _mm_pause();
+-            if (++spins >= 4096) { spins = 0; SwitchToThread(); }
++            if (++spins >= 4096) {
++                spins = 0;
++                const long long st = lockline_sleep_ticks();
++                LARGE_INTEGER q; QueryPerformanceCounter(&q);
++                if (!q0.QuadPart) q0 = q;
++                if (st && q.QuadPart - q0.QuadPart >= st) Sleep(1);
++                else SwitchToThread();
++                const ULONGLONG now = GetTickCount64();
++                if (!t0) t0 = now;
++                else if (now - t0 >= 250 && now - warned >= 1000) { warned = now; lockline_long_wait(now - t0); }
++            }
+         } while (g_lockline);
+     }
++    g_lockline_owner = GetCurrentThreadId();
++    g_lockline_since = GetTickCount64();
++}
++void spu_lockline_unlock(void) { g_lockline_owner = 0; _InterlockedExchange(&g_lockline, 0); }
++/* For a stall dump: the holder's host thread id (0 = free) and ms held. */
++unsigned long spu_lockline_holder(unsigned long long* held_ms)
++{
++    const unsigned long own = g_lockline_owner;
++    const unsigned long long since = g_lockline_since;
++    if (held_ms) *held_ms = (own && since) ? GetTickCount64() - since : 0;
++    return g_lockline ? own : 0;
+ }
+-void spu_lockline_unlock(void) { _InterlockedExchange(&g_lockline, 0); }
+ #else
+ #include <stdatomic.h>
+ static atomic_flag g_lockline = ATOMIC_FLAG_INIT;
+diff --git a/runtime/spu/spu_coherency.h b/runtime/spu/spu_coherency.h
+index 26d0f81..0582e98 100644
+--- a/runtime/spu/spu_coherency.h
++++ b/runtime/spu/spu_coherency.h
+@@ -42,6 +42,9 @@ extern "C" {
+  * reserved. The critical sections are two 128-byte memcpy and a memcmp. */
+ void spu_lockline_lock(void);
+ void spu_lockline_unlock(void);
++/* Diagnostic: the lock's holder (host thread id, 0 when free) and how many
++ * milliseconds it has held it. Windows builds only. */
++unsigned long spu_lockline_holder(unsigned long long* held_ms);
+ 
+ /* Mark `ea`'s 128-byte line as SPU-reserved and remember `ctx` as a possible
+  * reservation holder. Called from the SPU's GETLLAR with the lock held.

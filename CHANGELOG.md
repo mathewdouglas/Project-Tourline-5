@@ -5,6 +5,11 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- The intermittent 1-4 s race freeze (GT5 Phases 32 and 42): SPU lock-line
+  waiters starved an idle-priority game thread holding the lock. Waiters now
+  sleep after 1 ms (`SPU_LOCKLINE_SLEEP_US=0` restores the old spin).
+
 ## [0.1.1] - 2026-11-11
 
 Adds the native setup launcher, 21:9 ultrawide and GT5-specific CPU work to
