@@ -99,7 +99,11 @@ combination beats the default (spread ~5 FPS; `scratch\go.ps1 -Eiger` in the
 Phase 44 worktree drives there). Cause, measured by delay injection: one
 serial loop in workload 0's body `0x01697100` (LS 0x7F10-0x8948, ~20,000
 iterations, ~15 ms a frame) gates workload 1 and the frame; it does not run
-at High Speed Ring. Speeding up that loop is the next step. `GT5P_SPU_FMA` takes `1` (all `spu_fma_images`, now four
+at High Speed Ring. Its offline benchmark is `scripts/test/spu_loop_bench.py`
+(states from `scripts/diag/spu_capture_patch.py b01697100 7FE0` and
+`GT5P_SPU_CAPTURE`, kept in `scratch/`). Faster helpers and register
+promotion (per function or across the merged loop, `scripts/spu_region.py`)
+were exact but not faster; a native loop is the remaining route. `GT5P_SPU_FMA` takes `1` (all `spu_fma_images`, now four
 bodies) or body names (`b0196FF40` = the old `1`); `SPURS_LANE_RETRY_MAX`
 and `SPURS_LANE_KICK_WAKE` are measured experiments, off.
 
@@ -1709,6 +1713,8 @@ Run Python through the repo's virtual environment: `.venv\Scripts\python`.
 | `scripts/ui_mask_patch.py` | Post-lift patch, required after every lift: menu label fade mask centred in ultrawide (`ui_label_mask_func`; `GT5P_UI_MASK_FIX=0` off) |
 | `scripts/spu_native_patch.py` | Post-SPU-lift patch, required: hooks native replacements (`src/gt5p_spu_native.c`) into lifted SPU blocks (`spu_native_hooks`); `GT5P_SPU_NATIVE=0` off, `=2` check |
 | `scripts/spu_regpromo.py` | Post-SPU-lift patch, after `spu_native_patch.py`: copies of hot lifted SPU functions with registers in locals (`spu_regpromo`); `GT5P_SPU_REGPROMO=0` off (default), `1` on, `2` check, `3` A/B; measured slower (Phase 44) |
+| `scripts/spu_region.py` | Experiment, not a lift step: merges a loop of lifted SPU functions into one with registers in locals; used by `scripts/test/spu_loop_bench.py` (`region=`); exact, slower (Phase 45) |
+| `scripts/test/spu_loop_bench.py`, `scripts/diag/spu_capture_patch.py` | Offline timing and exact comparison of a lifted SPU routine on captured real states (`GT5P_SPU_CAPTURE`; Phase 45) |
 | `scripts/lift_spu_jobs.py` | Lift the policy module, the captured job images and the job bodies; writes `src/gen/spu_workloads_bcus98158.c` |
 | `scripts/soak.sh`, `soak.py`, `boot.py` | Repeated or single headless boots with a summary |
 | `scripts/test/*.ps1` | Drive the game to a page and measure or shoot it (table under "Start here") |

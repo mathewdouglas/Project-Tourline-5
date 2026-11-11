@@ -65,10 +65,12 @@ the injected total. The loop does not run at High Speed Ring.
 
 ## Next steps, in order
 
-0. **Eiger: speed up body `0x01697100`'s loop** (Phase 45): an offline
-   benchmark from a captured state, then cheaper `cflts`/`frsqest`/`frest`/
-   `fma`/`shufb` helpers, then a native loop with a check mode. Also wake
-   the SPURS kernel on an SPU's ready-count store (0.8 ms a frame).
+0. **Eiger: speed up body `0x01697100`'s loop** (Phase 45). The offline
+   benchmark exists (`scripts/test/spu_loop_bench.py`, captured states);
+   faster helpers, per-function promotion and a merged loop with registers
+   in locals were all exact and no faster (0.75-0.96x). Remaining: a native
+   loop (routine `0x7FE0`) with a check mode, timed on the captured states.
+   Also wake the SPURS kernel on an SPU's ready-count store (0.8 ms a frame).
 1. **Race timeline of a slow stretch**: pick the window from a frame test's
    `frames.csv` (the late intervals cluster by lap position) and place
    `PS3_TIMELINE` there. Does the frame wait on wid4, the walk, or the game

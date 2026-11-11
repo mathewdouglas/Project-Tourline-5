@@ -115,19 +115,50 @@ tree, reverse check passes) and in `patches/incremental/spu-render-pass.patch`.
    it is the rain/weather simulation is a hypothesis (not run without
    weather change).
 
+**Loop benchmark** (`scripts/test/spu_loop_bench.py`). Real states are
+captured in a race with `scripts/diag/spu_capture_patch.py b01697100 7FE0`
+and `GT5P_SPU_CAPTURE=<file>` (`gt5p_spu_capture` in `src/gt5p_spu_native.c`:
+registers and the 256 KB local store at the function's entry, from 20 s after
+its first call, one every 500 ms; the file is game-derived and stays in
+`scratch/`). The benchmark builds the whole lifted body standalone with the
+production flags, replays each state from `0x7FE0` to its return, checks the
+return address, times it and hashes the final registers and local store, so
+variants are compared exactly. `--count` counts function entries.
+
+- The loop's routine is `0x7FE0` (called from LS `0x5DA0`), not `0x7DC8`: a
+  first capture at `0x7DC8` (`loopcap`) never reached `0x8298`.
+- 16 states (`loopcap2`, ~1,900 calls of `0x7FE0` a second in the race): per
+  call 2,048 passes of `0x8298`, ~1,193 of `0x83D8`; 98-259 us a call
+  (3.1-3.2 ms for all 16), repeatable to ~2%; about 524,000 SPU instructions
+  a call, so ~1.5 host cycles per SPU instruction. Most frequent: `selb`
+  8.6%, local-store reads 6.6%, `shufb` 6.6%, `rotqbyi` 6.4%, `fcgt` 6.4%.
+
+**Helper work (step 2): nothing faster.** Every variant gives identical
+registers and local store on all 16 states:
+
+| Variant | Speed against the current code |
+| --- | --- |
+| `cflts`/`csflt`/`cuflt` as two-lane SSE doubles (same arithmetic) | 0.94-0.96x |
+| Register promotion of the 8 loop functions (`spu_regpromo.py`) | 0.81-0.82x |
+| The 8 functions merged into one, registers in locals (`scripts/spu_region.py`) | 0.74-0.75x |
+
+The conversions were already vectorised by clang. Promotion per function
+reloads and spills ~45 registers on every call of a 76-141 instruction
+function. Merged, the 81 live 128-bit registers spill to the stack and lanes
+are extracted one by one (the helpers work lane by lane on a union);
+memory-resident `ctx->gpr` compiles better (hypothesis for the cause). None
+was kept: the runtime is unchanged. Upper bounds from deliberately wrong cheap
+helpers do not work here: wrong values change the loop's control flow.
+
 **Next:** make that loop faster. Lane counts, FMA copies and wake changes do
 not shorten a single serial loop (the FMA copy of the body, one run, 46.0
 FPS). In order:
 
-1. An offline benchmark of the loop from a captured real state (local store
-   and registers at the entry of `0x7F10`), as `scripts/test/spu_regpromo.py`
-   does with random ones: lets helper changes be timed and checked exactly
-   without the 3-minute route.
-2. Cheaper helpers where the loop spends its time (`cflts` through doubles
-   with clamps, `frsqest`/`frest` as per-lane table lookups, `fma` through
-   doubles without `-mfma`, `shufb`).
-3. A native implementation of the loop with a check mode, as Phase 111 did
-   for Prologue's sorted walk (`GT5P_SPU_NATIVE=2`).
+1. ~~An offline benchmark~~ done (above).
+2. ~~Cheaper helpers~~ measured: no gain (above).
+3. A native implementation of the loop's semantics with a check mode, as
+   Phase 111 did for Prologue's sorted walk (`GT5P_SPU_NATIVE=2`), checked
+   and timed against the captured states first. The remaining route.
 4. Wake the kernel when an SPU stores a ready count (0.8 ms a frame).
 
 ## Phase 44 - Workload 4's render pass: lane stagger, register promotion (2026-11-11)
