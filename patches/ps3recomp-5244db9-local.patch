@@ -4800,7 +4800,7 @@ index 00000000..e8aa9f7a
 +
 +#endif
 diff --git a/libs/filesystem/cellFs.c b/libs/filesystem/cellFs.c
-index 5166a47d..8ae37a91 100644
+index 5166a47d..0fe74820 100644
 --- a/libs/filesystem/cellFs.c
 +++ b/libs/filesystem/cellFs.c
 @@ -14,6 +14,7 @@
@@ -4846,7 +4846,27 @@ index 5166a47d..8ae37a91 100644
      /* Find longest matching prefix */
      int best = -1;
      size_t best_len = 0;
-@@ -215,6 +237,78 @@ int cellfs_translate_path(const char* ps3_path, char* host_buf, size_t buf_size)
+@@ -157,8 +179,17 @@ static int translate_path(const char* ps3_path, char* host_buf, size_t buf_size)
+         return -1;
+
+     const char* remainder = ps3_path + best_len;
+-    snprintf(host_buf, buf_size, "%s/%s%s", s_root_path,
+-             s_path_mappings[best].host_path, remainder);
++    /* Player installs can keep the disc on another drive from writable data.
++     * Only relative mapping destinations belong under s_root_path. */
++    const char* mapped = s_path_mappings[best].host_path;
++    const int absolute = mapped[0] == '/' || mapped[0] == '\\' ||
++        (mapped[0] && mapped[1] == ':' && (mapped[2] == '/' || mapped[2] == '\\'));
++    const char* absolute_mode = getenv("PS3_FS_ABSOLUTE_MAPPINGS");
++    const int use_absolute = absolute && !(absolute_mode && !strcmp(absolute_mode, "0"));
++    int written = use_absolute
++        ? snprintf(host_buf, buf_size, "%s%s", mapped, remainder)
++        : snprintf(host_buf, buf_size, "%s/%s%s", s_root_path, mapped, remainder);
++    if (written < 0 || (size_t)written >= buf_size) return -1;
+
+     /* A mapped path with an empty remainder ends in a separator ("…/dev_hdd0/"),
+      * and stat() rejects that on Windows -- so the directory a game asks about
+@@ -215,6 +246,78 @@ int cellfs_translate_path(const char* ps3_path, char* host_buf, size_t buf_size)
      return translate_path(ps3_path, host_buf, buf_size);
  }
  
@@ -4925,7 +4945,7 @@ index 5166a47d..8ae37a91 100644
  /* ---------------------------------------------------------------------------
   * Host stat -> CellFsStat conversion
   * -----------------------------------------------------------------------*/
-@@ -322,27 +416,53 @@ typedef struct {
+@@ -322,27 +425,53 @@ typedef struct {
  static FsFileSlot s_files[MAX_OPEN_FILES];
  static FsDirSlot  s_dirs[MAX_OPEN_DIRS];
  
@@ -4983,7 +5003,7 @@ index 5166a47d..8ae37a91 100644
  }
  
  /* Build fopen mode string from PS3 flags */
-@@ -353,6 +473,19 @@ static const char* flags_to_mode(s32 flags)
+@@ -353,6 +482,19 @@ static const char* flags_to_mode(s32 flags)
      int trunc   = flags & CELL_FS_O_TRUNC;
      int append  = flags & CELL_FS_O_APPEND;
  
@@ -5003,7 +5023,7 @@ index 5166a47d..8ae37a91 100644
      if (access == CELL_FS_O_RDONLY) {
          return "rb";
      } else if (access == CELL_FS_O_WRONLY) {
-@@ -408,6 +541,7 @@ static void ensure_parent_dirs(const char* path)
+@@ -408,6 +550,7 @@ static void ensure_parent_dirs(const char* path)
  s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 size)
  {
      printf("[cellFs] Open(path='%s', flags=0x%X)\n", gpath(path) ? gpath(path) : "<null>", flags);
@@ -5011,7 +5031,7 @@ index 5166a47d..8ae37a91 100644
      { extern char* getenv(const char*); static int _bt=-1; if(_bt<0){ const char* e=getenv("PS3_FSLOG_BT"); _bt=(e&&*e&&*e!='0')?1:0; } if(_bt){ extern unsigned int ppu_prof_resolve_host(void*); void* fr[24]; unsigned short n=RtlCaptureStackBackTrace(0,24,fr,0); char ln[600]; int p=snprintf(ln,sizeof ln,"[FSBT]"); unsigned int prev=0; for(unsigned short i=0;i<n;i++){ unsigned int g=ppu_prof_resolve_host(fr[i]); if(g&&g!=prev){ prev=g; p+=snprintf(ln+p,sizeof(ln)-p," %08X",g); } } fprintf(stderr,"%s%c",ln,10); } }
  
      if (!path || !fd)
-@@ -427,6 +561,15 @@ s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 s
+@@ -427,6 +570,15 @@ s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 s
          ensure_parent_dirs(host_path);
      }
  
@@ -5027,7 +5047,7 @@ index 5166a47d..8ae37a91 100644
      const char* mode = flags_to_mode(flags);
      FILE* fp = fopen(host_path, mode);
  
-@@ -491,6 +634,23 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
+@@ -491,6 +643,23 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
      u64 bytes_read = 0;
  
      if (s_files[fd].host_fp) {
@@ -5051,7 +5071,7 @@ index 5166a47d..8ae37a91 100644
          /* gptr(buf): the DATA buffer is a guest address like every other
           * pointer parameter. The nread out-param below was already translated,
           * which made this look handled -- but the file contents were being read
-@@ -515,6 +675,37 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
+@@ -515,6 +684,37 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
              }
              printf("\n"); } }
  
@@ -5089,7 +5109,7 @@ index 5166a47d..8ae37a91 100644
      if (nread)
          *(u64*)gptr(nread) = ps3_bswap64(bytes_read);
  
-@@ -533,8 +724,32 @@ s32 cellFsWrite(CellFsFd fd, const void* buf, u64 nbytes, u64* nwrite)
+@@ -533,8 +733,32 @@ s32 cellFsWrite(CellFsFd fd, const void* buf, u64 nbytes, u64* nwrite)
      u64 bytes_written = 0;
  
      if (s_files[fd].host_fp) {
@@ -5122,7 +5142,7 @@ index 5166a47d..8ae37a91 100644
      }
  
      if (nwrite)
-@@ -615,6 +830,7 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
+@@ -615,6 +839,7 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
  s32 cellFsStat(const char* path, CellFsStat* sb)
  {
      printf("[cellFs] Stat(path='%s')\n", gpath(path) ? gpath(path) : "<null>");
@@ -5130,7 +5150,7 @@ index 5166a47d..8ae37a91 100644
  
      if (!path || !sb)
          return CELL_EFAULT;
-@@ -696,6 +912,41 @@ s32 cellFsFtruncate(CellFsFd fd, u64 size)
+@@ -696,6 +921,41 @@ s32 cellFsFtruncate(CellFsFd fd, u64 size)
      return CELL_OK;
  }
  

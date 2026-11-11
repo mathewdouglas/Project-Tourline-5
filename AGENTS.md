@@ -123,6 +123,12 @@ See [docs/setup.md](docs/setup.md). The launcher owns F1 restarts through
 includes the launcher/shortcuts and supports `--stage-dir`; no game files enter
 the package. `scripts/test/player_setup.py` uses synthetic identities/processes.
 
+**Split-storage disc access (GT5 Phase 39).** cellFs mapping destinations may
+be absolute: do not prepend the writable VFS root to them. This is required
+for the launcher's disc selection; otherwise `GT.VOL` fails to open and Options
+artwork is missing with both compilers. `PS3_FS_ABSOLUTE_MAPPINGS=0` reproduces
+the old mapping. Regression: `scripts/test/cellfs_paths.py`.
+
 ## Start here: historical Prologue state (2026-10-21, Phase 108)
 
 Read this section first when picking the work up in a new session on this
