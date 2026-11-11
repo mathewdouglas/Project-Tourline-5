@@ -41,6 +41,14 @@ copy, lane pinning, stagger). A 4 s timeline 125 s into a run (`rtl1`) ran at
 passes ~5 ms. The ~52 FPS average comes from slower stretches of the lap
 (30% of intervals over 20 ms), which this window missed.
 
+## Eiger Nordwand in rain (measured, Phase 45)
+
+~47 FPS with the default; no change or combination below separates from it
+(run-to-run spread ~5 FPS). Workload 4 is 2.2 ms a frame there. The game
+thread polls ring-job progress for most of the frame and continues when the
+FIFO walker delivers the frame's user command, which follows a workload 1
+pass whose trigger is not yet known.
+
 ## Changes in Phase 44 and their status
 
 | Change | Switch | Default | Result |
@@ -49,9 +57,15 @@ passes ~5 ms. The ~52 FPS average comes from slower stretches of the lap
 | Register promotion of 14 hot body functions | `GT5P_SPU_REGPROMO` (0/1/2 check/3 A/B) | off | **slower** (lane CPU +14%); exact |
 | Indirect returns skip the full drain | `SPU_DRAIN_RET_FAST` | on | no measurable change; exact |
 | Sleeping thread delivers user commands | `PS3_USLEEP_GCM_WAKE=1` | off | no measurable change |
+| FMA copies of workload 0's bodies (Phase 45) | `GT5P_SPU_FMA=1` (all) or a list of body names | off | Eiger: no change |
+| Lane retry cap (Phase 45) | `SPURS_LANE_RETRY_MAX` (400; 0 none) | 400 | Eiger: no change |
+| Kick wakes retrying lanes (Phase 45) | `SPURS_LANE_KICK_WAKE=1` | off | Eiger: no change |
 
 ## Next steps, in order
 
+0. **Eiger: what releases workload 1** before the frame's user command
+   (Phase 45; no PPU kick is recorded): `SPURS_KEVLOG=1` and the writer
+   of workload 1's ready count.
 1. **Race timeline of a slow stretch**: pick the window from a frame test's
    `frames.csv` (the late intervals cluster by lap position) and place
    `PS3_TIMELINE` there. Does the frame wait on wid4, the walk, or the game
@@ -71,9 +85,10 @@ passes ~5 ms. The ~52 FPS average comes from slower stretches of the lap
    `longjmp` unwinds every host frame on Windows x64. A non-unwinding jump
    (clang's `__builtin_setjmp`/`__builtin_longjmp`) could save up to ~3% of
    lane time. Count first with `SPU_IRQSTAT=1`.
-4. **Combine** the car-list wins: no stagger + `GT5P_SPU_FMA=1` +
-   `SPURS_LANE_CPU_WIDS=4` were each ~+8-10% alone at the car list; the
-   last two did not help races, so a combination would be car-list-scoped.
+4. **Combine** the car-list wins: no stagger + `GT5P_SPU_FMA=b0196FF40` +
+   `SPURS_LANE_CPU_WIDS=4` were each ~+8-10% alone at the car list. At
+   Eiger the combination was no better than the default (Phase 45); at the
+   car list it is not measured yet.
 
 ## How to measure
 

@@ -15,6 +15,9 @@ versions follow [SemVer](https://semver.org/).
 - GT5's SPU job lanes start together (GT5 Phase 44): the Arcade car list draws
   about 9% more frames; races are unchanged. `SPURS_LANE_STAGGER_MS=1` restores
   the 1 ms per lane stagger.
+- `GT5P_SPU_FMA` (opt-in) now covers four job bodies: `1` selects all of them,
+  or name bodies (`GT5P_SPU_FMA=b0196FF40` is the previous `1`). No gain
+  measured at Eiger Nordwand (GT5 Phase 45).
 
 ### Fixed
 - Crash after loading Eiger Nordwand with weather change (GT5 Phase 43): job-body

@@ -2,10 +2,12 @@
  * AVX/FMA. The generated manifest holds this target's audio identities and
  * optional profiled render bodies. Register at bootstrap, before any SPU
  * runs or caches a lookup. GT5P_AUDIO_NATIVE=0 restores portable audio;
- * GT5P_SPU_FMA=1 opts into the measured GT5 render body's FMA copy. */
+ * GT5P_SPU_FMA=1 opts into the FMA copies of every listed GT5 job body
+ * (spu_fma_images), or a list of body names selects some of them. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef GT5P_HAVE_AUDIO_NATIVE
 #include <intrin.h>
@@ -38,8 +40,12 @@ extern "C" void gt5p_audio_select_native(void)
 #ifdef GT5P_HAVE_AUDIO_NATIVE
     const char* e = getenv("GT5P_AUDIO_NATIVE");
     const bool audio_on = !(e && *e == '0');
+    /* GT5P_SPU_FMA=1: every listed job body; or a list of body names
+     * ("b01697100,b016B5B00"); unset or 0: none. Opt in until broader
+     * rendering acceptance. */
     const char* render = getenv("GT5P_SPU_FMA");
-    const bool render_on = render && *render == '1';  /* opt in until broader rendering acceptance */
+    const bool render_on = render && *render && *render != '0';
+    const bool render_all = render_on && !strcmp(render, "1");
     if (!audio_on && !render_on) return;
     int cpu[4]; __cpuidex(cpu, 1, 0);
     constexpr unsigned required = (1u << 12) | (1u << 27) | (1u << 28);
@@ -63,7 +69,7 @@ extern "C" void gt5p_audio_select_native(void)
     for (const auto& image : images) {
         int actual = 0;
         if (image.ea) {
-            if (!render_on) continue;
+            if (!render_on || (!render_all && !strstr(render, image.name))) continue;
             if (!vm_base || spu_workload_fingerprint(vm_base + image.ea, image.span) != image.fingerprint) {
                 fprintf(stderr, "[spu-fma] %s content mismatch; keeping portable body\n", image.name);
                 continue;

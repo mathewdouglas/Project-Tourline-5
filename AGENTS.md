@@ -94,6 +94,13 @@ hot body functions (`scripts/spu_regpromo.py`, post-SPU-lift step after
 `spu_native_patch.py`; `GT5P_SPU_REGPROMO=1`, `=2` check, `=3` A/B) is 14%
 slower; `PS3_USLEEP_GCM_WAKE=1` and `SPU_DRAIN_RET_FAST` (on, exact) show no
 measurable change. Plan: [docs/plan-gt5-render-pass.md](docs/plan-gt5-render-pass.md).
+**Eiger Nordwand in rain (Phase 45)** runs ~47 FPS, and no change or
+combination beats the default (spread ~5 FPS; `scratch\go.ps1 -Eiger` in the
+Phase 44 worktree drives there). There the game thread polls ring-job
+progress until a workload 1 pass and the frame's user command; what releases
+that pass is open. `GT5P_SPU_FMA` takes `1` (all `spu_fma_images`, now four
+bodies) or body names (`b0196FF40` = the old `1`); `SPURS_LANE_RETRY_MAX`
+and `SPURS_LANE_KICK_WAKE` are measured experiments, off.
 
 **Eiger weather crash fixed (Phase 43).** The SPU lift seeds uncovered code
 after unconditional branches in job bodies (`return_gap_seeds`,

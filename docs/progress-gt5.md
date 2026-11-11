@@ -4,6 +4,91 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Phase 45 - Eiger Nordwand in rain: the changes combined, and what its frame waits on (2026-11-12)
+
+Request: measure on Eiger Nordwand with weather change, a heavier track
+than High Speed Ring, and try the changes in combination. Same private
+build as Phase 44. Route: Arcade, track list, six Rights, Cross through car
+and options (`scratch\go.ps1 -Eiger`, built on `gt5boot.ps1 -Route race
+-FrameTest`); the shots confirm Eiger Nordwand in rain. Each run: 60 s frame
+test from 15 s after the start, throttle held, one `gt5.exe` at a time.
+
+**Combinations** (FPS; rounds 1-3 interleaved across all configs, rounds
+4-5 across default and the two full combinations):
+
+| Config | Runs | Median |
+| --- | --- | --- |
+| Before Phase 44 (`SPURS_LANE_STAGGER_MS=1 SPU_DRAIN_RET_FAST=0`) | 43.7, 43.4, 47.5 | 43.7 |
+| Default (Phase 44: lanes together, drain fast return) | 44.4, 46.7, 43.8, 48.3, 48.4 | 46.7 |
+| + render-body FMA (`GT5P_SPU_FMA=b0196FF40`) | 49.6, 46.1, 46.0 | 46.1 |
+| + `SPURS_LANE_CPU_WIDS=4` | 45.8, 46.6 | 46.2 |
+| FMA + `CPU_WIDS=4` | 45.9, 46.9, 46.8 | 46.8 |
+| FMA + `CPU_WIDS=4` + `PS3_USLEEP_GCM_WAKE=1` | 46.5, 47.8, 48.4, 47.3, 46.7 | 47.3 |
+| the same with FMA on all four bodies (`GT5P_SPU_FMA=1`) | 49.2, 46.0 | - |
+| `GT5P_SPU_REGPROMO=1` | 43.5, 45.2 | - |
+| FMA on the three workload-0 bodies only | 46.0 | - |
+| `SPURS_LANE_STAY=1 SPURS_LANE_RETRY_MAX=0` | 46.8 | - |
+| `SPURS_LANE_KICK_WAKE=1` | 45.7 | - |
+
+The spread within one config is about 5 FPS (default 43.8-48.4), larger
+than any difference between configs. After three rounds the full
+combination looked ahead (46.5-48.4 against 43.8-46.7), but two more
+interleaved rounds put the default level with it. **No change or
+combination is measurably better than the default at Eiger.** The Phase 44
+default against the old start is +3 FPS by median, inside the same spread.
+`SPURS_LANE_CPU_WIDS=4` is not "pin more": the default list is `0,1`, so it
+pins workload 4 and unpins workloads 0 and 1.
+
+**What an Eiger frame waits on** (`etl1`, `PS3_TIMELINE=125,4`, ~35 s into
+the race, 182 frames, mean 21.8 ms):
+
+- Not workload 4: its passes total 2.2 ms a frame here (the car list's
+  bottleneck). Workload 1 passes total 15.8 ms a frame (6.4 ms mean, ~2.5 a
+  frame) and workload 6 12.6 ms; the FIFO walk is 5.7 ms a frame.
+- The game thread `gFKsE` is busy for the whole frame (CPU 21.65 ms of
+  21.69 ms wall). Sampled (`esmp1`, `GT5P_SAMPLE=4`), 90% of its samples
+  are in `func_00D1AB10` and `func_00C350C0`: the ring-job completion polls
+  of Phase 40 (minimum of a list's per-SPU progress halfwords against a
+  target). It is waiting, not computing.
+- In a traced frame it kicks workload 0 ~70 times and workloads 1 and 6
+  ~20 times each, then spins from ~3 ms to 13 ms. It continues 0.1 ms after
+  the FIFO walker raises the frame's user command (`U` at 13.01, delivered
+  on `gFKsE` at 13.13). That command follows a workload 1 pass (10.61-12.15)
+  and a 1.1 ms walk. No kick is recorded between the previous workload 1
+  pass ending (6.48) and that dispatch: what releases it is **open**.
+- One workload-0 lane runs at ~98% of a core in bodies `0x01697100`,
+  `0x016B5B00` and `0x016D2700` (real float work: normalise, reciprocal
+  square root, a grid lookup), in single lane runs of seconds; the other
+  workload-0 lanes made 1-3 short runs in the 4 s window. Workload 1's lanes spend
+  64% of their samples in the retry loop's `Sleep(1)` (`ewidA`, 16
+  threads sampled), and only 12% in body `0x016CC680`.
+
+**Experiments, each off by default** (all measured above, none helped):
+
+- `SPURS_LANE_RETRY_MAX=<n>` (runtime, default 400, 0 = no cap): retries
+  before a lane that keeps finding nothing leaves. With `SPURS_LANE_STAY=1`
+  the other workload-0 lanes still ran only 5 short runs in 4 s: that
+  list's work does not spread (probably one long job, or jobs that depend
+  on each other; hypothesis).
+- `SPURS_LANE_KICK_WAKE=1` (runtime): a kick to a running workload wakes its
+  lanes sleeping in that retry, once per sleep. Workload 6 went from 281
+  passes to 4,326 shorter ones; the frame did not change (22.4 ms). So the
+  1 ms retry sleep is not the bound.
+- FMA copies of the three workload-0 bodies (`spu_fma_images` in
+  `config/targets.json`). `GT5P_SPU_FMA` now takes `1` (all four listed
+  bodies; before, `1` meant the render body, the only one listed) or a list
+  of body names, e.g. `GT5P_SPU_FMA=b0196FF40` for the Phase 40 behaviour.
+  Each body is fingerprint-checked as before; all three installed (1,034,
+  2,257 and 1,000 functions).
+
+Runtime changes are in the main patch (applied to a fresh 5244db9: identical
+tree, reverse check passes) and in `patches/incremental/spu-render-pass.patch`.
+
+**Next:** find what releases the workload 1 pass that precedes the frame's
+user command (no PPU kick is recorded): `SPURS_KEVLOG=1` around it, and
+which thread or SPU stores workload 1's ready count. Until that is known,
+lane, FMA and wake changes do not reach Eiger's frame.
+
 ## Phase 44 - Workload 4's render pass: lane stagger, register promotion (2026-11-11)
 
 Goal: a smooth 60 FPS at the Arcade car list and in races. Plan and next
@@ -108,8 +193,8 @@ CPU a frame (56% busy), the walk 7.0 ms/frame and workload 4's passes ~5 ms.
 The race's ~52 FPS average comes from slower stretches of the lap (30% of
 intervals over 20 ms); a timeline placed on one of those is the next step.
 
-**Not done:** that slow-stretch timeline; Eiger Nordwand; the 1080p car list;
-combining no stagger with `GT5P_SPU_FMA=1` and `SPURS_LANE_CPU_WIDS=4`.
+**Not done:** that slow-stretch timeline; the 1080p car list. Eiger
+Nordwand and the combinations are in Phase 45.
 
 ## Phase 43 - Eiger Nordwand weather-change crash: unlifted job-body functions (2026-11-11)
 
