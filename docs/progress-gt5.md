@@ -4,6 +4,65 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Phase 43 - Eiger Nordwand weather-change crash: unlifted job-body functions (2026-11-11)
+
+**Report.** Arcade, Eiger Nordwand with weather change: the track loaded,
+then the game exited with `0xC00000FD` (stack overflow) on a `spurs-lane`
+thread (user log, 0.1.1 release build). The log's tail: image-1 (job
+policy module) code at LS `0x13128` repeatedly handed to the SPU interpreter
+(`[spu-smc] microstep img=1 pc=0x13128 word 0x040001D4`), then
+`[spu] drain-resume ... depth=82` and `depth=206`: the SPU call depth grew
+until the lane's host stack overflowed. Image-15 interpreter handoffs in the
+same log also appear in every normal HSR race and are not the cause.
+
+**Where.** All 36 bodies in the executable are already listed
+(`scripts/diag/find_bodies.py`). The word `0x040001D4` at body offset `0xF128`
+is in body `0x016B5B00`. No found function covers LS `0x130E0`-`0x13128`;
+the previous one ends at `0x130DC`, after a `bi $r0` return and an `lnop`.
+It is reached from LS `0xAA30` (`func` at `0xAA18`), a C++ member-function
+dispatch: `ila $r36, 0x6A30; brsl $r35, +4; sf $r79, $r36, $r35` gives the
+link-to-LS delta (`0x4000`), then a 64-entry table of 8-byte pointer/adjust
+pairs at LS `0x1AA50`, just past the end of the 0x16A50-byte body image: BSS,
+filled at run time, so the function finder cannot see the targets. After
+that was lifted, two more handoffs appeared in body `0x016AD700` (`0x84B8`,
+`0x8DC0`, after a tail-call `br`, same dispatch from `0x6E00`), then a third
+with the throttle held (`0x9E00`, a leaf function with no frame).
+
+**Fix (lift time).** `scripts/lift_spu_jobs.py` `return_gap_seeds`: in every
+job body, the first instruction after an unconditional branch (`bi`, `br`,
+`bra`), skipping lnop/nop padding, that no found function covers and that is
+not itself an unconditional branch (branch tables), is seeded as a function
+entry. Code there is reached by no static branch. This also seeds return
+points of manual calls (`ila $r0, n; a $r0, $r0, $r126; br f`, LS `0x40DC`
+in most bodies). Covered addresses are never seeded, so no found function is
+split. `SPU_GAP_SEEDS=0` at lift time lifts without them. 14 bodies change;
+no other image; the registry source is unchanged; no `/* TODO:` lines.
+Narrower versions (after `bi $r0` only; or requiring a stack-spill prologue)
+missed the leaf at `0x9E00`.
+
+**Checked** (`eig*` runs; route: Arcade, six Rights on the Original track
+list, Cross through car and options):
+
+- Before (0.1.1, user log): crash after the track loaded.
+- First version (`bi $r0` only), `eig4`: 54 s of racing; `0x84B8`/`0x8DC0`
+  still interpreted. Second (prologue rule), `eig5`: `0x9E04` interpreted.
+- Final, `eig6`: 150 s of racing in rain, throttle held, no exception and no
+  image-1 interpreter handoff.
+- HSR regression, `fzD1-2`: 51.8 and 51.4 FPS, max interval 72/65 ms, no
+  image-1 handoffs (the Phase 42 runs: 42-51 FPS).
+
+**Not checked:** other weather-change tracks, night tracks, full race
+length. The windscreen raindrops in the cockpit view look blocky
+(`eig6.menu5.png`); not investigated. Any further `[spu-smc] microstep img=1`
+line names the next unlifted entry: find the body by the word at
+`pc - 0x4000`.
+
+**Main-menu idle sequence** (user question): the grey-studio Subaru with no
+tyres in view is one shot of the menu's idle sequence (cave, Subaru studio,
+night track, racing cars). The wide shot of the same scene shows its tyres,
+contact shadow and floor, so this is probably not a fault. Scene changes dip
+to 9-33 frames per 5 s while loading, then return to 30 fps.
+
 ## Phase 42 - The 2.5 s race freeze fixed: lock-line priority inversion (2026-11-11)
 
 Phase 32's freeze (roughly every second race, 1-4 s, all render lanes waiting

@@ -73,6 +73,10 @@ LINK_BASE = os.environ.get("SPU_LINK_BASE", "1") != "0"
 # Extra entry points for those bodies (linked_seeds). SPU_LINKED_SEEDS=0 at
 # lift time lifts without them.
 LINKED_SEEDS = os.environ.get("SPU_LINKED_SEEDS", "1") != "0"
+# Function starts after a return that no found function covers, in every job
+# body (GT5 Phase 43, return_gap_seeds). SPU_GAP_SEEDS=0 at lift time lifts
+# without them.
+GAP_SEEDS = os.environ.get("SPU_GAP_SEEDS", "1") != "0"
 
 
 def run(*args):
@@ -104,11 +108,15 @@ def task_elf_flat(raw):
     return entry, bytes(flat), base
 
 
-def lift(blob, prefix, outdir, base=0, extra=None):
+def lift(blob, prefix, outdir, base=0, extra=None, gap_seeds=False):
     funcs = outdir.parent / f"{outdir.name}_funcs.json"
     out = run(TOOLS / "find_spu_functions.py", "--raw", "--base", hex(base),
               "--out", funcs, blob)
     n_funcs = re.search(r"Detected ([\d,]+) function", out)
+    if gap_seeds:
+        gaps = return_gap_seeds(Path(blob).read_bytes(), base, funcs)
+        if gaps:
+            extra = ",".join(filter(None, [extra, ",".join(map(hex, sorted(gaps)))]))
     resume = resume_points(Path(blob).read_bytes(), base, funcs) if RESUME_SEEDS else set()
     run(TOOLS / "spu_lifter.py", blob, "--base", hex(base), "--functions", funcs,
         "--symbol-prefix", prefix, "--output", outdir, "--source-name", "spu_recomp.c",
@@ -169,6 +177,42 @@ def linked_seeds(raw, lsa):
                 n = ((nxt >> 14) & 0x3FF) - (0x400 if (nxt >> 23) & 1 else 0)
                 found.add(lsa + 4 * (i + 1) + n)
     return {t for t in found if lo <= t < hi and t % 4 == 0 and words[(t - lsa) // 4]}
+
+
+def return_gap_seeds(raw, base, funcs_json):
+    """Entries the finder misses because only a computed transfer reaches
+    them: the first instruction after an unconditional branch (`bi`, `br`,
+    `bra`), skipping lnop/nop padding, that no found function covers and that
+    is not itself an unconditional branch (branch tables). Code there is not
+    reached by any static branch, so something indirect reaches it:
+    - member functions dispatched through tables in a body's BSS, filled at
+      run time. GT5's weather-change track (Eiger Nordwand) runs body
+      0x016B5B00's LS 0x130E0 (table at LS 0x1AA50) and 0x016AD700's 0x84B8,
+      0x8DC0 and 0x9E00 (a leaf, after a tail-call `br`). Unlifted, they fell
+      to the SPU interpreter, the call depth grew and the lane's host stack
+      overflowed (Phase 43);
+    - return points of manual calls (`ila $r0, n; a $r0, $r0, $r126; br f`).
+    Covered addresses are left alone, so no found function is split."""
+    import json
+    bounds = [(e["start"], e["end"]) for e in json.loads(Path(funcs_json).read_text())]
+    words = [int.from_bytes(raw[i:i + 4], "big") for i in range(0, len(raw) - 3, 4)]
+
+    def uncond(w):                                            # bi, br, bra
+        return w >> 21 == 0x1A8 or w >> 23 in (0x064, 0x060)
+
+    found = set()
+    for i, w in enumerate(words[:-1]):
+        if not uncond(w):
+            continue
+        j = i + 1
+        while j < len(words) and words[j] in (0x00200000, 0x40200000):   # lnop, nop
+            j += 1
+        if j >= len(words) or not words[j] or uncond(words[j]):
+            continue
+        t = base + 4 * j
+        if not any(s <= t < e for s, e in bounds):
+            found.add(t)
+    return found
 
 
 def resume_points(raw, base, funcs_json):
@@ -421,7 +465,8 @@ def main():    # --chain: apply chain_forward to the job images already generate
             seeds |= abs_tables(raw, lsa)
         if LINKED_SEEDS and lsa and link_base(raw) == lsa:
             seeds |= linked_seeds(raw, lsa)
-        n = lift(blob, prefix, outdir, base=lsa, extra=",".join(map(hex, sorted(seeds))))
+        n = lift(blob, prefix, outdir, base=lsa, extra=",".join(map(hex, sorted(seeds))),
+                 gap_seeds=GAP_SEEDS)
         total += n
         chained = f" ({chain_forward(outdir)} transfers made direct)" if CHAIN_BODIES else ""
         print(f"  job body at 0x{ea:08X}: {n} functions -> {outdir.relative_to(ROOT)}{chained}")

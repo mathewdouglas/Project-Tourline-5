@@ -86,6 +86,11 @@ inputs, pinned downloads) and `scripts/release/package_player.py`
 (allowlist; never game files). Releases carry the ZIP; the tag is
 `v<CMake project VERSION>`.
 
+**Eiger weather crash fixed (Phase 43).** The SPU lift seeds uncovered code
+after unconditional branches in job bodies (`return_gap_seeds`,
+`SPU_GAP_SEEDS=0` off); re-lift SPU after pulling. A `[spu-smc] microstep
+img=1` line names an unlifted body entry.
+
 **GT5 race freeze fixed (Phase 42).** Lock-line waiters sleep after 1 ms
 (`SPU_LOCKLINE_SLEEP_US`, 0 = old spin), so an IDLE-priority PPU holder is no
 longer starved: 0 freezes in 6 HSR races against 3 in 5. `[lockline]` names

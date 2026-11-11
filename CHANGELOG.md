@@ -6,6 +6,10 @@ versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Crash after loading Eiger Nordwand with weather change (GT5 Phase 43): job-body
+  functions reached only through run-time tables are now lifted, instead of
+  falling to the SPU interpreter until a lane's stack overflowed. Requires
+  a re-lift (`scripts/lift_spu_jobs.py`; `SPU_GAP_SEEDS=0` without).
 - The intermittent 1-4 s race freeze (GT5 Phases 32 and 42): SPU lock-line
   waiters starved an idle-priority game thread holding the lock. Waiters now
   sleep after 1 ms (`SPU_LOCKLINE_SLEEP_US=0` restores the old spin).
