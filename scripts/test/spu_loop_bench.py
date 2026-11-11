@@ -46,11 +46,12 @@ VC = ('@echo off\nset "PATH=C:\\Program Files (x86)\\Microsoft Visual Studio\\In
 results = []
 for v in variants:
     name, _, flags = v.partition("=")
-    defs, rt, rp, region = [], a.runtime, [], []
+    defs, rt, rp, region, allr = [], a.runtime, [], [], True
     for f in filter(None, flags.split(",")):
         if f.startswith("runtime="): rt = f[len("runtime="):]
         elif f.startswith("rp="): rp = [int(x, 16) for x in f[3:].split(":")]
         elif f.startswith("region="): region = [int(x, 16) for x in f[7:].split(":")]
+        elif f.startswith("regionw="): region, allr = [int(x, 16) for x in f[8:].split(":")], False
         else: defs.append(f)
     out = folder / name
     out.mkdir()
@@ -68,7 +69,7 @@ for v in variants:
         # The loop's functions merged into one with registers in locals.
         sys.path.insert(0, str(root / "scripts"))
         import spu_region
-        text, report = spu_region.patch_image(a.image, [region], src_v.read_text(encoding="utf-8"))
+        text, report = spu_region.patch_image(a.image, [region], src_v.read_text(encoding="utf-8"), allr)
         print(f"{name}: " + "; ".join(report))
         src_v = out / "region.c"
         src_v.write_bytes(text.encode("utf-8"))

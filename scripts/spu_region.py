@@ -78,13 +78,18 @@ def strip(lines):
     return out
 
 
-def region_lines(image, members, bodies):
-    """The region function for these members (bodies: address -> lines)."""
+def region_lines(image, members, bodies, all_regs=True):
+    """The region function for these members (bodies: address -> lines).
+    all_regs=False: only the registers the members write become locals; the
+    read-only ones stay in ctx->gpr (fewer values for the XMM registers)."""
     allb = [l for m in members for l in bodies[m]]
     if any("&ctx->gpr" in l for l in allb):
         raise ValueError("a member takes the address of a register")
     regs = sorted({int(n) for l in allb for n in GPR.findall(l)})
     written = sorted({int(n) for l in allb for n in GPR_WRITE.findall(l)})
+    if not all_regs:
+        regs = written
+    promoted = set(regs)
     spill = " ".join(f"ctx->gpr[{n}] = RU(r{n});" for n in written) + " "
     tail = re.compile(r"__attribute__\(\(musttail\)\) return (gt5p_%s_spu_func_([0-9A-F]{8}))\(ctx\);" % image)
     name = f"gt5p_{image}_region_{members[0]:08X}"
@@ -102,14 +107,18 @@ def region_lines(image, members, bodies):
             if (re.search(r"(?<!musttail\))\)\s*(return|SPU_RET|__attribute__)", l)
                     or re.search(r"\belse\s+(return|SPU_RET)", l)):
                 raise ValueError(f"unbraced leaving statement in 0x{m:X}: {l.strip()[:80]}")
-            l = re.sub(r"ctx->gpr\[(\d+)\]\._u32\[0\]", r"((uint32_t)_mm_cvtsi128_si32(r\1))", l)
-            l = re.sub(r"ctx->gpr\[(\d+)\]\._u16\[0\]", r"((uint16_t)_mm_cvtsi128_si32(r\1))", l)
-            if re.search(r"ctx->gpr\[\d+\]\.", l):
+            def only(f):   # rewrite only promoted registers
+                return lambda x: f(x) if int(x.group(1)) in promoted else x.group(0)
+            l = re.sub(r"ctx->gpr\[(\d+)\]\._u32\[0\]",
+                       only(lambda x: f"((uint32_t)_mm_cvtsi128_si32(r{x.group(1)}))"), l)
+            l = re.sub(r"ctx->gpr\[(\d+)\]\._u16\[0\]",
+                       only(lambda x: f"((uint16_t)_mm_cvtsi128_si32(r{x.group(1)}))"), l)
+            if any(int(n) in promoted for n in re.findall(r"ctx->gpr\[(\d+)\]\.", l)):
                 raise ValueError(f"lane access not handled in 0x{m:X}: {l.strip()[:80]}")
             l = re.sub(r"^(\s*)ctx->gpr\[(\d+)\] = (.*);$", r"\1r\2 = RX(\3);", l)
             if re.search(r"ctx->gpr\[\d+\]\s*=(?!=)", l):
                 raise ValueError(f"register write not handled in 0x{m:X}: {l.strip()[:80]}")
-            l = GPR.sub(r"RU(r\1)", l)
+            l = re.sub(r"ctx->gpr\[(\d+)\](?!\.)", only(lambda x: f"RU(r{x.group(1)})"), l)
             l = LABEL.sub(lambda x: f"loc_{x.group(1)}_{m:X}", l)
             # Tail calls to members become gotos; every other way out first
             # stores the written registers back.
@@ -123,7 +132,7 @@ def region_lines(image, members, bodies):
     return name, out, f"{len(members)} functions, {len(regs)} registers ({len(written)} written)"
 
 
-def patch_image(image, regions, text):
+def patch_image(image, regions, text, all_regs=True):
     """text: the lifted source. regions: lists of member addresses."""
     crlf = "\r\n" in text
     lines = strip(text.replace("\r\n", "\n").split("\n"))
@@ -136,7 +145,7 @@ def patch_image(image, regions, text):
                 s = lines.index(head)
                 e = lines.index("}", s + 1)
                 heads[m], bodies[m] = s, lines[s + 1:e]
-            name, fn, what = region_lines(image, members, bodies)
+            name, fn, what = region_lines(image, members, bodies, all_regs)
         except ValueError as ex:
             report.append(f"region 0x{members[0]:X}: skipped, {ex or 'member not found'}")
             continue

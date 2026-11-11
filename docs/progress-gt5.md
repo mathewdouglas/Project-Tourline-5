@@ -199,6 +199,17 @@ FPS). In order:
 3. ~~Merged loops~~ done: `spu_region.py`, default on, -7.5 to -8% frame
    time at Eiger.
 4. ~~Wake the kernel on an SPU ready-count store~~ done, not measurable, off.
+Measured on the merged `0x8298` loop and kept off: exact double `fma` with
+`-mavx2 -mfma` 1.01x (the 1.21x of `-mavx2 -mfma` comes from hardware `fmaf`,
+which may round differently; it is the opt-in `GT5P_SPU_FMA=b01697100`);
+vectorised conversions 1.02-1.03x; only the written registers as locals
+(`regionw=`, 49 of 81) 1.01-1.02x. After the merge, workload 0's samples
+(`ewid0b`): the two regions 32%, body `0x016B5B00` 9.4% (branchy code spread
+over functions that call each other: no tail-call loop to merge),
+`0x016D2700` 2.9%. The per-workload sampler also counts the game thread when
+its thread id collides with a lane's modulo 4096 (`func_00D1AB10` in that
+table).
+
 5. More regions: the rest of workload 0's lane (bodies `0x016B5B00` 11%,
    `0x016D2700` 3.6% of its samples), found with `spu_loop_bench.py --count`
    on fresh captures; then a native loop if still needed.
