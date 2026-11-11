@@ -1,0 +1,123 @@
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -4012,7 +4012,31 @@
+     }
+ #endif
+     GCM_USER_PENDING_STORE((1ULL << 32) | cmd);
+-}
++#ifdef _WIN32
++    /* PS3_USLEEP_GCM_WAKE=1: wake a thread sleeping in sys_timer_usleep to
++     * deliver it now (sys_timer.c). */
++    { static int gw = -1;
++      if (gw < 0) { const char* e = getenv("PS3_USLEEP_GCM_WAKE"); gw = (e && *e == '1') ? 1 : 0; }
++      if (gw) { void* ps3_gcm_wake_event(void); void* h = ps3_gcm_wake_event(); if (h) SetEvent((HANDLE)h); } }
++#endif
++}
++
++#ifdef _WIN32
++/* Auto-reset: set when the FIFO raises a user command, so one thread
++ * sleeping in sys_timer_usleep delivers it (PS3_USLEEP_GCM_WAKE, sys_timer.c). */
++void* ps3_gcm_wake_event(void)
++{
++    static void* volatile s_evt;
++    void* e = s_evt;
++    if (!e) {
++        HANDLE n = CreateEventW(NULL, FALSE, FALSE, NULL);
++        if (!n) return NULL;
++        e = InterlockedCompareExchangePointer((PVOID volatile*)&s_evt, n, NULL);
++        if (e) CloseHandle(n); else e = n;
++    }
++    return e;
++}
++#endif
+ 
+ /* Invalidate a tile region (unbind + clear) */
+ s32 cellGcmSetInvalidateTile(u8 index)
+diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
+--- a/runtime/spu/spu_context.h
++++ b/runtime/spu/spu_context.h
+@@ -841,13 +841,29 @@
+ void spu_drain_call_impl(spu_context* ctx, uint32_t return_pc);
+ /* SPU_FAST (Phase 61): after almost every lifted call nothing is pending and
+  * the callee has returned to return_pc, where the full drain only clears
+- * drain_ret_pc. Do that here and skip the call. */
++ * drain_ret_pc. Do that here and skip the call.
++ *
++ * SPU_DRAIN_RET_FAST (on; =0 off; GT5 Phase 44): a callee that returns
++ * through a register the lifter did not know was a link (`bi $r77`, emitted
++ * as pc + spu_indirect_branch trampoline) to exactly return_pc. The full
++ * drain's first step then clears the trampoline and returns, nothing else;
++ * do the same here. That call was 3.9% of GT5's render lanes. Off while
++ * SPU_IBHIST is set, which counts every drain (g_spu_drain_ret_fast is set
++ * by the first full drain; until then the full drain runs). */
++extern int g_spu_drain_ret_fast;
+ static inline void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+ {
+-    if (g_spu_fast && !g_spu_trampoline_fn && ((ctx->pc ^ return_pc) & SPU_LS_MASK) == 0 &&
+-        ctx->host_depth < 1000u) {
+-        ctx->drain_ret_pc = 0;
+-        return;
++    if (g_spu_fast && ((ctx->pc ^ return_pc) & SPU_LS_MASK) == 0 && ctx->host_depth < 1000u) {
++        void (*const t)(spu_context*) = g_spu_trampoline_fn;
++        if (!t) {
++            ctx->drain_ret_pc = 0;
++            return;
++        }
++        if (t == spu_indirect_branch && g_spu_drain_ret_fast > 0) {
++            g_spu_trampoline_fn = 0;
++            ctx->drain_ret_pc = 0;
++            return;
++        }
+     }
+     spu_drain_call_impl(ctx, return_pc);
+ }
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -562,8 +562,16 @@
+ typedef void (*spu_drain_fn)(spu_context*);
+ extern spu_drain_fn spu_lookup(uint32_t addr, int image_id);
+ 
++/* spu_drain_call's indirect-return fast path (spu_context.h): -1 until the
++ * first full drain reads SPU_DRAIN_RET_FAST; never on with SPU_IBHIST. */
++int g_spu_drain_ret_fast = -1;
++
+ void spu_drain_call_impl(spu_context* ctx, uint32_t return_pc)
+ {
++    if (__builtin_expect(g_spu_drain_ret_fast < 0, 0)) {
++        const char* e = getenv("SPU_DRAIN_RET_FAST");
++        g_spu_drain_ret_fast = (e && *e == '0') || getenv("SPU_IBHIST") ? 0 : 1;
++    }
+     if (s_ibhist) spu_ibhist_note(1, ctx->image_id, return_pc, ctx->host_depth);
+     if (!g_spu_fast || ctx->host_depth >= 1000u) spu_depth_guard(ctx);
+     /* The frame an interrupt taken in THIS loop returns to. It stays armed
+diff --git a/runtime/syscalls/sys_timer.c b/runtime/syscalls/sys_timer.c
+--- a/runtime/syscalls/sys_timer.c
++++ b/runtime/syscalls/sys_timer.c
+@@ -253,7 +253,24 @@
+             LARGE_INTEGER due;
+             due.QuadPart = -((LONGLONG)usec * 10); /* 100ns units, negative = relative */
+             SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE);
+-            WaitForSingleObject(timer, INFINITE);
++            /* PS3_USLEEP_GCM_WAKE=1 (GT5 Phase 44): a user command the FIFO
++             * raises wakes one sleeping thread to deliver it, which then
++             * sleeps out the rest. Delivery waited for the next syscall of
++             * any guest thread: 0.65 ms mean, 1.3 ms p90 of each GT5 frame,
++             * with the render thread blocked on it. The handler runs as it
++             * would at this syscall's entry. =0 (default): wait out the
++             * timer. */
++            static int gw = -1;
++            if (gw < 0) { const char* e = getenv("PS3_USLEEP_GCM_WAKE"); gw = (e && *e == '1') ? 1 : 0; }
++            if (gw) {
++                extern void* ps3_gcm_wake_event(void);
++                extern void ps3_gcm_pump_if_present(void);
++                HANDLE hs[2] = { timer, (HANDLE)ps3_gcm_wake_event() };
++                while (hs[1] && WaitForMultipleObjects(2, hs, FALSE, INFINITE) == WAIT_OBJECT_0 + 1)
++                    ps3_gcm_pump_if_present();
++                if (!hs[1]) WaitForSingleObject(timer, INFINITE);
++            } else
++                WaitForSingleObject(timer, INFINITE);
+             if (!keep) CloseHandle(timer);
+         } else {
+             Sleep((DWORD)(usec / 1000));

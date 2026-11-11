@@ -86,6 +86,15 @@ inputs, pinned downloads) and `scripts/release/package_player.py`
 (allowlist; never game files). Releases carry the ZIP; the tag is
 `v<CMake project VERSION>`.
 
+**Car-list render pass (Phase 44).** Workload 4 (body `0x0196FF40`, four lanes)
+is the car-list frame's critical path. GT5 now starts all lanes together
+(`SPURS_LANE_STAGGER_MS` defaults to 0 for GT5; `=1` old): car list +9%,
+High Speed Ring unchanged. Measured and left off: register promotion of the
+hot body functions (`scripts/spu_regpromo.py`, post-SPU-lift step after
+`spu_native_patch.py`; `GT5P_SPU_REGPROMO=1`, `=2` check, `=3` A/B) is 14%
+slower; `PS3_USLEEP_GCM_WAKE=1` and `SPU_DRAIN_RET_FAST` (on, exact) show no
+measurable change. Plan: [docs/plan-gt5-render-pass.md](docs/plan-gt5-render-pass.md).
+
 **Eiger weather crash fixed (Phase 43).** The SPU lift seeds uncovered code
 after unconditional branches in job bodies (`return_gap_seeds`,
 `SPU_GAP_SEEDS=0` off); re-lift SPU after pulling. A `[spu-smc] microstep
@@ -1691,6 +1700,7 @@ Run Python through the repo's virtual environment: `.venv\Scripts\python`.
 | `scripts/spin_patch.py` | Post-lift patch, required after every lift: guest spin waits on SPU progress yield (`spin_waits` in `config/targets.json`) |
 | `scripts/ui_mask_patch.py` | Post-lift patch, required after every lift: menu label fade mask centred in ultrawide (`ui_label_mask_func`; `GT5P_UI_MASK_FIX=0` off) |
 | `scripts/spu_native_patch.py` | Post-SPU-lift patch, required: hooks native replacements (`src/gt5p_spu_native.c`) into lifted SPU blocks (`spu_native_hooks`); `GT5P_SPU_NATIVE=0` off, `=2` check |
+| `scripts/spu_regpromo.py` | Post-SPU-lift patch, after `spu_native_patch.py`: copies of hot lifted SPU functions with registers in locals (`spu_regpromo`); `GT5P_SPU_REGPROMO=0` off (default), `1` on, `2` check, `3` A/B; measured slower (Phase 44) |
 | `scripts/lift_spu_jobs.py` | Lift the policy module, the captured job images and the job bodies; writes `src/gen/spu_workloads_bcus98158.c` |
 | `scripts/soak.sh`, `soak.py`, `boot.py` | Repeated or single headless boots with a summary |
 | `scripts/test/*.ps1` | Drive the game to a page and measure or shoot it (table under "Start here") |

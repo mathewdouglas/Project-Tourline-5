@@ -11,6 +11,11 @@ versions follow [SemVer](https://semver.org/).
   [docs/recomplauncher.md](docs/recomplauncher.md). RecompLauncher's own UI is
   not yet checked.
 
+### Changed
+- GT5's SPU job lanes start together (GT5 Phase 44): the Arcade car list draws
+  about 9% more frames; races are unchanged. `SPURS_LANE_STAGGER_MS=1` restores
+  the 1 ms per lane stagger.
+
 ### Fixed
 - Crash after loading Eiger Nordwand with weather change (GT5 Phase 43): job-body
   functions reached only through run-time tables are now lifted, instead of

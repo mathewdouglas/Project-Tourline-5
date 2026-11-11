@@ -129,7 +129,7 @@ def main():
         '--source-name', 'ppu_recomp.c', '--hle-stubs', 'analysis/hle_stubs.json', cwd=src, env=env)
     run(py, 'scripts/setjmp_patch.py', cwd=src, env=env)
     run(py, 'scripts/lift_spu_jobs.py', cwd=src, env=env)
-    for script in ('spin_patch.py', 'ui_mask_patch.py', 'spu_native_patch.py'):
+    for script in ('spin_patch.py', 'ui_mask_patch.py', 'spu_native_patch.py', 'spu_regpromo.py'):
         run(py, f'scripts/{script}', cwd=src, env=env)
     run(py, tools / 'gen_hle_nids.py', '--all', '--out', 'src/gen/ppu_hle_nids.cpp', cwd=src, env=env)
     changed = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=src, text=True)

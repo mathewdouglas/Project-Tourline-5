@@ -171,3 +171,92 @@ void gt5p_spu_clear_words(spu_context* ctx)
     if (!check) for (int i = 0; i < 4; i++) ctx->gpr[15]._u32[i] += (end - 4) - r15;
     if (s_stats) { InterlockedIncrement64(&s_clears); InterlockedAdd64(&s_clear_words, (end - 4 - r15) / 4); native_report2(); }
 }
+
+/* Register promotion of hot lifted functions (GT5 Phase 44).
+ *
+ * scripts/spu_regpromo.py gives each function listed under "spu_regpromo" in
+ * config/targets.json a copy that keeps the SPU registers it uses in C locals
+ * (<fn>_rp), and makes the function's first statement a switch on this mode:
+ * GT5P_SPU_REGPROMO=0 the lifted code as before (default until measured);
+ * 1 the promoted copy; 2 check: every GT5P_SPU_REGPROMO_CHECK_EVERY-th entry
+ * (default 64) runs the original and the promoted body from the same state as
+ * far as their first exit, compares registers, pc, interrupt enable and the
+ * whole local store, puts the state back and lets the original run. Counts
+ * every 5 s; the first 16 mismatches are printed in full. 3: A/B within one
+ * boot, the promoted copy while g_spu_exp is set (SPU_EXP_AB=1 with
+ * SPURS_LANE_CYC=1 flips it every 5 s; scripts/diag/abcyc.py --key exp). */
+volatile int g_gt5p_spu_regpromo = -1;
+int gt5p_spu_regpromo_init(void)
+{
+    const char* e = getenv("GT5P_SPU_REGPROMO");
+    int m = e ? atoi(e) : 0;
+    if (m < 0 || m > 3) m = 0;
+    if (m && g_gt5p_spu_regpromo < 0)
+        fprintf(stderr, "[spu-regpromo] mode %d%s%c", m, m == 2 ? " (check)" : m == 3 ? " (A/B on g_spu_exp)" : "", 10);
+    g_gt5p_spu_regpromo = m;
+    return m;
+}
+
+static SPU_THREAD_LOCAL uint8_t* t_rp_ls0;
+static SPU_THREAD_LOCAL uint8_t* t_rp_lsA;
+static SPU_THREAD_LOCAL unsigned t_rp_n;
+static volatile long long s_rp_checks, s_rp_bad;
+static volatile long s_rp_printed;
+
+static void rp_report(void)
+{
+    static volatile long long t0;
+    long long now = (long long)GetTickCount64(), was = t0;
+    if (!was) { InterlockedCompareExchange64(&t0, now, 0); return; }
+    if (now - was < 5000 || InterlockedCompareExchange64(&t0, now, was) != was) return;
+    fprintf(stderr, "[spu-regpromo] check: %lld compared, %lld differ%c",
+            InterlockedExchange64(&s_rp_checks, 0), InterlockedExchange64(&s_rp_bad, 0), 10);
+}
+
+void gt5p_spu_regpromo_check(spu_context* ctx, void (*orig)(spu_context*),
+                             void (*promo)(spu_context*), uint32_t block)
+{
+    static int every = 0;
+    if (!every) { const char* e = getenv("GT5P_SPU_REGPROMO_CHECK_EVERY"); every = e && atoi(e) > 0 ? atoi(e) : 64; }
+    if ((t_rp_n++ % (unsigned)every) != 0) return;
+    if (!t_rp_ls0) {
+        t_rp_ls0 = (uint8_t*)malloc(SPU_LS_SIZE);
+        t_rp_lsA = (uint8_t*)malloc(SPU_LS_SIZE);
+        if (!t_rp_ls0 || !t_rp_lsA) { free(t_rp_ls0); free(t_rp_lsA); t_rp_ls0 = t_rp_lsA = NULL; return; }
+    }
+    static SPU_THREAD_LOCAL u128 g0[128], gA[128];
+    const uint32_t pc0 = ctx->pc, ie0 = ctx->int_enable;
+    memcpy(g0, ctx->gpr, sizeof g0);
+    memcpy(t_rp_ls0, ctx->ls, SPU_LS_SIZE);
+    orig(ctx);
+    const uint32_t pcA = ctx->pc, ieA = ctx->int_enable;
+    memcpy(gA, ctx->gpr, sizeof gA);
+    memcpy(t_rp_lsA, ctx->ls, SPU_LS_SIZE);
+    memcpy(ctx->gpr, g0, sizeof g0); ctx->pc = pc0; ctx->int_enable = ie0;
+    memcpy(ctx->ls, t_rp_ls0, SPU_LS_SIZE);
+    promo(ctx);
+    int bad_reg = -1;
+    for (int r = 0; r < 128 && bad_reg < 0; r++)
+        if (memcmp(&gA[r], &ctx->gpr[r], sizeof gA[r])) bad_reg = r;
+    int bad_ls = -1;
+    if (memcmp(t_rp_lsA, ctx->ls, SPU_LS_SIZE))
+        for (int a = 0; a < SPU_LS_SIZE; a += 16)
+            if (memcmp(t_rp_lsA + a, ctx->ls + a, 16)) { bad_ls = a; break; }
+    const int bad = bad_reg >= 0 || bad_ls >= 0 || pcA != ctx->pc || ieA != ctx->int_enable;
+    if (bad && InterlockedIncrement(&s_rp_printed) <= 16) {
+        fprintf(stderr, "[spu-regpromo] MISMATCH block 0x%X img=%d: pc %05X/%05X ie %u/%u",
+                block, ctx->image_id, pcA, ctx->pc, ieA, ctx->int_enable);
+        if (bad_reg >= 0)
+            fprintf(stderr, " r%d %08X%08X%08X%08X/%08X%08X%08X%08X", bad_reg,
+                    gA[bad_reg]._u32[0], gA[bad_reg]._u32[1], gA[bad_reg]._u32[2], gA[bad_reg]._u32[3],
+                    ctx->gpr[bad_reg]._u32[0], ctx->gpr[bad_reg]._u32[1],
+                    ctx->gpr[bad_reg]._u32[2], ctx->gpr[bad_reg]._u32[3]);
+        if (bad_ls >= 0) fprintf(stderr, " ls 0x%05X", bad_ls);
+        fprintf(stderr, "%c", 10);
+    }
+    memcpy(ctx->gpr, g0, sizeof g0); ctx->pc = pc0; ctx->int_enable = ie0;
+    memcpy(ctx->ls, t_rp_ls0, SPU_LS_SIZE);
+    InterlockedIncrement64(&s_rp_checks);
+    if (bad) InterlockedIncrement64(&s_rp_bad);
+    rp_report();
+}

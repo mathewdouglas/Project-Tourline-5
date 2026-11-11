@@ -10912,7 +10912,7 @@ index cdb04646..06fd2026 100644
  /* NID: 0xDB23E867 (disambiguation by context) */
  s32 cellGcmUnmapEaIoAddress(u32 ea)
  {
-@@ -3299,7 +3999,18 @@ void cellGcmSetUserCommand(u32 cmd)
+@@ -3299,7 +3999,42 @@ void cellGcmSetUserCommand(u32 cmd)
   * Like the driver cause register, multiple pending commands coalesce. */
  void cellGcmQueueUserCommand(u32 cmd)
  {
@@ -10929,7 +10929,31 @@ index cdb04646..06fd2026 100644
 +    }
 +#endif
      GCM_USER_PENDING_STORE((1ULL << 32) | cmd);
++#ifdef _WIN32
++    /* PS3_USLEEP_GCM_WAKE=1: wake a thread sleeping in sys_timer_usleep to
++     * deliver it now (sys_timer.c). */
++    { static int gw = -1;
++      if (gw < 0) { const char* e = getenv("PS3_USLEEP_GCM_WAKE"); gw = (e && *e == '1') ? 1 : 0; }
++      if (gw) { void* ps3_gcm_wake_event(void); void* h = ps3_gcm_wake_event(); if (h) SetEvent((HANDLE)h); } }
++#endif
  }
++
++#ifdef _WIN32
++/* Auto-reset: set when the FIFO raises a user command, so one thread
++ * sleeping in sys_timer_usleep delivers it (PS3_USLEEP_GCM_WAKE, sys_timer.c). */
++void* ps3_gcm_wake_event(void)
++{
++    static void* volatile s_evt;
++    void* e = s_evt;
++    if (!e) {
++        HANDLE n = CreateEventW(NULL, FALSE, FALSE, NULL);
++        if (!n) return NULL;
++        e = InterlockedCompareExchangePointer((PVOID volatile*)&s_evt, n, NULL);
++        if (e) CloseHandle(n); else e = n;
++    }
++    return e;
++}
++#endif
  
 diff --git a/libs/video/cellGcmSys.h b/libs/video/cellGcmSys.h
 index 96846675..6c38015c 100644
@@ -43440,7 +43464,7 @@ index 8d8e4aac..49da6e60 100644
  /* Wake a host thread blocked in a channel wait (channel-stall milestone). */
  void spu_ch_wake(spu_context* ctx);
  /* Runaway lifted-call recursion guard. A lifted brsl/bisl nests a real host
-@@ -797,7 +838,19 @@ void (*spu_take_interrupt(spu_context* ctx,
+@@ -797,7 +838,35 @@ void (*spu_take_interrupt(spu_context* ctx,
                            void (*tf)(spu_context*)))(spu_context*);
  
  /* Drain a translated call up to its explicit architectural return PC. */
@@ -43448,20 +43472,36 @@ index 8d8e4aac..49da6e60 100644
 +void spu_drain_call_impl(spu_context* ctx, uint32_t return_pc);
 +/* SPU_FAST (Phase 61): after almost every lifted call nothing is pending and
 + * the callee has returned to return_pc, where the full drain only clears
-+ * drain_ret_pc. Do that here and skip the call. */
++ * drain_ret_pc. Do that here and skip the call.
++ *
++ * SPU_DRAIN_RET_FAST (on; =0 off; GT5 Phase 44): a callee that returns
++ * through a register the lifter did not know was a link (`bi $r77`, emitted
++ * as pc + spu_indirect_branch trampoline) to exactly return_pc. The full
++ * drain's first step then clears the trampoline and returns, nothing else;
++ * do the same here. That call was 3.9% of GT5's render lanes. Off while
++ * SPU_IBHIST is set, which counts every drain (g_spu_drain_ret_fast is set
++ * by the first full drain; until then the full drain runs). */
++extern int g_spu_drain_ret_fast;
 +static inline void spu_drain_call(spu_context* ctx, uint32_t return_pc)
 +{
-+    if (g_spu_fast && !g_spu_trampoline_fn && ((ctx->pc ^ return_pc) & SPU_LS_MASK) == 0 &&
-+        ctx->host_depth < 1000u) {
-+        ctx->drain_ret_pc = 0;
-+        return;
++    if (g_spu_fast && ((ctx->pc ^ return_pc) & SPU_LS_MASK) == 0 && ctx->host_depth < 1000u) {
++        void (*const t)(spu_context*) = g_spu_trampoline_fn;
++        if (!t) {
++            ctx->drain_ret_pc = 0;
++            return;
++        }
++        if (t == spu_indirect_branch && g_spu_drain_ret_fast > 0) {
++            g_spu_trampoline_fn = 0;
++            ctx->drain_ret_pc = 0;
++            return;
++        }
 +    }
 +    spu_drain_call_impl(ctx, return_pc);
 +}
  /* SPU_PCHIST=1: bucket SPU execution by the GPU module's own symbols.
   *
   * SPU_VRAMPC showed 3.7M VRAM writes from Host2Local_Body and ZERO from
-@@ -845,10 +898,25 @@ static inline void spu_pchist_tick(const spu_context* ctx)
+@@ -845,10 +914,25 @@ static inline void spu_pchist_tick(const spu_context* ctx)
      }
  }
  
@@ -43488,7 +43528,7 @@ index 8d8e4aac..49da6e60 100644
          while (g_spu_trampoline_fn) {                           \
              /* SPU_TAILRET=1: a pending transfer whose target equals the   \
               * link register IS a return. SPU_RET only recognises `bi $r0`;\
-@@ -857,7 +925,7 @@ static inline void spu_pchist_tick(const spu_context* ctx)
+@@ -857,7 +941,7 @@ static inline void spu_pchist_tick(const spu_context* ctx)
               * matching brsl/bisl never pops and a poll loop nests a frame \
               * per iteration until the host stack dies. Off by default --  \
               * this changes core dispatch for every title. */              \
@@ -43497,7 +43537,7 @@ index 8d8e4aac..49da6e60 100644
                  (((uint32_t)(ctx)->pc & SPU_LS_MASK) ==                    \
                   ((ctx)->gpr[0]._u32[0] & SPU_LS_MASK))) {                 \
                  g_spu_trampoline_fn = 0;                                   \
-@@ -865,8 +933,8 @@ static inline void spu_pchist_tick(const spu_context* ctx)
+@@ -865,8 +949,8 @@ static inline void spu_pchist_tick(const spu_context* ctx)
              }                                                              \
              void (*_tf)(spu_context*) = g_spu_trampoline_fn;    \
              g_spu_trampoline_fn = 0;                            \
@@ -44183,14 +44223,22 @@ index 931d3b34..c10c9956 100644
      s_ring[s_n % RING] = ((uint32_t)ctx->pc & SPU_LS_MASK);
      s_n++;
  
-@@ -395,16 +562,17 @@ int spu_tailret_enabled(void)
+@@ -395,16 +562,25 @@ int spu_tailret_enabled(void)
  typedef void (*spu_drain_fn)(spu_context*);
  extern spu_drain_fn spu_lookup(uint32_t addr, int image_id);
  
 -void spu_drain_call(spu_context* ctx, uint32_t return_pc)
++/* spu_drain_call's indirect-return fast path (spu_context.h): -1 until the
++ * first full drain reads SPU_DRAIN_RET_FAST; never on with SPU_IBHIST. */
++int g_spu_drain_ret_fast = -1;
++
 +void spu_drain_call_impl(spu_context* ctx, uint32_t return_pc)
  {
 -    spu_depth_guard(ctx);
++    if (__builtin_expect(g_spu_drain_ret_fast < 0, 0)) {
++        const char* e = getenv("SPU_DRAIN_RET_FAST");
++        g_spu_drain_ret_fast = (e && *e == '0') || getenv("SPU_IBHIST") ? 0 : 1;
++    }
 +    if (s_ibhist) spu_ibhist_note(1, ctx->image_id, return_pc, ctx->host_depth);
 +    if (!g_spu_fast || ctx->host_depth >= 1000u) spu_depth_guard(ctx);
      /* The frame an interrupt taken in THIS loop returns to. It stays armed
@@ -44204,7 +44252,7 @@ index 931d3b34..c10c9956 100644
      for (;;) {
          while (g_spu_trampoline_fn) {
              if (g_spu_trampoline_fn == spu_indirect_branch &&
-@@ -415,9 +583,9 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+@@ -415,9 +591,9 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
              }
              void (*fn)(spu_context*) = g_spu_trampoline_fn;
              g_spu_trampoline_fn = 0;
@@ -44217,7 +44265,7 @@ index 931d3b34..c10c9956 100644
              if (ctx->int_enable && (ctx->event_status & ctx->event_mask)) {
                  void (*vf)(spu_context*) = spu_take_interrupt(ctx, fn);
                  if (!ctx->int_enable) {   /* taken (a take clears the enable; a deferral leaves it) */
-@@ -433,6 +601,7 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+@@ -433,6 +609,7 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
                          vf(ctx);
                      } else {
                          /* iret fired deeper: registers restored, pc = srr0 */
@@ -44225,7 +44273,7 @@ index 931d3b34..c10c9956 100644
                          ctx->host_depth = f.depth;
                          ctx->image_id = f.image_id;
                          g_spu_trampoline_fn = spu_indirect_branch;
-@@ -449,13 +618,48 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+@@ -449,13 +626,48 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
          }
          {
              uint32_t pc = ctx->pc & SPU_LS_MASK;
@@ -44277,7 +44325,7 @@ index 931d3b34..c10c9956 100644
                  g_spu_trampoline_fn = spu_indirect_branch;
                  continue;
              }
-@@ -463,6 +667,7 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+@@ -463,6 +675,7 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
          {
              extern void spu_restart_dispatch(spu_context*);
              SPU_DRAIN_POP_IRQ();
@@ -47170,7 +47218,7 @@ index d8f40814..75a60b4e 100644
      /* PS3_POLLTOP=<seconds>: name the usleep poll sites.
       *
       * A title that is "hung" is usually not blocked on anything -- every thread
-@@ -214,14 +233,28 @@ int64_t sys_timer_usleep(ppu_context* ctx)
+@@ -214,14 +233,45 @@ int64_t sys_timer_usleep(ppu_context* ctx)
  
  #ifdef _WIN32
      /* Use high-resolution sleep via waitable timer for better precision */
@@ -47195,13 +47243,31 @@ index d8f40814..75a60b4e 100644
              LARGE_INTEGER due;
              due.QuadPart = -((LONGLONG)usec * 10); /* 100ns units, negative = relative */
              SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE);
-             WaitForSingleObject(timer, INFINITE);
+-            WaitForSingleObject(timer, INFINITE);
 -            CloseHandle(timer);
++            /* PS3_USLEEP_GCM_WAKE=1 (GT5 Phase 44): a user command the FIFO
++             * raises wakes one sleeping thread to deliver it, which then
++             * sleeps out the rest. Delivery waited for the next syscall of
++             * any guest thread: 0.65 ms mean, 1.3 ms p90 of each GT5 frame,
++             * with the render thread blocked on it. The handler runs as it
++             * would at this syscall's entry. =0 (default): wait out the
++             * timer. */
++            static int gw = -1;
++            if (gw < 0) { const char* e = getenv("PS3_USLEEP_GCM_WAKE"); gw = (e && *e == '1') ? 1 : 0; }
++            if (gw) {
++                extern void* ps3_gcm_wake_event(void);
++                extern void ps3_gcm_pump_if_present(void);
++                HANDLE hs[2] = { timer, (HANDLE)ps3_gcm_wake_event() };
++                while (hs[1] && WaitForMultipleObjects(2, hs, FALSE, INFINITE) == WAIT_OBJECT_0 + 1)
++                    ps3_gcm_pump_if_present();
++                if (!hs[1]) WaitForSingleObject(timer, INFINITE);
++            } else
++                WaitForSingleObject(timer, INFINITE);
 +            if (!keep) CloseHandle(timer);
          } else {
              Sleep((DWORD)(usec / 1000));
          }
-@@ -244,6 +277,8 @@ int64_t sys_timer_usleep(ppu_context* ctx)
+@@ -244,6 +294,8 @@ int64_t sys_timer_usleep(ppu_context* ctx)
              QueryPerformanceCounter(&qpc_now);
          } while (qpc_now.QuadPart < qpc_deadline);
      }
@@ -47210,7 +47276,7 @@ index d8f40814..75a60b4e 100644
  #else
      if (usec > 0) {
          struct timespec ts;
-@@ -274,6 +309,43 @@ int64_t sys_timer_sleep(ppu_context* ctx)
+@@ -274,6 +326,43 @@ int64_t sys_timer_sleep(ppu_context* ctx)
      return CELL_OK;
  }
  
@@ -47254,7 +47320,7 @@ index d8f40814..75a60b4e 100644
  /* ---------------------------------------------------------------------------
   * sys_time_get_current_time
   *
-@@ -288,14 +360,29 @@ int64_t sys_time_get_current_time(ppu_context* ctx)
+@@ -288,14 +377,29 @@ int64_t sys_time_get_current_time(ppu_context* ctx)
      uint64_t sec, nsec;
  
  #ifdef _WIN32
@@ -47292,7 +47358,7 @@ index d8f40814..75a60b4e 100644
  #else
      struct timespec ts;
      clock_gettime(CLOCK_REALTIME, &ts);
-@@ -329,9 +416,57 @@ int64_t sys_time_get_timebase_frequency(ppu_context* ctx)
+@@ -329,9 +433,57 @@ int64_t sys_time_get_timebase_frequency(ppu_context* ctx)
   * -----------------------------------------------------------------------*/
  
  /* Forward declaration */
@@ -47351,7 +47417,7 @@ index d8f40814..75a60b4e 100644
  static DWORD WINAPI timer_thread_proc(LPVOID param)
  {
      sys_timer_info* t = (sys_timer_info*)param;
-@@ -346,7 +481,7 @@ static DWORD WINAPI timer_thread_proc(LPVOID param)
+@@ -346,7 +498,7 @@ static DWORD WINAPI timer_thread_proc(LPVOID param)
          }
  
          if (t->running) {
@@ -47360,7 +47426,7 @@ index d8f40814..75a60b4e 100644
          }
      }
  
-@@ -373,7 +508,7 @@ static void* timer_thread_proc(void* param)
+@@ -373,7 +525,7 @@ static void* timer_thread_proc(void* param)
  
          if (rc == ETIMEDOUT) {
              pthread_mutex_unlock(&t->mtx);
@@ -47369,7 +47435,7 @@ index d8f40814..75a60b4e 100644
              pthread_mutex_lock(&t->mtx);
          }
      }
-@@ -383,7 +518,7 @@ static void* timer_thread_proc(void* param)
+@@ -383,7 +535,7 @@ static void* timer_thread_proc(void* param)
  }
  #endif
  
@@ -47378,7 +47444,7 @@ index d8f40814..75a60b4e 100644
  {
      if (t->event_queue_id <= 0 || t->event_queue_id > SYS_EVENT_QUEUE_MAX)
          return;
-@@ -395,8 +530,8 @@ static void timer_send_event(sys_timer_info* t)
+@@ -395,8 +547,8 @@ static void timer_send_event(sys_timer_info* t)
      sys_event_t evt;
      evt.source = t->source;
      evt.data1  = t->data1;
@@ -47389,7 +47455,7 @@ index d8f40814..75a60b4e 100644
  
      /* Push event (ignore if queue full) */
  #ifdef _WIN32
-@@ -532,6 +667,7 @@ int64_t sys_timer_connect_event_queue(ppu_context* ctx)
+@@ -532,6 +684,7 @@ int64_t sys_timer_connect_event_queue(ppu_context* ctx)
      t->event_queue_id = (int32_t)queue_id;
      t->source         = source;
      t->data1          = data1;
@@ -47397,7 +47463,7 @@ index d8f40814..75a60b4e 100644
  
      return CELL_OK;
  }
-@@ -579,6 +715,28 @@ int64_t sys_timer_start(ppu_context* ctx)
+@@ -579,6 +732,28 @@ int64_t sys_timer_start(ppu_context* ctx)
      if (t->running)
          return (int64_t)(int32_t)CELL_EBUSY;
  
@@ -47426,7 +47492,7 @@ index d8f40814..75a60b4e 100644
      if (period == 0)
          return (int64_t)(int32_t)CELL_EINVAL;
  
-@@ -677,4 +835,5 @@ void sys_timer_init(lv2_syscall_table* tbl)
+@@ -677,4 +852,5 @@ void sys_timer_init(lv2_syscall_table* tbl)
      lv2_syscall_register(tbl, SYS_TIMER_USLEEP,            sys_timer_usleep);
      lv2_syscall_register(tbl, SYS_TIMER_SLEEP,             sys_timer_sleep);
      lv2_syscall_register(tbl, SYS_TIME_GET_CURRENT_TIME,   sys_time_get_current_time);
