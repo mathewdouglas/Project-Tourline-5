@@ -4,30 +4,44 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
-## Vertex-cache write tracking prototype (2026-11-12; live checks pending)
+## Vertex-cache write tracking: measured, slower, kept off (2026-11-12)
 
-Added opt-in Windows page-write tracking to the existing cross-frame raw
-vertex cache. `RSX_VTXCACHE_WRITE_WATCH=1` skips comparisons for clean
-resolved guest ranges; `=2` byte-verifies every clean hit; default/unset/0
-retains the existing path. Shared page generations prevent one cache entry
-from hiding writes from another, and exact resolved IO ranges detect remaps.
-Dirty streams are fully compared before rebaselining; query failures use
-comparisons on every draw. The 4 GB-aligned VM reservation is preserved.
+Opt-in Windows page-write tracking for the cross-frame raw vertex cache
+(`RSX_VTXCACHE_WRITE_WATCH=1` skips comparisons of clean guest ranges; `=2`
+byte-verifies every clean hit; unset/0 is the existing path). Design,
+synthetic tests and rollback: [vertex-write-watch.md](vertex-write-watch.md).
 
-`scripts/test/vertex_write_watch.py` passed with the actual cache functions,
-tracker and reservation loop in rollback, enabled and verification modes,
-including shared pages, same-frame writes after stability, non-contiguous
-mappings, clean remaps, overflow, API failure and deliberately stale data.
-Full-backend C17 syntax and fresh pinned-runtime patch application also pass.
-The main compatibility patch and incremental copy include the change.
+**Correct, but it costs more than it saves.** Same build (this branch, release
+0.1.2 lift), HSR frame test (`gt5boot.ps1 -Route race -FrameTest -Settle 60
+RSX_VTXSTAT=1`), alternating order:
 
-**No live speedup or rendering parity is claimed.** Another thread owned
-the game measurements, so no game was launched/stopped and no full game
-build was run. Its private checkout/runtime/build were untouched. Leave
-this off pending zero-mismatch live checks and alternating warm-cache HSR
-A/B runs. Hypothesis: avoiding stream comparisons reduces memory traffic;
-Windows tracking/query overhead may outweigh that benefit. Details,
-rollback and acceptance steps: [vertex-write-watch.md](vertex-write-watch.md).
+| Run | Mode | FPS | Late (>20 ms) | Walk ms/frame |
+| --- | --- | ---: | ---: | ---: |
+| `ww-a0` | 0 | 53.5 | 25.0% | 8.18 |
+| `ww-a1` | 1 | 48.8 | 38.8% | 10.27 |
+| `ww-b1` | 1 | 51.3 | 30.0% | 9.84 |
+| `ww-b0` | 0 | 51.0 | 31.1% | 8.70 |
+
+The FIFO walk costs ~1.6 ms (19%) more a frame with tracking on, in both
+pairs. Cause: one `GetWriteWatch` system call per clean hit (4.4 M queries
+in the `=2` run); indexed-triangle upload time rose 0.19 -> 0.46 s per 5 s
+window. The saving was never available: the existing path already skips
+148,043 of 149,128 hits a window (its once-per-frame shortcut) and compares
+~390 MB per 5 s, about 0.15 ms a frame. That is the ceiling for any
+write-tracking design of this cache. Verification (`ww-v2race`, `=2`):
+4.2 M clean hits, 0 mismatches, 0 failures, race drawn normally.
+
+**Do not merge or enable.** Texture checksums are a separate question; only
+a once-per-frame query over the vertex/texture ranges could be cheap enough,
+and it would first need the texture checksum cost measured (`RSX_TEXUPSTAT=1`).
+
+**Also measured on the same day (no change made):** render-body FMA
+(`GT5P_SPU_FMA=1` on the release build, i.e. body `0x0196FF40`), HSR,
+adjacent pairs: 54.4/50.4, 52.9/51.6, 46.6/45.3 FPS (FMA first). Every pair
+favours FMA (+2.2 FPS mean), but main's Phase 44 pairs went the other way
+(50.9 vs 52.1) and the run-to-run spread is ~5 FPS: no default change. The
+per-frame GPU drain at replay start is 0.0-0.9 ms a frame in these races;
+not worth the risk of overlapping frames yet.
 
 ## Phase 43 - Eiger Nordwand weather-change crash: unlifted job-body functions (2026-11-11)
 

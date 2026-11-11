@@ -1,7 +1,8 @@
 # Vertex-cache write tracking prototype
 
 Implemented 2026-11-12 for the current BCUS98114-v104 runtime. **Off by
-default. No live performance gain has been measured.** Claude's separate
+default. Measured live the same day: correct (0 mismatches) but ~1.6 ms a
+frame slower in the FIFO walk; see "Live result" at the end. Do not enable.** Claude's separate
 SPU investigation was running game measurements during this work; no game
 was launched or stopped, and its checkout/runtime/build were not changed.
 
@@ -127,3 +128,19 @@ The existing `scripts/test/gt5boot.ps1 -Route race -FrameTest -Cpu` supplies
 the route and timing window. Use distinct tags, and do not combine this A/B
 with Claude's SPU/scheduler changes. Texture integration remains a separate
 experiment after vertex tracking has live evidence.
+
+## Live result (2026-11-12)
+
+Built against this runtime with the release 0.1.2 lift, `gt5boot.ps1 -Route
+race -FrameTest -Settle 60 RSX_VTXSTAT=1`, alternating 0/1/1/0:
+
+- Walk 8.18 / 10.27 / 9.84 / 8.70 ms a frame; FPS 53.5 / 48.8 / 51.3 / 51.0.
+  Mode 1 costs ~1.6 ms (19%) of walker CPU.
+- Mode 2 race (`ww-v2race`): 4.2 M clean hits, 0 mismatches, 0 failures.
+- Why: a `GetWriteWatch` call per hit (queries ~= hits), while the existing
+  path already compares only ~0.15 ms of bytes a frame (148,043 of 149,128
+  hits skipped by its once-per-frame shortcut). No per-use design can win;
+  only a once-per-frame batched query could, and the vertex cache has at
+  most ~0.15 ms to give.
+
+Logs: `scratch/pv/ww-*` (ignored). Kept off; not for merging.
