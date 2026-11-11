@@ -17,6 +17,12 @@ WORK = Path(tempfile.mkdtemp(prefix='player-setup-', dir=ROOT / 'scratch'))
 ELF = b'\x7fELF synthetic executable for setup tests only\n'
 SHA = hashlib.sha256(ELF).hexdigest()
 (WORK / 'pt5_launcher_config.h').write_text(f'#define PT5_ELF_SHA256 L"{SHA}"\n#define PT5_ELF_BYTES {len(ELF)}ull\n')
+# Compile the fixture's resources here too; never use or rebuild shared build/ outputs.
+resource = (ROOT/'launcher/launcher.rc.in').read_text().replace('@CMAKE_SOURCE_DIR@', ROOT.as_posix())
+for key, value in {'PROJECT_VERSION': '0.1.0', 'PROJECT_VERSION_MAJOR': '0',
+                   'PROJECT_VERSION_MINOR': '1', 'PROJECT_VERSION_PATCH': '0'}.items():
+    resource = resource.replace('@'+key+'@', value)
+(WORK/'launcher.rc').write_text(resource)
 (WORK / 'engine.cpp').write_text(r'''
 #include <windows.h>
 #include <cstdio>
@@ -78,7 +84,9 @@ int wmain(int argc, wchar_t** argv) {
 set "PATH=C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer;%PATH%"
 call "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat" >nul
 if errorlevel 1 exit /b 1
-"C:\\Program Files\\LLVM\\bin\\clang-cl.exe" /nologo /std:c++20 /EHsc /O2 /MD /utf-8 /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /I"{WORK}" /Fo"{WORK}/launcher.obj" /Fe"{WORK}/tourline5.exe" "{ROOT}/launcher/launcher.cpp" /link "{ROOT}/build/CMakeFiles/pt5_launcher.dir/pt5_launcher.rc.res" /SUBSYSTEM:WINDOWS /MANIFEST:NO shell32.lib ole32.lib comctl32.lib bcrypt.lib uuid.lib user32.lib
+rc /nologo /fo "{WORK}/launcher.res" "{WORK}/launcher.rc"
+if errorlevel 1 exit /b 1
+"C:\\Program Files\\LLVM\\bin\\clang-cl.exe" /nologo /std:c++20 /EHsc /O2 /MD /utf-8 /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /I"{WORK}" /Fo"{WORK}/launcher.obj" /Fe"{WORK}/tourline5.exe" "{ROOT}/launcher/launcher.cpp" /link "{WORK}/launcher.res" /SUBSYSTEM:WINDOWS /MANIFEST:NO shell32.lib ole32.lib comctl32.lib bcrypt.lib uuid.lib user32.lib
 if errorlevel 1 exit /b 1
 "C:\\Program Files\\LLVM\\bin\\clang-cl.exe" /nologo /std:c++20 /EHsc /O2 /MD /D_CRT_SECURE_NO_WARNINGS /I"{ROOT}/src" /Fo"{WORK}/engine.obj" /Fe"{WORK}/gt5.exe" "{WORK}/engine.cpp"
 if errorlevel 1 exit /b 1
@@ -112,7 +120,7 @@ sfo(installed / 'PARAM.SFO', TITLE_ID='BCUS98114', APP_VER='01.04')
 executable = WORK / 'my executable.elf'; executable.write_bytes(ELF)
 home = WORK / 'launcher home'; home.mkdir()
 base_env = {**os.environ, 'PT5_LAUNCHER_HOME': str(home), 'PT5_SETUP_UI': '0'}
-for key in ('PT5_USER_DIR', 'GT5P_ROOT', 'GT5P_GAME_DIR', 'GT5P_SETTINGS', 'RSX_SHADER_CACHE', 'GT5P_NO_SETTINGS'):
+for key in ('PT5_USER_DIR', 'PT5_STORAGE_LINK', 'GT5P_ROOT', 'GT5P_GAME_DIR', 'GT5P_SETTINGS', 'RSX_SHADER_CACHE', 'GT5P_NO_SETTINGS'):
     base_env.pop(key, None)
 count = WORK / 'child-count.txt'; base_env['PT5_TEST_COUNT'] = str(count)
 subprocess.run([str(WORK/'decryption.exe'), str(WORK)], env={**base_env, 'PT5_TEST_DECRYPT_SOURCE':str(executable)}, check=True, timeout=30)
@@ -183,6 +191,8 @@ save.parent.mkdir(parents=True); save.write_bytes(b'preserve my save')
 cache = home / 'shadercache'; cache.mkdir(); (cache / 'fixture-cache').write_bytes(b'cache')
 new_storage = WORK / 'External SSD storage'
 run('--set-storage', new_storage); run('--check')
+link = home/'selected-storage'
+assert link.is_junction() and os.path.samefile(link, new_storage)
 assert (new_storage / save.relative_to(home)).read_bytes() == b'preserve my save'
 assert (new_storage / 'shadercache/fixture-cache').read_bytes() == b'cache'
 assert settings.read_bytes() == (new_storage / 'gt5p_settings.toml').read_bytes()
@@ -203,6 +213,38 @@ run('--check', success=False)
 assert (home / 'storage.ini').read_bytes() == locator and not new_storage.exists()
 missing.rename(new_storage); run('--check')
 print('PASS: verified storage migration, save/cache retention, occupied/nested destination refusal, disconnected drive retention')
+
+# RecompLauncher's static manifest follows remembered storage, including old profiles.
+link.rmdir()
+run('--check')
+assert not link.exists(), '--check must remain read-only'
+run()
+assert link.is_junction() and os.path.samefile(link, new_storage)
+assert (link/'gt5p_settings.toml').read_bytes() == settings.read_bytes()
+link.rmdir()
+run(extra={'PT5_STORAGE_LINK': '0'})
+assert not link.exists(), 'Rollback still created a link'
+private_profile = WORK/'isolated profile'
+private_profile.mkdir()
+run('--configure', '--game', disc, '--game-data', installed, '--elf', executable,
+    extra={'PT5_USER_DIR': str(private_profile)})
+assert not link.exists(), 'PT5_USER_DIR must not redirect remembered storage'
+link.mkdir()
+(link/'keep.txt').write_text('real folder')
+run()
+assert (link/'keep.txt').read_text() == 'real folder'
+assert 'not a junction' in (new_storage/'logs/storage-link.err').read_text()
+(link/'keep.txt').unlink(); link.rmdir()
+run()
+assert link.is_junction() and os.path.samefile(link, new_storage)
+locator_bytes = (home/'storage.ini').read_bytes()
+(home/'storage.ini').unlink()
+run()
+assert not link.exists() and (new_storage/'gt5p_settings.toml').exists()
+(home/'storage.ini').write_bytes(locator_bytes)
+run()
+assert link.is_junction() and os.path.samefile(link, new_storage)
+print('PASS: RecompLauncher storage link, startup repair/removal, read-only check, override and rollback')
 
 # Fail inside CopyFileEx and at the final configuration commit, after file moves.
 # The latter exercises restoration of the previous imported game and executable.

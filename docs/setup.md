@@ -90,6 +90,11 @@ Destinations must be new/empty. The strict allowlist includes the launcher,
 engine, runtime dependencies/notices, glyph art and shortcuts; it excludes
 game files, settings, caches, saves and logs.
 
+The player folder also includes `recomplauncher.json`, which starts the native
+launcher and exposes GT5 settings and storage/log folders in RecompLauncher.
+See [RecompLauncher integration](recomplauncher.md), including the one-time
+launch needed to establish the link for an existing relocated profile.
+
 `scripts/test/player_setup.py` exercises the production launcher with synthetic
 file identities and a fixture engine: import, metadata checks, source retention,
 copy/commit failures, migration, settings, restart/locks, disconnected storage,

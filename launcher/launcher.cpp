@@ -21,6 +21,7 @@
 #include <mutex>
 #include <exception>
 #include "pt5_launcher_config.h"
+#include "storage_link.h"
 #include "../src/pt5_restart.h"
 
 namespace fs = std::filesystem;
@@ -54,6 +55,17 @@ static std::wstring env(const wchar_t* key) {
 }
 static void setenv(const wchar_t* key, const std::wstring& value) {
     if (!SetEnvironmentVariableW(key, value.c_str())) fail(L"Could not set launch environment.");
+}
+// Stable path for RecompLauncher's settings and folder buttons. Never blocks play.
+static void link_storage(const fs::path& home) {
+    if (env(L"PT5_STORAGE_LINK") == L"0") return;
+    const auto problem = storage_link::sync(home, data == home ? fs::path{} : data);
+    if (problem.empty()) return;
+    fwprintf(stderr, L"%ls\n", problem.c_str());
+    try {
+        fs::create_directories(data/L"logs");
+        std::wofstream(data/L"logs/storage-link.err", std::ios::app) << problem << L'\n';
+    } catch (...) {}
 }
 static HICON brand_icon() {
     static HICON icon = reinterpret_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101),
@@ -411,6 +423,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         Handle data_lock(CreateFileW((data/L"launcher.lock").c_str(), GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, 0, nullptr));
         if (home_lock.h == INVALID_HANDLE_VALUE || data_lock.h == INVALID_HANDLE_VALUE)
             fail(L"Project Tourline 5 is already running, or this storage is not writable.");
+        if (!override_data) link_storage(home);
         const bool first = !fs::exists(data/L"setup.ini") && !override_data && !configure_only && env(L"PT5_STORAGE_PICKER") != L"0" && !silent_errors;
         if (!override_data && (change_storage || !storage.empty() || first)) {
             auto selected = storage.empty() ? storage_picker() : storage;
@@ -421,6 +434,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 data_lock.h = CreateFileW((data/L"launcher.lock").c_str(), GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, 0, nullptr);
                 if (data_lock.h == INVALID_HANDLE_VALUE) fail(L"The selected storage is in use or not writable.");
             }
+            link_storage(home);
             if (change_storage || !storage.empty()) return 0;
         }
         bool valid = false;
@@ -437,6 +451,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         const auto settings = data/L"gt5p_settings.toml";
         if (!fs::exists(settings)) {
             std::ofstream f(settings);
+            // Keep in step with config.new in launcher/recomplauncher.json.
             f << "# Project Tourline 5 first-run preset. F1 opens settings.\n[video]\nresolution = \"720p\"\nmsaa = 2\nshader_compiler = \"dxc\"\nshader_warmup = true\n";
             if (!f) fail(L"Could not write initial settings.");
         }
