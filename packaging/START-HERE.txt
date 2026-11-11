@@ -1,3 +1,6 @@
+Manual setup notes for the earlier 0.1.0 release.
+New builds use tourline5.exe; see launcher/START-HERE.txt and docs/setup.md.
+
 Project Tourline 5 - Gran Turismo 5 for Windows (static recompilation)
 =====================================================================
 

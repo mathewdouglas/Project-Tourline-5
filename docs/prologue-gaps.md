@@ -9,6 +9,11 @@ v0.2.5 (`7d0ab12`): source trees, settings keys, F1 page rows,
 **Effort**: S = hours, M = a day or two, L = a week or more, with GT5
 measurements counted. **Value** is for a GT5 player.
 
+**Follow-up, GT5 Phase 37:** the native setup launcher, storage selection and
+game-file pickers described in item 2.1 are now implemented. See
+[setup and storage](setup.md). The earlier 0.1.0 ZIP remains a manual-setup
+release; starter/catalogue and preparation helpers below are still deferred.
+
 ## 1. Features in our code that do nothing on GT5
 
 These ship in PT5 0.1.0 and appear in F1 or as defaults, but are keyed to

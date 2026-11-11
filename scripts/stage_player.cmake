@@ -1,0 +1,11 @@
+# Source builds and staged player folders use the same launcher/engine contract.
+if(NOT EXISTS "${PT5_ENGINE}")
+    message(FATAL_ERROR "Build the GT5 engine before staging its player files")
+endif()
+file(SHA256 "${PT5_ENGINE}" engine_hash)
+file(WRITE "${PT5_DEST}/pt5-release.ini" "[game]\ntarget=BCUS98114-v104\nengine_sha256=${engine_hash}\n")
+file(MAKE_DIRECTORY "${PT5_DEST}/assets")
+file(COPY "${PT5_SOURCE}/assets/glyphs" DESTINATION "${PT5_DEST}/assets")
+foreach(name "START-HERE.txt" "Change storage.cmd" "Change game files.cmd" "Open storage.cmd")
+    configure_file("${PT5_SOURCE}/launcher/${name}" "${PT5_DEST}/${name}" COPYONLY)
+endforeach()

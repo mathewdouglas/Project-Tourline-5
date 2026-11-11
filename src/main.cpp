@@ -794,12 +794,15 @@ int main(int argc, char* argv[])
     if (argc <= 1 && !locate_project_root()) {
         const char* msg =
             "The game files were not found.\n\n"
-            "This program expects the project layout: a folder holding\n"
+            "Run tourline5.exe to select your storage and game files.\n"
+            "It is beside this engine in a source build, or one folder above\n"
+            "the runtime folder in a player package.\n\n"
+            "Developer launches can still use the project layout: a folder holding\n"
             "input\\EMAIN.ELF (the decrypted executable) and input\\pkg\\\n"
             "(PARAM.SFO and USRDIR). It looks in the current folder and in the\n"
             "folders above the exe. Set GT5P_ROOT to that folder to name it.";
         fprintf(stderr, "[GT5P] ERROR: %s\n", msg);
-        if (by_hand) MessageBoxA(NULL, msg, "Gran Turismo 5 Prologue", MB_OK | MB_ICONERROR);
+        if (by_hand) MessageBoxA(NULL, msg, "Project Tourline 5", MB_OK | MB_ICONERROR);
         return EXIT_FAILURE;
     }
 

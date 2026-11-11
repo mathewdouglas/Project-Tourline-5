@@ -4,6 +4,46 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Phase 37 - Native player setup and storage selection (2026-11-11)
+
+Adapted Prologue's native launcher for GT5's disc/update layout. `tourline5.exe`
+offers the same default/current or custom storage choice (including external
+SSDs), then selects the BCUS98114 v02.00 disc, 01.04 installed data and decrypted
+executable. The user's RPCS3 can decrypt a temporary copy of the update's
+EBOOT.BIN. Exact ELF size/SHA-256 are pinned in `config/pt5-player.json`, measured
+against both input/EMAIN.ELF and RPCS3's decrypted EBOOT.elf. No Prologue
+executable addresses or preparation catalogue were copied.
+
+The disc is read in place. Installed data is staged, copied and SHA-verified
+before activation. Replaced imports are backed up; saves remain separate.
+Storage relocation also copies/verifies before changing the locator, retaining
+the source. Overlapping/nonempty destinations, linked source entries and missing
+external drives are handled without resetting the saved selection. Copying has
+native progress/cancellation. Source game files and old developer profiles are
+unchanged.
+
+The launcher sets the engine's existing root/VFS/game/settings/cache paths and
+owns its process group/storage locks. F1 Restart signals it to wait for exit and
+start again under those locks; direct launches keep their original restart path.
+New profiles use 720p/2x MSAA and the current DXC default. The existing release
+allowlist includes the launcher, shortcuts and metadata. `--stage-dir` creates
+an unpacked player folder without game files. The earlier release ZIP remains
+unchanged. [Setup instructions](setup.md).
+
+**Validation:** integrated Release build; production launcher with synthetic
+identities and a fixture engine; import/check/launch, source retention, SFO/ELF
+rejection, settings retention, managed restarts, storage migration including
+saves/cache, missing-drive retention, profile locks, junction refusal and engine
+tampering. Copy failure and failure at final setup commit preserve/restore the
+previous setup. A mock RPCS3 child verifies temporary-copy decryption, quoting,
+nonzero exit and missing-output errors.
+
+Production `--check` passed read-only against actual disc/installed data, update
+ELF and matching engine through an isolated validation profile. No game process
+was started, stopped or driven: the other thread's session was left alone. This
+is not live-game or physical external-drive acceptance. No public release was
+published or replaced.
+
 ## Phase 36 — GT5 race scope: the race set is learned and prepared (2026-11-11)
 
 **Found.** On GT5 the renderer never knew a race was loading. Race scope and

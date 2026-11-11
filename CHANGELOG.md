@@ -5,6 +5,14 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Native `tourline5.exe` setup: Prologue-style storage selection, GT5 disc and
+  01.04 installed-data pickers, verified executable import and temporary-copy
+  RPCS3 decryption. Saves/settings/cache use remembered default or custom storage.
+- Change storage/game files and Open storage shortcuts, verified migration with
+  the source retained, managed F1 restarts, and launcher-aware player packaging.
+  [Setup instructions](docs/setup.md).
+
 ## [0.1.0] - 2026-11-11
 
 The first tagged release of **Project Tourline 5**, the Gran Turismo 5

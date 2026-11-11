@@ -30,7 +30,20 @@ This tree continues [Tourline Prologue](https://github.com/mathewdouglas/Tourlin
 
 ## Getting started
 
-Release [0.1.0](https://github.com/mathewdouglas/Project-Tourline-5/releases/tag/v0.1.0) has a player ZIP with no game files: extract it and follow its `START-HERE.txt`, which lists the files below. Or build from source with the steps in [Building from source](#building-from-source), then run **build\\gt5.exe**.
+New source builds provide **build\tourline5.exe**, also opened by **Setup and play.cmd**.
+It asks where to keep saves, settings and shaders, then lets you select your
+GT5 disc dump, 01.04 installed data and decrypted update executable. It can
+use your installed RPCS3 to decrypt a temporary copy. Setup is remembered;
+your source game files stay unchanged.
+
+Storage can use `%LOCALAPPDATA%\ProjectTourline5` or an empty folder on another
+drive, including an external SSD. **Change storage.cmd** copies and verifies
+existing storage while keeping the original as a backup.
+[Setup, storage and game-file selection](docs/setup.md) describes the full flow.
+
+The earlier [0.1.0 release](https://github.com/mathewdouglas/Project-Tourline-5/releases/tag/v0.1.0)
+has the manual setup described in its own START-HERE.txt. The direct developer
+layout is also still supported:
 
 1. Put the extracted disc where the port reads it: `input/pkg/PARAM.SFO` and `input/pkg/USRDIR/`, including `GT.VOL`. The port maps `/dev_bdvd/PS3_GAME/` to `input/pkg/`.
 2. Decrypt the installed update executable, `dev_hdd0/game/BCUS98114/USRDIR/EBOOT.BIN`, to `input/EMAIN.ELF`. RPCS3's **Utilities → Decrypt PS3 Binaries** writes an ELF beside that file. Write `BCUS98114-v104` as the only line of `input/target`.
@@ -39,7 +52,7 @@ Release [0.1.0](https://github.com/mathewdouglas/Project-Tourline-5/releases/tag
 
 A first boot with only the update package's `PDIPFS` files, and with `GT.VOL` in place, runs the game's own install. That install copies the rest of the files out of `GT.VOL`. The screen order measured against RPCS3 is the warning, the install, the logo, adjust display, system files, the logo, the opening movie, then the menu.
 
-The keyboard is used when no controller is connected: arrows, Z Cross, X Circle, A Square, S Triangle, Q/W L1/R1, 1/2 L2/R2, Enter Start, Tab Select. **F1** opens settings. They are saved in `gt5p_settings.toml` at the repository root. **F3** opens the profiler.
+The keyboard is used when no controller is connected: arrows, Z Cross, X Circle, A Square, S Triangle, Q/W L1/R1, 1/2 L2/R2, Enter Start, Tab Select. **F1** opens settings. They are saved in `gt5p_settings.toml` in the selected storage (the repository root for direct developer launches). **F3** opens the profiler.
 
 F1 **Controls** has trigger dead-zone and response-curve options. **Feedback**
 offers optional SDL vibration, Xbox trigger rumble and fixed DualSense trigger
