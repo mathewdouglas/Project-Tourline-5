@@ -5,6 +5,12 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- A RecompLauncher manifest (`launcher/recomplauncher.json`, 16 GT5 settings,
+  storage and log buttons) and relocated-storage following; see
+  [docs/recomplauncher.md](docs/recomplauncher.md). RecompLauncher's own UI is
+  not yet checked.
+
 ### Fixed
 - Crash after loading Eiger Nordwand with weather change (GT5 Phase 43): job-body
   functions reached only through run-time tables are now lifted, instead of
