@@ -36,7 +36,7 @@ boot milestone upstream reaches.
 Treat every statement about BCUS98158 as a hypothesis unless it appears under
 "Measured on the disc build" below.
 
-## Current GT5 continuation (2026-11-11, GT5 Phase 38)
+## Current GT5 continuation (2026-11-11, GT5 Phase 39)
 
 This branch targets **Gran Turismo 5 BCUS98114-v104**. The Prologue history
 below is retained as evidence. Read [docs/progress-gt5.md](docs/progress-gt5.md)
@@ -113,7 +113,7 @@ See [docs/setup.md](docs/setup.md). The launcher owns F1 restarts through
 includes the launcher/shortcuts and supports `--stage-dir`; no game files enter
 the package. `scripts/test/player_setup.py` uses synthetic identities/processes.
 
-**Split-storage disc access (GT5 Phase 38).** cellFs mapping destinations may
+**Split-storage disc access (GT5 Phase 39).** cellFs mapping destinations may
 be absolute: do not prepend the writable VFS root to them. This is required
 for the launcher's disc selection; otherwise `GT.VOL` fails to open and Options
 artwork is missing with both compilers. `PS3_FS_ABSOLUTE_MAPPINGS=0` reproduces
