@@ -1,0 +1,3 @@
+#pragma once
+#define PT5_ELF_SHA256 L"@PT5_ELF_SHA256@"
+#define PT5_ELF_BYTES @PT5_ELF_BYTES@ull

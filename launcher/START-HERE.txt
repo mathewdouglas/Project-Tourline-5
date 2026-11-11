@@ -1,0 +1,38 @@
+Project Tourline 5 - setup and play
+
+1. Run tourline5.exe. Keep the default storage folder, or choose an empty
+   folder on another drive (including an external SSD).
+2. Select your extracted Gran Turismo 5 US disc dump (BCUS98114, version 02.00),
+   or its PS3_GAME folder. ISO files must be extracted first.
+3. Select your GT5 update 01.04 installed data: your RPCS3 folder or
+   dev_hdd0\game\BCUS98114. Install update 01.04 in RPCS3 first. A completed
+   GT5 installation is also supported. Newer updates do not match this build.
+   This installation is copied and verified into your chosen storage.
+4. Select the decrypted update 1.04 EBOOT.elf, or choose your installed RPCS3
+   to decrypt a temporary copy of EBOOT.BIN. Do not select the disc executable.
+5. Setup is remembered. Use tourline5.exe for every launch. F1 opens settings.
+
+Your original disc dump stays where it is. Source game files and RPCS3 data
+are never modified. Keep the selected disc folder available while playing.
+No game data, decryption keys, firmware or RPCS3 are included.
+
+Saves, settings, shaders, installed data and logs use the selected storage.
+Default: %LOCALAPPDATA%\ProjectTourline5
+Use Open storage.cmd to find them. Initial video settings are 720p/2x MSAA;
+DXC is the default shader compiler; FXC is available in F1. An incomplete GT5 install is finished
+by the game itself on first boot and may take several minutes.
+
+To change drives, close the game and run Change storage.cmd. Choose an empty
+folder. Existing storage is copied and verified; the previous folder remains
+as a backup. Reconnect an external drive before launching.
+Change game files.cmd selects the source files again. Previous imported game
+data is kept under backups/ when replaced; saves are kept separately.
+
+Keep the entire player folder together, including assets/, pt5-release.ini,
+the engine and its DLLs. The player folder itself can also live on your SSD.
+The internal gt5.exe is the engine; tourline5.exe is the normal entry point.
+Logs: selected-storage\logs\play.out and play.err. Setup failures: setup.err.
+
+tourline5.exe --check validates the saved setup and engine without launching
+the game or opening dialogs. --setup, --choose-storage and --open-data are
+the command-line equivalents of the shortcuts above.

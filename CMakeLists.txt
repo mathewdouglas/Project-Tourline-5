@@ -329,6 +329,26 @@ if(WIN32)
     target_sources(gt5p PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/pt5.rc")
     set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/pt5.rc" PROPERTIES
         OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/assets/branding/pt5.ico")
+    if(GT5P_TARGET STREQUAL "BCUS98114-v104")
+        file(READ "${CMAKE_SOURCE_DIR}/config/pt5-player.json" PT5_PLAYER)
+        string(JSON PT5_ELF_SHA256 GET "${PT5_PLAYER}" elf_sha256)
+        string(JSON PT5_ELF_BYTES GET "${PT5_PLAYER}" elf_bytes)
+        configure_file(launcher/pt5_launcher_config.h.in pt5_launcher_config.h @ONLY)
+        configure_file(launcher/launcher.rc.in pt5_launcher.rc @ONLY)
+        set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/pt5_launcher.rc" PROPERTIES
+            OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/assets/branding/pt5.ico;${CMAKE_SOURCE_DIR}/launcher/launcher.manifest")
+        add_executable(pt5_launcher WIN32 launcher/launcher.cpp "${CMAKE_CURRENT_BINARY_DIR}/pt5_launcher.rc")
+        set_target_properties(pt5_launcher PROPERTIES OUTPUT_NAME "tourline5")
+        target_include_directories(pt5_launcher PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+        target_compile_definitions(pt5_launcher PRIVATE UNICODE _UNICODE _WIN32_WINNT=0x0601 _CRT_SECURE_NO_WARNINGS)
+        target_compile_options(pt5_launcher PRIVATE /EHsc /utf-8)
+        target_link_options(pt5_launcher PRIVATE /MANIFEST:NO)
+        target_link_libraries(pt5_launcher PRIVATE shell32 ole32 comctl32 bcrypt uuid user32)
+        add_custom_target(pt5_player_files ALL
+            COMMAND ${CMAKE_COMMAND} "-DPT5_ENGINE=$<TARGET_FILE:gt5p>" "-DPT5_DEST=$<TARGET_FILE_DIR:gt5p>"
+                "-DPT5_SOURCE=${CMAKE_SOURCE_DIR}" -P "${CMAKE_SOURCE_DIR}/scripts/stage_player.cmake"
+            DEPENDS gt5p pt5_launcher VERBATIM)
+    endif()
     target_link_libraries(gt5p PRIVATE
         ws2_32 xinput ole32 bcrypt shell32
         d3d12 dxgi dxguid d3dcompiler)

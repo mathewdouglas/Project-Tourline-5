@@ -12,8 +12,10 @@ Usually called by scripts/release/clean_build.py.
 """
 import argparse
 import hashlib
+import json
 from pathlib import Path
 import re
+import shutil
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -130,9 +132,12 @@ def collect(args, version):
         raise ValueError('Only a completed Release build can be packaged')
     deps = args.third_party.resolve()
     files = {ENGINE: pe_x64(build / ENGINE),
+             'tourline5.exe': pe_x64(build / 'tourline5.exe'),
              'LICENSE.txt': text(ROOT / 'LICENSE'),
-             'START-HERE.txt': text(ROOT / 'packaging/START-HERE.txt'),
+             'START-HERE.txt': text(ROOT / 'launcher/START-HERE.txt'),
              'CHANGELOG.md': text(ROOT / 'CHANGELOG.md')}
+    for name in ('Change storage.cmd', 'Change game files.cmd', 'Open storage.cmd'):
+        files[name] = text(ROOT / 'launcher' / name)
     for name in RUNTIME_DLLS:
         files[name] = pe_x64(build / name)
     # The DLLs beside the engine must be the pinned downloads.
@@ -193,22 +198,59 @@ def main():
     ap.add_argument('--runtime', required=True, type=Path, help='the ps3recomp checkout the build used')
     ap.add_argument('--third-party', type=Path, default=ROOT / 'third_party')
     ap.add_argument('--vc-runtime-dir', required=True, type=Path)
-    ap.add_argument('--output', required=True, type=Path)
+    ap.add_argument('--output', type=Path, help='write a player ZIP')
+    ap.add_argument('--stage-dir', type=Path, help='write an unpacked player folder (must be empty)')
     args = ap.parse_args()
     version = port_version()
-    output = args.output.resolve()
-    if output.exists():
+    if not args.output and not args.stage_dir:
+        ap.error('Supply --output and/or --stage-dir')
+    output = args.output.resolve() if args.output else None
+    stage = args.stage_dir.resolve() if args.stage_dir else None
+    if output and output.exists():
         raise ValueError('Refusing to overwrite an existing package')
+    if stage and stage.exists() and (not stage.is_dir() or any(stage.iterdir())):
+        raise ValueError('Choose an empty stage directory; existing player folders are never overwritten')
     elf = regular(args.elf)
     with elf.open('rb') as f:
         header = f.read(20)
     if header[:6] != b'\x7fELF\x02\x02' or header[18:20] != b'\x00\x15':
         raise ValueError('Expected the decrypted big-endian PowerPC64 ELF')
+    identity = json.loads((ROOT / 'config/pt5-player.json').read_text())
+    if elf.stat().st_size != identity['elf_bytes'] or sha(elf) != identity['elf_sha256']:
+        raise ValueError('The supplied ELF does not match the launcher\'s BCUS98114 update 01.04 identity')
     files, generated = collect(args, version)
     release = ('[release]\nschema=1\nproduct=Project Tourline 5\n'
                f'port_version={version}\ntarget={TARGET}\ngame=BCUS98114 01.04\n'
                f'elf_sha256={sha(elf)}\nengine_sha256={sha(files[ENGINE])}\n')
+    generated['pt5-release.ini'] = f'[game]\ntarget={TARGET}\nengine_sha256={sha(files[ENGINE])}\n'
     before = {n: (p.stat().st_size, p.stat().st_mtime_ns) for n, p in files.items()}
+    if stage:
+        # Prevent copying a source directory into itself (including via aliases).
+        for path in files.values():
+            resolved = path.resolve()
+            if stage == resolved or stage in resolved.parents:
+                raise ValueError('Stage directory must not contain package inputs')
+        for folder in (ROOT / 'assets', ROOT / 'launcher', args.build_dir.resolve() / 'assets', args.build_dir.resolve() / 'licenses'):
+            if stage.is_relative_to(folder.resolve()):
+                raise ValueError('Stage directory must be separate from input assets and licenses')
+        stage.mkdir(parents=True, exist_ok=True)
+        for name, content in {**generated, 'release.ini': release}.items():
+            destination = stage / name; destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(content, encoding='utf-8')
+        for name, source in files.items():
+            destination = stage / name; destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            if before[name] != (source.stat().st_size, source.stat().st_mtime_ns):
+                raise ValueError(f'Input changed while staging: {source}')
+            if sha(source) != sha(destination):
+                raise ValueError(f'Staged file differs from its input: {source}')
+            with destination.open('rb') as f:
+                head = f.read(8)
+            if any(head.startswith(m) for m in FORBIDDEN_MAGIC):
+                raise ValueError(f'Refusing a game-format file: {name}')
+        print(f'Staged {stage}: {len(files) + len(generated) + 1} files, no game data')
+    if not output:
+        return
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_suffix(output.suffix + '.partial')
     if partial.exists():

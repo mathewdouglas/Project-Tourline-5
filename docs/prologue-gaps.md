@@ -9,6 +9,11 @@ v0.2.5 (`7d0ab12`): source trees, settings keys, F1 page rows,
 **Effort**: S = hours, M = a day or two, L = a week or more, with GT5
 measurements counted. **Value** is for a GT5 player.
 
+**Follow-up, GT5 Phase 37:** the native setup launcher, storage selection and
+game-file pickers described in item 2.1 are now implemented. See
+[setup and storage](setup.md). The earlier 0.1.0 ZIP remains a manual-setup
+release; starter/catalogue and preparation helpers below are still deferred.
+
 ## 1. Features in our code that do nothing on GT5
 
 These ship in PT5 0.1.0 and appear in F1 or as defaults, but are keyed to
@@ -19,11 +24,11 @@ important group: a player can switch these on and nothing happens.
 
 | # | Feature (Prologue phase) | Why it is inert on GT5 | What to measure | Effort | Value |
 | --- | --- | --- | --- | --- | --- |
-| 1.1 | ~~**Skip opening movie**~~ **Done (GT5 Phase 37)** (F1 GAME; Phases 67, 234) | Sets `PAD_SKIP_MOVIE=MovieRoot`, a `.gpb` milestone GT5 never reads. Prologue 0.2.5 instead hooks the game's own Opening Movie option at Prologue addresses. | The file GT5 reads when the movie starts (`PAD_FILE_LOG=2`, as Phase 36 did), or GT5's own option. | S (file marker) / M (native option) | High |
-| 1.2 | ~~**Button prompts follow the controller**~~ **Done for Arcade/menu help bars (GT5 Phase 37)** (Phase 119) | `assets/glyphs/textures.txt` lists BCUS98158 texture hashes. GT5's button textures are different, so Xbox/Nintendo/keyboard art is never drawn. | Dump GT5's button textures with `RSX_TEX_REPL_DUMP`, add their hashes and cell boxes. | M | High |
+| 1.1 | ~~**Skip opening movie**~~ **Done (GT5 Phase 38)** (F1 GAME; Phases 67, 234) | Sets `PAD_SKIP_MOVIE=MovieRoot`, a `.gpb` milestone GT5 never reads. Prologue 0.2.5 instead hooks the game's own Opening Movie option at Prologue addresses. | The file GT5 reads when the movie starts (`PAD_FILE_LOG=2`, as Phase 36 did), or GT5's own option. | S (file marker) / M (native option) | High |
+| 1.2 | ~~**Button prompts follow the controller**~~ **Done for Arcade/menu help bars (GT5 Phase 38)** (Phase 119) | `assets/glyphs/textures.txt` lists BCUS98158 texture hashes. GT5's button textures are different, so Xbox/Nintendo/keyboard art is never drawn. | Dump GT5's button textures with `RSX_TEX_REPL_DUMP`, add their hashes and cell boxes. | M | High |
 | 1.3 | **Ultrawide 21:9** (F1 VIDEO; Phases 121 to 126, 130) | The aspect constants (`aspect_16_9_float`, `ui_aspect_16_9_float`, `scene_camera_aspect_16_9_float`) are not known for v104, and `src/main.cpp` skips all ultrawide setup without them, so choosing 21:9 leaves GT5 at 16:9. | Find GT5's aspect table (Phase 121's method), then check race, menus and HUD. | M | High for ultrawide users |
-| 1.4 | ~~**F1 pauses a race**~~ **Done (GT5 Phase 37)** (Phase 117) | Needs `RaceRoot.gpb` and `menu_listbox_vtable`; GT5 has neither, so F1 opens over a running race. | Race scope now exists (Phase 36); find GT5's pause-menu widget for the "already paused" check. | S to M | Medium |
-| 1.5 | ~~**"SELECT PC settings" hint on the game's Options screen**~~ **Done (GT5 Phase 37)** (Phase 114) | Keyed to `OptionRoot.gpb`. | GT5's Options screen file. | S | Low |
+| 1.4 | ~~**F1 pauses a race**~~ **Done (GT5 Phase 38)** (Phase 117) | Needs `RaceRoot.gpb` and `menu_listbox_vtable`; GT5 has neither, so F1 opens over a running race. | Race scope now exists (Phase 36); find GT5's pause-menu widget for the "already paused" check. | S to M | Medium |
+| 1.5 | ~~**"SELECT PC settings" hint on the game's Options screen**~~ **Done (GT5 Phase 38)** (Phase 114) | Keyed to `OptionRoot.gpb`. | GT5's Options screen file. | S | Low |
 | 1.6 | **Frame-pacer padding skipped** (Phase 106) | No `frame_pacer_sleep_lr` for v104. Prologue measured 55 to 58 FPS and much less late-frame copying from this. | Whether GT5's render thread pads frames the same way (`scripts/diag/rtsplit.py`). | M | Medium to high |
 | 1.7 | **Guest spin waits yield** (Phase 101, required post-lift step) | No `spin_waits` for v104; the patch is a no-op. | GT5's spin loops on SPU progress (sampling profiles). | M | Medium |
 | 1.8 | **Native SPU hot loops** (Phase 111) | Prologue replaces its race sorted-list walk. GT5 has one hook (`clear_words`) and no profile-led replacements. | `GT5P_SAMPLE_WID` profile of GT5's race workloads. | M to L | Medium |

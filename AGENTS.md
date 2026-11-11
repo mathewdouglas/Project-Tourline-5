@@ -36,7 +36,7 @@ boot milestone upstream reaches.
 Treat every statement about BCUS98158 as a hypothesis unless it appears under
 "Measured on the disc build" below.
 
-## Current GT5 continuation (2026-11-11, GT5 Phase 34)
+## Current GT5 continuation (2026-11-11, GT5 Phase 37)
 
 This branch targets **Gran Turismo 5 BCUS98114-v104**. The Prologue history
 below is retained as evidence. Read [docs/progress-gt5.md](docs/progress-gt5.md)
@@ -57,9 +57,9 @@ measurements; never copy their Prologue addresses. New controls and feedback
 options are neutral/off by default. Existing explicit preload-off settings
 are preserved. All rollbacks and validation are in the review document.
 
-DXC is implemented as an optional compiler (F1 SHADERS, or
-`RSX_SHADER_COMPILER=dxc`). Fetch the pinned DLL pair with `scripts/get_dxc.py`
-and rebuild. FXC stays the default pending GT5 parity acceptance. DXC stores
+DXC is the default compiler since release 0.1.0 (F1 SHADERS, or
+`RSX_SHADER_COMPILER=fxc` for rollback). Fetch its pinned DLL pair with `scripts/get_dxc.py`
+and rebuild. Synthetic differences remain documented. DXC stores
 all compiler-dependent caches under `dxc-1.8.2502-sm60-v1/`; do not move old FXC
 recipes into it. See [docs/dxc.md](docs/dxc.md) and Phase 34 for the synthetic
 differences, live checks and offline preparation contract.
@@ -83,7 +83,7 @@ inputs, pinned downloads) and `scripts/release/package_player.py`
 (allowlist; never game files). Releases carry the ZIP; the tag is
 `v<CMake project VERSION>`.
 
-**GT5 screens for the settings page (GT5 Phase 37).** Skip opening movie,
+**GT5 screens for the settings page (GT5 Phase 38).** Skip opening movie,
 F1 race pause, the Options "PC settings" tag and controller-style button
 prompts work on GT5. Their GT5 values are in `config/targets.json`
 (`movie_screen`, `screen_roles`, `top_menu_word`, `menu_listbox_vtable`,
@@ -101,6 +101,17 @@ leave the menu index (`RSX_PSO_MENU_EXCLUDE_RACE=0` old). Race pack verified
 live: see Phase 36. `PAD_FILE_LOG=2` logs every file stat/open, for finding a
 screen's marker file. A private test build can be linked from another
 checkout's objects without rebuilding the lifted code: Phase 36 notes.
+
+**Player setup (GT5 Phase 37).** `build/tourline5.exe` selects storage, a GT5
+disc dump and the 01.04 installed data/executable. RPCS3 can decrypt a temporary
+copy. The disc stays in place; installed data is copied/verified into storage.
+The default is `%LOCALAPPDATA%\ProjectTourline5`; custom/external storage is
+remembered. Change storage copies verified data and preserves the source.
+See [docs/setup.md](docs/setup.md). The launcher owns F1 restarts through
+`src/pt5_restart.h`; direct developer launches retain their existing behavior.
+`config/pt5-player.json` pins the executable identity. Release packaging now
+includes the launcher/shortcuts and supports `--stage-dir`; no game files enter
+the package. `scripts/test/player_setup.py` uses synthetic identities/processes.
 
 ## Start here: historical Prologue state (2026-10-21, Phase 108)
 

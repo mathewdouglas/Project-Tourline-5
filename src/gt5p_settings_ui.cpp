@@ -48,6 +48,7 @@
 #include "gt5p_debug_export.h"
 #include "gt5p_glyphs.h"
 #include "gt5p_keymap.h"
+#include "pt5_restart.h"
 
 #pragma comment(lib, "msimg32.lib")   /* AlphaBlend */
 
@@ -425,6 +426,10 @@ std::wstring widen(const std::string& s)
 
 void relaunch()
 {
+    if (pt5_restart::managed()) {
+        fflush(stdout); fflush(stderr);
+        ExitProcess(pt5_restart::exit_code); // Launcher waits, then restarts under its existing storage lease.
+    }
     /* The environment holds the variables loading the old file set; the new
      * process must read the new file instead. Clear the ones it set. */
     for (const Item& it : items())
