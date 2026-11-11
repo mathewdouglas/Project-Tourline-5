@@ -4,6 +4,100 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Phase 40 - GT5 wait yielding, FMA images and native clears (2026-11-11)
+
+Implemented against **BCUS98114-v104**, using a private runtime at the pinned
+5244db9 baseline. No runtime patch, FIFO, pager, SPURS scheduler, texture
+lifetime, shader compiler or guest timing constants changed.
+
+**PPU waits yield.** `func_00D1B930` waits for SPU job progress: it repeatedly
+loads the completed halfwords at +2 through +0xE of the selected job slot,
+compares their minimum with the requested progress, and branches back to
+`0x00D1B9B0` to reload them. This is a wait, not the adjacent bounded list
+walk at `0x00D1B990`. The target now lists this wait, the pure slot-3
+completion wait at
+`0x00D1DE48`, and three ring-job completion polling loops
+(`0x00C34BDC`, `0x00C35254`, `0x00C357FC`) in `spin_waits`;
+`scripts/spin_patch.py` adds the existing pause/yield/short-sleep helper on
+each back edge after every lift. Guest loads, fences and comparisons still
+run. `GT5P_SPIN_YIELD=0` restores pause-only spinning;
+`GT5P_SPIN_SLEEP_US` retains the shared 100 us default. The first live
+trace, with only the direct `0x00D1B9B0` hook, recorded
+no `Q` sleep events; no race-speed benefit is claimed for that hook. The
+other four waits call the same measured completion query `0x00D1AB10`;
+their waiting paths have no memory writes or service calls. `spin_waits.py`
+checks the actual private source, each single back edge and exact
+patch/restore equivalence. This does not
+replace the runtime's atomic/mutex waits or claim to resolve Phase 32's
+job-countdown freeze.
+
+**Audio images.** `audio_native_images` in `config/targets.json` supplies
+this executable's measured identities to CMake and the baseline CPU
+dispatcher. GT5's mixer is `jD58063CD` (image 11); the audio chain also uses
+`jEB79FDFC`, `jF523F26F` and `jFDFFAAC1` (12-14). The race baseline sampled
+the mixer's blocks 0x4720, 0x4C80 and 0x44CC; earlier menu measurements
+identified image 13's AC3 path and image 14's output stage. Prologue retains
+its own three identities. There is no cross-title address substitution.
+
+Private aliases of these lifted images compile with `-msse4.1 -mfma`;
+CPU selection and all normal game/runtime code retain baseline flags.
+CPUID, OSXSAVE and XCR0 must permit FMA/YMM, the image fingerprint and ID
+must match, and every function must exist in the registry before any
+replacement is installed. `GT5P_AUDIO_NATIVE=0` restores the portable
+images. Registrations happen before workers or lookup caches can run.
+
+**SPU rendering.** The baseline's workload-4 sample is led by GT5's own
+vector kernels (body `0x0196FF40`, particularly blocks 0xB240, 0xAD30 and
+0xC5E0), not a measured Prologue-style sorted-list replacement. A private
+FMA copy of that body is available with **`GT5P_SPU_FMA=1`**, off by default.
+Before replacing its function table, the dispatcher checks the loaded
+55,488 bytes at `0x0196FF40` against fingerprint `76FF30204F3B9A9E` and
+preflights image 51's whole table. It retains the overlay mapping and all
+guest branches, registers, DMA and interrupt handling. This compiles the
+existing translated code with hardware fused helpers; it is not a new
+handwritten approximation of the render algorithm. Broader scene and
+race acceptance is still needed before making it a default. F8 exports
+this switch so a report identifies the active path.
+
+The already measured `gt5p_spu_clear_words` loop now uses one bulk clear,
+or two when local store wraps, instead of a host word-at-a-time loop.
+It still leaves the final iteration lifted to reproduce every scratch
+register. `GT5P_SPU_NATIVE=0` disables it; check mode 2 leaves guest state
+untouched. The live run reports tens of thousands of native clears per
+five-second window.
+
+**Frame-pacing result: no GT5 race sleep to skip.** The `perf39-audio`
+High Speed Ring trace recorded 850 render frames, including the rolling
+start, and **zero** render-thread `S` (usleep) events. Logging every sleep
+(`PS3_USLEEP_LONG=1`) found thread 32's sleeps only while booting/loading:
+33,332 us at `0x006474B8` and 2,000 us at `0x00A59F9C`. The continuous
+16,000/12,500 us callers belong to other service threads. They are not
+Prologue's history-based frame padding. `frame_pacer_sleep_lr` therefore
+stays unset for GT5; bypassing those service sleeps would not implement
+the Prologue optimization. Other GT5 modes remain unmeasured.
+
+**Validation.** Release engine and launcher build against the private
+runtime. `audio_native.py` checks both target tables, CPU/OS fallback,
+missing fingerprints/IDs/functions, all-or-nothing preflight, independent
+audio/render switches and render-body fingerprint mismatch. The real
+registry replacement check also passes. `audio_math.py`: six million
+fused-helper lanes match scalar `fmaf`, MXCSR controls unchanged.
+`audio_gt5.py`: 512 comparisons of the actual private mixer loops at
+0x4720/0x4C80 agree with scalar fused code for all registers and all
+256 KiB of local store, FTZ/DAZ on and off. `spu_clear.py`: 1,200 actual
+lifted-loop comparisons, including LS wrapping, unaligned bases and
+nonzero-fill fallback, plus check-mode state retention. The new tests
+extract private lifted instructions into ignored scratch files; no game
+code or data is added to the repository.
+
+The `perf39-on` live High Speed Ring run registers 2,410 native audio
+functions and 498 render-body functions, reaches gameplay and draws the
+race/HUD/mirror. Audio runs at ~187.5 blocks/s, 0% silent in the recorded
+race windows. These are functional checks, not a controlled FPS improvement
+claim. Hardware FMA agrees with scalar fused arithmetic; rare rounding
+results may differ from the portable double-intermediate approximation.
+All captures, traces, image aliases and caches remain private in scratch.
+
 ## Phase 38 — Skip movie, button prompts, F1 race pause and the Options hint on GT5 (2026-11-11)
 
 Four settings-page features came from Prologue keyed to its screen-script

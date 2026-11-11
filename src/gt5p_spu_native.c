@@ -156,12 +156,17 @@ void gt5p_spu_clear_words(spu_context* ctx)
     if (!native_mode()) return;
     const uint32_t r15 = ctx->gpr[15]._u32[0], end = ctx->gpr[6]._u32[0], base = ctx->gpr[83]._u32[0];
     const u128* r7 = &ctx->gpr[7];
-    if ((r15 & 3) || (end & 3) || r15 + 4 >= end || end - r15 > SPU_LS_SIZE) return;
+    if ((r15 & 3) || (end & 3) || end <= r15 || end - r15 <= 4 || end - r15 > SPU_LS_SIZE) return;
     if (r7->_u32[0] | r7->_u32[1] | r7->_u32[2] | r7->_u32[3]) return;
     const int check = native_mode() == 2;
-    for (uint32_t a = r15; a + 4 < end; a += 4) {
-        uint8_t* p = &ctx->ls[(a + base) & SPU_LS_MASK & ~3u];
-        if (!check) memset(p, 0, 4);
+    if (!check) {
+        /* The word stores are contiguous, including a possible LS wrap.
+         * Keep the last iteration lifted so all scratch registers agree. */
+        const uint32_t start = (r15 + base) & SPU_LS_MASK & ~3u;
+        const uint32_t bytes = end - 4 - r15;
+        const uint32_t first = bytes < SPU_LS_SIZE - start ? bytes : SPU_LS_SIZE - start;
+        memset(ctx->ls + start, 0, first);
+        if (bytes > first) memset(ctx->ls, 0, bytes - first);
     }
     if (!check) for (int i = 0; i < 4; i++) ctx->gpr[15]._u32[i] += (end - 4) - r15;
     if (s_stats) { InterlockedIncrement64(&s_clears); InterlockedAdd64(&s_clear_words, (end - 4 - r15) / 4); native_report2(); }

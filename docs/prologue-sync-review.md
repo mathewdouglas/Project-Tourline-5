@@ -241,3 +241,14 @@ the DXC patch; it applied without changes. The pack and its index sit in the
 reads the other's. Driver blobs are in the directory above it in both cases.
 The pack stores bytecode without interpreting it. Both queue tests pass on
 the merged runtime with FXC; the pack was not exercised with DXC bytecode.
+
+## Follow-up: GT5 CPU paths (Phase 40)
+
+GT5 now supplies its SPU-progress wait and audio image identities rather than
+leaving Prologue hooks inert. Audio uses the existing CPU/OS-gated FMA path;
+GT5's measured vector render body has a separate opt-in, fingerprint-checked
+FMA copy. Native clears use bulk writes with actual lifted-loop parity tests.
+The measured HSR render thread never calls usleep while racing, so no
+frame-pacing sleep was bypassed. See [Phase 40](progress-gt5.md) for tests,
+live coverage and the render-copy acceptance still owed. The runtime
+compatibility patch was not changed.

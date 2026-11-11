@@ -36,7 +36,7 @@ boot milestone upstream reaches.
 Treat every statement about BCUS98158 as a hypothesis unless it appears under
 "Measured on the disc build" below.
 
-## Current GT5 continuation (2026-11-11, GT5 Phase 37)
+## Current GT5 continuation (2026-11-11, GT5 Phase 40)
 
 This branch targets **Gran Turismo 5 BCUS98114-v104**. The Prologue history
 below is retained as evidence. Read [docs/progress-gt5.md](docs/progress-gt5.md)
@@ -82,6 +82,16 @@ for FXC; measurement runs now use DXC's cache folder). Player ZIPs come from
 inputs, pinned downloads) and `scripts/release/package_player.py`
 (allowlist; never game files). Releases carry the ZIP; the tag is
 `v<CMake project VERSION>`.
+
+**GT5 CPU work (Phase 40).** Five measured SPU-progress wait loops now yield
+(`spin_waits`; run `scripts/spin_patch.py` after lifting). GT5 audio uses target-specific CPU-dispatched FMA images
+(`GT5P_AUDIO_NATIVE=0` off); the measured render body has an opt-in FMA copy
+(`GT5P_SPU_FMA=1`, content fingerprint checked). Native table clears use
+bulk writes, retaining the lifted final iteration. Tests: `audio_native.py`,
+`audio_math.py`, `audio_gt5.py`, `spu_clear.py`, `spin_waits.py` under
+`scripts/test/`.
+High Speed Ring tracing found no render-thread pacing sleep, so GT5's
+`frame_pacer_sleep_lr` remains unset. See Phase 40 for coverage and limits.
 
 **GT5 screens for the settings page (GT5 Phase 38).** Skip opening movie,
 F1 race pause, the Options "PC settings" tag and controller-style button
