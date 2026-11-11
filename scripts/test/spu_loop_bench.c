@@ -42,10 +42,17 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel) { (void)ctx; (void)channel; un
 void spu_wrch(spu_context* ctx, uint32_t channel, u128 value) { (void)ctx; (void)channel; (void)value; unreached("spu_wrch"); }
 void spu_halt(spu_context* ctx) { (void)ctx; unreached("spu_halt"); }
 void spu_stop(spu_context* ctx) { (void)ctx; unreached("spu_stop"); }
+#if defined(BENCH_RP) || defined(BENCH_REGION)
+volatile int g_spu_exp;
+#endif
+#ifdef BENCH_REGION
+/* The merged region (scripts/spu_region.py), switched on. */
+volatile int g_gt5p_spu_region = 1;
+int gt5p_spu_region_init(void) { return 1; }
+#endif
 #ifdef BENCH_RP
 /* Register-promoted copies (scripts/spu_regpromo.py), switched on. */
 volatile int g_gt5p_spu_regpromo = 1;
-volatile int g_spu_exp;
 int gt5p_spu_regpromo_init(void) { return 1; }
 void gt5p_spu_regpromo_check(spu_context* ctx, void (*orig)(spu_context*), void (*promo)(spu_context*), uint32_t block)
 { (void)ctx; (void)orig; (void)promo; (void)block; }

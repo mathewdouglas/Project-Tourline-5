@@ -66,11 +66,14 @@ the injected total. The loop does not run at High Speed Ring.
 ## Next steps, in order
 
 0. **Eiger: speed up body `0x01697100`'s loop** (Phase 45). The offline
-   benchmark exists (`scripts/test/spu_loop_bench.py`, captured states);
-   faster helpers, per-function promotion and a merged loop with registers
-   in locals were all exact and no faster (0.75-0.96x). Remaining: a native
-   loop (routine `0x7FE0`) with a check mode, timed on the captured states.
-   Also wake the SPURS kernel on an SPU's ready-count store (0.8 ms a frame).
+   benchmark exists (`scripts/test/spu_loop_bench.py`, captured states).
+   Done: the loops merged with registers as `__m128i` locals
+   (`scripts/spu_region.py`, default on): exact, 1.3-1.5x on the loop,
+   frames 7.5-8% shorter at Eiger within one boot. Faster helpers and
+   promotion with `u128` locals were no faster; waking the kernel on an SPU
+   ready-count store was not measurable (off). Next: more regions on
+   workload 0's lane (bodies `0x016B5B00`, `0x016D2700`), then a native loop
+   if still needed.
 1. **Race timeline of a slow stretch**: pick the window from a frame test's
    `frames.csv` (the late intervals cluster by lap position) and place
    `PS3_TIMELINE` there. Does the frame wait on wid4, the walk, or the game

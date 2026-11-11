@@ -18,7 +18,39 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
          if (spurs_kern_wake_on()) spurs_kern_wake(ea);
          return;
      }
-@@ -1958,6 +1959,8 @@
+@@ -675,6 +676,31 @@
+ }
+ 
+ static DWORD WINAPI spurs_kernel_thread(LPVOID p);
++
++/* SPURS_SPU_KICK_WAKE: called after a write to an instance's ready-count
++ * line (spu_coh_watch_line). The line also holds bytes the job manager
++ * writes all the time; only a count that went from 0 to non-zero wakes. */
++void spu_coh_watch_line(uint32_t line, void (*fn)(uint32_t line));   /* spu_coherency.c */
++static void spurs_ready_line_written(uint32_t line)
++{
++    static u8 shadow[MAX_SPURS_INST][16];
++    for (int k = 0; k < MAX_SPURS_INST; k++) {
++        if (!s_inst[k].ea || (s_inst[k].ea & ~127u) != line) continue;
++        const u8* r = vm_base + s_inst[k].ea + SPURS_WKL_READY1;
++        int wake = 0;
++        for (int w = 0; w < 16; w++) {
++            const u8 v = r[w];
++            /* A running workload needs no kernel: its lanes take the work. */
++            if (v && !shadow[k][w] && !spurs_wkl_busy(s_inst[k].ea, (u32)w)) wake = 1;
++            shadow[k][w] = v;
++        }
++        /* =2: only while g_spu_exp (SPU_EXP_AB=1 flips it every 5 s). */
++        { extern volatile int g_spu_exp; static int mode = -1;
++          if (mode < 0) { const char* e = getenv("SPURS_SPU_KICK_WAKE"); mode = e ? atoi(e) : 0; }
++          if (mode == 2 && !g_spu_exp) wake = 0; }
++        if (wake) spurs_kern_wake(s_inst[k].ea);
++    }
++}
+ 
+ /* SPURS_LANES=1: one kernel thread per SPU of an instance, each owning the
+  * workloads whose id is congruent to its lane.
+@@ -1958,6 +1984,8 @@
      uint32_t delay_us;     /* ...or this many microseconds late (SPURS_LANE_STAGGER_US) */
      volatile LONG* working; /* group lanes inside a run right now, or NULL */
      volatile int* did_work; /* set when a run of this lane did work, or NULL */
@@ -27,7 +59,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
  };
  
  /* One virtual SPU of a workload group. A lane whose run ends at once found the
-@@ -2086,7 +2089,14 @@
+@@ -2086,7 +2114,14 @@
                  continue;
              }
          }
@@ -43,7 +75,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
              if (s_ldbg && a->working)
                  fprintf(stderr, "[lane] wid=%u spu=%u leaves: ran %llu ms, %d retries, %ld others working\n",
                          a->wid, a->spu_num, ran, tries, (long)others);
-@@ -2102,7 +2112,12 @@
+@@ -2102,7 +2137,12 @@
              tries = 0;
          }
          spurs_ready_inc(a->ea, a->wid, 8);             /* what the module took on its way out */
@@ -57,7 +89,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      }
  }
  /* Called at the start of every lane thread when set: a sampling profiler can
-@@ -2145,6 +2160,8 @@
+@@ -2145,6 +2185,8 @@
      u32 dispatch_n;
      volatile LONG remaining;           /* lanes not yet back */
      volatile LONG working;
@@ -66,7 +98,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
  };
  static struct spurs_wkl_group s_wkl_group[CELL_SPURS_MAX_WORKLOAD];
  static int spurs_wkl_busy(u32 ea, u32 wid)
-@@ -2152,6 +2169,27 @@
+@@ -2152,6 +2194,27 @@
      if (wid >= CELL_SPURS_MAX_WORKLOAD) return 0;
      const struct spurs_wkl_group* g = &s_wkl_group[wid];
      return g->busy && g->a.ea == ea;
@@ -94,7 +126,19 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
  }
  static DWORD WINAPI spurs_wkl_group_thread(LPVOID p)
  {
-@@ -2468,6 +2506,8 @@
+@@ -2427,7 +2490,10 @@
+                   static int ab = -1; if (ab < 0) ab = getenv("SPU_FAST_AB") ? 1 : 0;
+                   extern volatile int g_spu_exp;
+                   static int xab = -1; if (xab < 0) xab = getenv("SPU_EXP_AB") ? 1 : 0;
+-                  fprintf(stderr, "[lane-cyc] fast=%d pin=%d exp=%d", g_spu_fast, g_lane_pin, g_spu_exp);
++                  { FILETIME ft; GetSystemTimePreciseAsFileTime(&ft);   /* wall clock, to match GT5P_FRAME_LOG */
++                    const unsigned long long t100 = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
++                    fprintf(stderr, "[lane-cyc] t=%.0f fast=%d pin=%d exp=%d", (double)(t100 - 116444736000000000ull) / 10000.0,
++                            g_spu_fast, g_lane_pin, g_spu_exp); }
+                   for (int k = 0; k < CELL_SPURS_MAX_WORKLOAD; k++) {
+                       LONG n = InterlockedExchange(&s_n[k], 0);
+                       LONG64 wl = InterlockedExchange64(&s_wall[k], 0), cy = InterlockedExchange64(&s_cy[k], 0);
+@@ -2468,6 +2534,8 @@
          if (!t) { if (g->lane_go[i]) CloseHandle(g->lane_go[i]); g->lane_go[i] = NULL; return 0; }
          CloseHandle(t);
      }
@@ -103,7 +147,7 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
      g->dispatch_n++;
      /* SPURS_LANE_MASK (on): a WWS job list names the SPUs allowed on it in a
       * byte at its header +0x2F (bit 0x80 >> spuNum). Gran Turismo 5
-@@ -2509,6 +2549,8 @@
+@@ -2509,6 +2577,8 @@
          g->lane_a[i].spu_num = i;
          g->lane_a[i].working = &g->working;
          g->lane_a[i].did_work = &g->lane_work[i];
@@ -112,7 +156,21 @@ diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
          g->lane_a[i].delay_ms = stus >= 0 ? 0 : (uint32_t)st * k;
          g->lane_a[i].delay_us = (stus >= 0 && k) ? (uint32_t)stus : 0;
          k++;
-@@ -2885,6 +2927,7 @@
+@@ -2639,6 +2709,13 @@
+     static volatile long s_pm_off = -1;
+     if (s_pm_off < 0) s_pm_off = getenv("PS3_NO_SPURS_PM") ? 1 : 0;
+ 
++    /* SPURS_SPU_KICK_WAKE=1: a workload whose ready count an SPU raises from
++     * 0 (the job manager kicking a dependent list) wakes this kernel at once,
++     * as a PPU kick does, instead of at its next 1 ms poll. At Eiger Nordwand
++     * workload 0 releases workload 1 that way before every frame's end
++     * (GT5 Phase 45: 0.8 ms from the store to the dispatch). Default off. */
++    { const char* kw = getenv("SPURS_SPU_KICK_WAKE");
++      if (kw && (*kw == '1' || *kw == '2')) spu_coh_watch_line(si->ea + SPURS_WKL_READY1, spurs_ready_line_written); }
+     fprintf(stderr, "[spurs-kern] \"%s\" poll thread live: ea=0x%08X pm=%s\n",
+             si->prefix, si->ea, s_pm_off ? "DISABLED (PS3_NO_SPURS_PM)" : "enabled");
+     fflush(stderr);
+@@ -2885,6 +2962,7 @@
                          wa[nth].arg = arg; wa[nth].wid = wid; wa[nth].ea = ea;
                          wa[nth].spu_num = sn;
                          wa[nth].delay_ms = 0; wa[nth].delay_us = 0; wa[nth].working = NULL; wa[nth].did_work = NULL;
@@ -156,6 +214,58 @@ diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
  
  /* Invalidate a tile region (unbind + clear) */
  s32 cellGcmSetInvalidateTile(u8 index)
+diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
+--- a/runtime/spu/spu_coherency.c
++++ b/runtime/spu/spu_coherency.c
+@@ -389,10 +389,26 @@
+  *
+  * The PUTLLC path already guards this case by dropping its own reservation
+  * before notifying; this gives the DMA path the same ability. */
++static volatile uint32_t s_wl_line[8];
++static void (*volatile s_wl_fn[8])(uint32_t);
++static volatile int s_wl_n;
++void spu_coh_watch_line(uint32_t line, void (*fn)(uint32_t))
++{
++    line &= ~127u;
++    for (int i = 0; i < s_wl_n; i++) if (s_wl_line[i] == line) return;
++    if (s_wl_n >= 8) return;
++    s_wl_line[s_wl_n] = line; s_wl_fn[s_wl_n] = fn;
++    s_wl_n = s_wl_n + 1;
++}
++static inline void wl_note(uint32_t line)
++{
++    for (int i = 0; i < s_wl_n; i++) if (s_wl_line[i] == line && s_wl_fn[i]) s_wl_fn[i](line);
++}
+ void spu_coh_notify_write_except(uint32_t ea, const void* self)
+ {
+     uint32_t line = ea & ~127u;
+     if (s_rl_n) rowlog_note(line);
++    if (s_wl_n) wl_note(line);
+     const int mir = spu_coh_mirror_on();
+     for (int i = 0; i < SPU_COH_MAX_CTX; i++) {
+         if (mir && s_coh_line[i] != (line | 1u)) continue;
+@@ -411,6 +427,7 @@
+ {
+     uint32_t line = ea & ~127u;
+     if (s_rl_n) rowlog_note(line);
++    if (s_wl_n) wl_note(line);
+     const int mir = spu_coh_mirror_on();
+     for (int i = 0; i < SPU_COH_MAX_CTX; i++) {
+         if (mir && s_coh_line[i] != (line | 1u)) continue;
+diff --git a/runtime/spu/spu_coherency.h b/runtime/spu/spu_coherency.h
+--- a/runtime/spu/spu_coherency.h
++++ b/runtime/spu/spu_coherency.h
+@@ -71,6 +71,10 @@
+  * Expects the lock-line lock held, so that the store this is reporting and the
+  * reservation state it clears are seen by an SPU's PUTLLC as one transaction. */
+ void spu_coh_notify_write(uint32_t ea);
++/* Call fn(line) after every write to a 128-byte line that reaches the
++ * notify functions (PPU coherent stores, PUTLLC commits, DMA PUTs), under
++ * the lock-line lock: fn must be short. Up to 8 lines. */
++void spu_coh_watch_line(uint32_t line, void (*fn)(uint32_t line));
+ /* Remove a context from the reserving set. MUST be called before a
+  * transient (stack-allocated) spu_context goes out of scope. */
+ void spu_coh_unregister(spu_context* ctx);
 diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
 --- a/runtime/spu/spu_context.h
 +++ b/runtime/spu/spu_context.h

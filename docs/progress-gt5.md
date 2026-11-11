@@ -150,16 +150,58 @@ memory-resident `ctx->gpr` compiles better (hypothesis for the cause). None
 was kept: the runtime is unchanged. Upper bounds from deliberately wrong cheap
 helpers do not work here: wrong values change the loop's control flow.
 
+**The loop merged, registers as `__m128i` (default on).** The merged form
+above was slow because its locals were `u128` unions. With the registers held
+as `__m128i` and each helper still given and returning its `u128` through a
+no-op conversion (the same arithmetic code), clang keeps them in XMM registers
+across iterations. `scripts/spu_region.py` is now a post-SPU-lift step (after
+`spu_regpromo.py`; `spu_regions` in `config/targets.json`; `--check`,
+`--restore`; in `clean_build.py`). Two regions of body `0x01697100`:
+
+- `0x8298` loop (8 functions, 81 registers): 1.28-1.48x on `loopcap2`;
+- `0x7E58`/`0x7F10`/`0x7FC4` (3 functions, the `0x7DC8` routine): 1.41-1.43x
+  on `loopcap`.
+
+Both give identical registers and local store on all 16 states of each set.
+Each member function starts with a switch on `GT5P_SPU_REGION`
+(`src/gt5p_spu_native.c`): 1 the region (default), 0 the lifted functions,
+3 the region while `g_spu_exp` is set. Only with the local-store probes
+compiled out (the default), as for register promotion.
+
+In the game, within one boot (`GT5P_SPU_REGION=3 SPU_EXP_AB=1
+SPURS_LANE_CYC=1`, 5 s windows matched to the frame log by the new wall-clock
+`t=` on `[lane-cyc]` lines, `scratch/abwin.py`), 90 s at Eiger:
+
+| Boot | Region off | Region on | Change |
+| --- | --- | --- | --- |
+| `erab1` | 23.81 ms | 22.02 ms | -1.79 ms (-7.5%) |
+| `erab2` | 24.50 ms | 22.52 ms | -1.98 ms (-8.1%) |
+
+Whole-run numbers on this machine now swing by 10 FPS with background load
+(~30% CPU busy without the game): High Speed Ring gave 45.3 FPS with the
+default and 36.2 with `GT5P_SPU_REGION=0` minutes apart, though the loop never
+runs there. Compare within one boot.
+
+**SPU kicks wake the kernel** (`SPURS_SPU_KICK_WAKE=1`, runtime, off). A new
+`spu_coh_watch_line` hook calls cellSpurs after writes to an instance's
+ready-count line; a count that goes from 0 to non-zero for an idle workload
+wakes the kernel. Release to dispatch: 0.66 ms median (p90 1.35) -> 0.010 ms
+(p90 0.016) (`erl2`). Within one boot (`=2` follows `g_spu_exp`): +1.4 ms
+before the idle-workload filter (`ekab1`), then +1.5 and -0.5 ms (`ekab2`,
+`ekab3`): not measurable against the lap's window-to-window spread. Off.
+
 **Next:** make that loop faster. Lane counts, FMA copies and wake changes do
 not shorten a single serial loop (the FMA copy of the body, one run, 46.0
 FPS). In order:
 
 1. ~~An offline benchmark~~ done (above).
 2. ~~Cheaper helpers~~ measured: no gain (above).
-3. A native implementation of the loop's semantics with a check mode, as
-   Phase 111 did for Prologue's sorted walk (`GT5P_SPU_NATIVE=2`), checked
-   and timed against the captured states first. The remaining route.
-4. Wake the kernel when an SPU stores a ready count (0.8 ms a frame).
+3. ~~Merged loops~~ done: `spu_region.py`, default on, -7.5 to -8% frame
+   time at Eiger.
+4. ~~Wake the kernel on an SPU ready-count store~~ done, not measurable, off.
+5. More regions: the rest of workload 0's lane (bodies `0x016B5B00` 11%,
+   `0x016D2700` 3.6% of its samples), found with `spu_loop_bench.py --count`
+   on fresh captures; then a native loop if still needed.
 
 ## Phase 44 - Workload 4's render pass: lane stagger, register promotion (2026-11-11)
 

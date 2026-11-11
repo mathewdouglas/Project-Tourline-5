@@ -267,7 +267,7 @@ void gt5p_spu_regpromo_check(spu_context* ctx, void (*orig)(spu_context*),
  * taken GT5P_SPU_CAPTURE_AFTER_MS after the function's first call (default
  * 20000: into the race), then one every GT5P_SPU_CAPTURE_GAP_MS (default
  * 500), GT5P_SPU_CAPTURE_N in all (default 8). The file holds game-derived
- * data: keep it under scratch/, never track it. Record: "SPUCAP1 ", u32
+ * data: keep it under scratch/, never track it. Record: "SPUCAP1\0", u32
  * function address, u32 pc, u32 image id, u32 calls so far, then gpr[128]
  * and the 256 KB local store as in spu_context. */
 void gt5p_spu_capture(spu_context* ctx, uint32_t addr)
@@ -310,4 +310,24 @@ void gt5p_spu_capture(spu_context* ctx, uint32_t addr)
         }
     }
     ReleaseSRWLockExclusive(&lk);
+}
+
+/* GT5P_SPU_REGION (scripts/spu_region.py, GT5 Phase 45): 1 (default) the
+ * merged copies of the listed lifted loops, with the registers in locals;
+ * 0 the lifted functions as they are; 3 the merged copy while g_spu_exp is
+ * set (SPU_EXP_AB=1 SPURS_LANE_CYC=1 flips it: A/B within one boot).
+ * Measured at Eiger Nordwand: frames 7.5-8% shorter with it, within one
+ * boot; the loops are identical in registers and local store
+ * (scripts/test/spu_loop_bench.py). Only targets that list spu_regions have
+ * merged copies. */
+volatile int g_gt5p_spu_region = -1;
+int gt5p_spu_region_init(void)
+{
+    const char* e = getenv("GT5P_SPU_REGION");
+    int m = e ? atoi(e) : 1;
+    if (m != 1 && m != 3) m = 0;
+    if (m != 1 && g_gt5p_spu_region < 0)
+        fprintf(stderr, "[spu-region] mode %d%s%c", m, m == 3 ? " (A/B on g_spu_exp)" : "", 10);
+    g_gt5p_spu_region = m;
+    return m;
 }

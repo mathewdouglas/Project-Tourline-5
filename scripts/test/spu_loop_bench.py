@@ -68,10 +68,11 @@ for v in variants:
         # The loop's functions merged into one with registers in locals.
         sys.path.insert(0, str(root / "scripts"))
         import spu_region
-        text, report = spu_region.region_text(a.image, region, src_v.read_text(encoding="utf-8"))
+        text, report = spu_region.patch_image(a.image, [region], src_v.read_text(encoding="utf-8"))
         print(f"{name}: " + "; ".join(report))
         src_v = out / "region.c"
-        src_v.write_text(text, encoding="utf-8")
+        src_v.write_bytes(text.encode("utf-8"))
+        defs.append("/DBENCH_REGION")
     cmd = ('"C:\\Program Files\\LLVM\\bin\\clang-cl.exe" /nologo /O2 /Ob2 /MD /std:c17 /W0 -msse4.1 '
            '/D_CRT_SECURE_NO_WARNINGS /DSPU_LS_NO_PROBES '
            f'/DBENCH_LIFTED="\\"{src_v.as_posix()}\\"" /DBENCH_REGISTER=gt5p_{a.image}_spu_recomp_register '

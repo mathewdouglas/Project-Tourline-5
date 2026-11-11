@@ -104,7 +104,7 @@ scripts/build.cmd -DGT5P_TARGET=BCUS98114-v104
 
 `code_labels.py --write` is required. It seeds the computed-goto labels in the title's script VM. Without those labels the boot stops on a null object after the warning screen.
 
-Generated sources stay in gitignored `generated/`. The committed SPU registry is `src/gen/spu_workloads_bcus98114_v104.c`. Captured SPU images are produced locally with `SPU_DUMP_MISS` and `python scripts/lift_spu_jobs.py`. After every SPU lift, run `python scripts/spu_native_patch.py`, then `python scripts/spu_regpromo.py`. The job bodies come from the executable (`wws_job_bodies` in [config/targets.json](config/targets.json)). Re-run the lifts when ps3recomp's lifters change.
+Generated sources stay in gitignored `generated/`. The committed SPU registry is `src/gen/spu_workloads_bcus98114_v104.c`. Captured SPU images are produced locally with `SPU_DUMP_MISS` and `python scripts/lift_spu_jobs.py`. After every SPU lift, run `python scripts/spu_native_patch.py`, then `python scripts/spu_regpromo.py`, then `python scripts/spu_region.py`. The job bodies come from the executable (`wws_job_bodies` in [config/targets.json](config/targets.json)). Re-run the lifts when ps3recomp's lifters change.
 
 Then run `build\gt5.exe`.
 
