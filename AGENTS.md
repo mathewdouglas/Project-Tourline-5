@@ -83,6 +83,11 @@ inputs, pinned downloads) and `scripts/release/package_player.py`
 (allowlist; never game files). Releases carry the ZIP; the tag is
 `v<CMake project VERSION>`.
 
+**GT5 ultrawide (Phase 41).** 21:9 works on GT5: `aspect_16_9_float`,
+`ui_aspect_16_9_float` and `scene_camera_aspect_16_9_float` are measured for
+v104 in `config/targets.json`. Race, car list and menu checked at 1080p/1440p;
+other modes are unchecked. Never reuse these addresses for another executable.
+
 **GT5 CPU work (Phase 40).** Five measured SPU-progress wait loops now yield
 (`spin_waits`; run `scripts/spin_patch.py` after lifting). GT5 audio uses target-specific CPU-dispatched FMA images
 (`GT5P_AUDIO_NATIVE=0` off); the measured render body has an opt-in FMA copy

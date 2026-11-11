@@ -5,6 +5,11 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Ultrawide 21:9 for GT5 (F1 VIDEO > Aspect ratio, `video.aspect`): the race
+  and scene cameras widen with the same vertical view, and menus and the HUD
+  stay centred at 16:9. The aspect constants are measured for v104 (GT5 Phase 41).
+
 ### Fixed
 - Disc assets in setups with separate writable storage: absolute disc mappings
   now bypass the save-data root, allowing GT5 to open `GT.VOL` and read artwork

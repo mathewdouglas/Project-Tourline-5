@@ -4,6 +4,72 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Phase 41 - Ultrawide 21:9 on GT5 (2026-11-11)
+
+The Prologue ultrawide path (Phases 121-126) needs three aspect constants per
+executable; v104 had none, so `video.aspect = "21:9"` did nothing. All three
+are now measured for **BCUS98114-v104** and set in `config/targets.json`. No
+runtime, backend or shader change: the stage B renderer, edge stretching and
+pillarboxing were already shared.
+
+**Finding them (static).** The ELF holds twelve 16/9 floats (`0x3FE38E39`),
+all reached as `lfs d(r2)` from one of four TOCs (`0x18E9B58`, `0x18F96F8`,
+`0x19096F0`, `0x1919684`). No word or `lis`/`addi` pair points at any of them,
+so readers were found by resolving each instruction's TOC from the nearest
+OPD entry.
+
+- **`aspect_16_9_float` = `0x019133B0`.** Followed by 1.0 and 4/3, like
+  Prologue's table. Its only reader is `func_009AC680` (GT5's counterpart of
+  Prologue's `func_007AE548`). It calls the video aspect-mode getter
+  `0xD27970` and picks 4/3 for mode 1, 16/9 for mode 2, else 1.0. It then stores
+  set A and set B of the display block at `this+0x5D4` through `0xA51290` (+0x2C)
+  and `0xA512A0` (+0x28).
+- **`ui_aspect_16_9_float` = `0x01914A48`** (4/3 just before it). Read
+  three times. In `0xA0C6A8` it feeds set B (mode not 1) and then set A, and in
+  `0xA0DAF0` set A again, both through the set-A wrapper `0x9ABFCC`.
+  Unlike Prologue, this constant also reaches set B, so `GT5P_ULTRAWIDE_UI=0`
+  may leave the race camera at 16/9 if that path runs after boot (unmeasured).
+- **`scene_camera_aspect_16_9_float` = `0x018EB70C`.** Read only by
+  `0x1F2FAC` (two sites), which passes it to the camera setter `0xDD4504`.
+
+**Measured (runtime).** `GT5P_MEMSNAP` at the main menu with the first two
+patched: the display block (`0x4FFC65E8`, 1920x1080 twice) held 64/27 in both
+sets, but camera objects (vtable `0x01846C98`, field of view at +4, near 0.1,
+far 5000, aspect at +0x10) still held 16/9. One of them, with a 21.9 degree
+field of view, is in use. Their constructor `0x9FF210` copies the defaults from
+`0x191460C`, but patching that left them at 16/9. A store watch
+(`PPU_WWATCH=4FBE901C`) showed the constructor writing the patched value, then
+`0x1F3A64` overwriting it with 16/9 from `0x18EB70C`. With `0x18EB70C`
+patched, all three cameras hold 64/27. Five array entries (field of view about
+38 degrees) and one other object stay 16/9. Nothing seen needed them, and the
+constructor default `0x191460C` is left alone.
+
+**Checked** with the new build and `GT5P_ULTRAWIDE=1`, Arcade route
+(`gt5boot.ps1 -Route race|carlist|menu`), window shots in `scratch/pv/uw5*`:
+
+- 1080p (2560x1080), High Speed Ring: the view is wider with the same vertical
+  framing; the HUD is laid out centred at 16:9 by the game.
+- 1440p (3440x1440, 43/18): the same. The window was clamped to this monitor
+  (3232x1353 client area); proportions hold.
+- Car list: the 2D layout is centred at 16:9 and the background gradient
+  reaches the edges. The 3D car's length/height on screen is 2.23; the Fiat
+  500's is 2970/1335 = 2.22.
+- Main menu (3D background, icons centred) and the loading GT logo
+  (pillarboxed).
+- Frame delivery in the logged 5-second windows matches 16:9 runs. This is not
+  a frame test.
+
+**Not checked:** GT Mode, dealers, the garage, photo mode, replays, the
+opening movie at 21:9, pause menus, `GT5P_ULTRAWIDE_UI=0` and
+`GT5P_ULTRAWIDE_CAM=0`, anamorphic mode, 4K ultrawide. Prologue's My Page
+label-mask patch (`ui_label_mask_func`) stays Prologue-only. No GT5 label
+cut-off was seen on these screens.
+
+Build note: the earlier session's runtime junction
+`..\ps3recomp-tourline5` (beside this worktree) had disappeared; it was
+re-created pointing at the shared isolated runtime, which `setup_runtime.py
+--check` reports as 5244db9 plus the tracked patch. The runtime was not modified.
+
 ## Phase 40 - GT5 wait yielding, FMA images and native clears (2026-11-11)
 
 Implemented against **BCUS98114-v104**, using a private runtime at the pinned

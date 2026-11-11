@@ -87,6 +87,9 @@
     "spurs_synth_job_done": false,
     "spu_sn_defer": 4,
     "gcm_ctrl_base": "0x03000000",
-    "gt5p_allocwatch": false
+    "gt5p_allocwatch": false,
+    "aspect_16_9_float": "0x019133B0",
+    "ui_aspect_16_9_float": "0x01914A48",
+    "scene_camera_aspect_16_9_float": "0x018EB70C"
   }
 }
