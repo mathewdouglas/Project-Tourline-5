@@ -25,6 +25,7 @@ from pathlib import Path
 
 import target
 from dis import read
+from spu_registration import compact_registration
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = Path(os.environ.get("PS3RECOMP_DIR", ROOT.parent / "ps3recomp-tourline5")) / "tools"
@@ -123,6 +124,9 @@ def lift(blob, prefix, outdir, base=0, extra=None, gap_seeds=False):
         *(["--extra-funcs", extra] if extra else []),
         *(["--resume-funcs", ",".join(map(hex, sorted(resume)))] if resume else []),
         *(["--regcache"] if REGCACHE else []))
+    source = outdir / "spu_recomp.c"
+    source.write_text(compact_registration(source.read_text(encoding="utf-8")),
+                      encoding="utf-8", newline="\n")
     return int(n_funcs.group(1).replace(",", "")) if n_funcs else 0
 
 

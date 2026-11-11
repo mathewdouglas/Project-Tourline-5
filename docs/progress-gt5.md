@@ -4,6 +4,15 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Unused SPU registration names (2026-11-12)
+
+The public CAPE `vmdetect` YARA rule matches MAC-address fragments inside
+ordinary generated SPU function names in the v0.1.2 EXE. The local lift now
+removes the unused name column from SPU registration tables, retaining all
+function symbols, code and address/pointer pairs. No runtime patch changes.
+Evidence, validation and the distinction from unresolved vendor antivirus
+labels: [release-av.md](release-av.md). Existing builds need an SPU re-lift.
+
 ## Phase 45 - Eiger Nordwand in rain: the changes combined, and what its frame waits on (2026-11-12)
 
 Request: measure on Eiger Nordwand with weather change, a heavier track
