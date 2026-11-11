@@ -86,7 +86,9 @@ struct Img {
 struct Cell { int btn, x, y, w, h, fx, fy, fw, fh; };   /* f*: box to fit the art in, 0 = the button's own */
 /* A texture with button cells, or (outline) the game's highlight ring for one
  * button of a picture: cells[0] is then that button's box in the picture. */
-struct Entry { unsigned w, h; std::vector<Cell> cells; int inset = 0, ring = 5; bool outline = false; };
+/* rgba: an uncompressed texture's bytes are R,G,B,A rather than A,R,G,B (the
+ * title's sampler remap puts them back; GT5's button icons, order=rgba). */
+struct Entry { unsigned w, h; std::vector<Cell> cells; int inset = 0, ring = 5; bool outline = false, rgba = false; };
 
 std::map<unsigned long long, Entry> g_table;
 Img g_art[5][B_N];                     /* [style][button], empty = keep */
@@ -242,6 +244,46 @@ void encode_bc3(const Img& im, uint8_t* out)
 }
 
 size_t bc3_size(int w, int h) { return (size_t)((w + 3) / 4) * ((h + 3) / 4) * 16; }
+
+/* ---- A8R8G8B8 ---------------------------------------------------------------
+ * Gran Turismo 5's face-button icons are uncompressed A8R8G8B8, stored as
+ * big-endian words (bytes A, R, G, B), linear when the format's 0x20 bit is
+ * set and swizzled (Morton order, power-of-two sides only) when it is not. */
+size_t argb_index(int x, int y, int w, int h, bool linear)
+{
+    if (linear) return (size_t)y * w + x;
+    size_t i = 0; int bit = 0;
+    for (int m = 1; m < w || m < h; m <<= 1) {
+        if (m < w) { if (x & m) i |= (size_t)1 << bit; bit++; }
+        if (m < h) { if (y & m) i |= (size_t)1 << bit; bit++; }
+    }
+    return i;
+}
+bool argb_layout_ok(int w, int h, bool linear)
+{
+    return linear || ((w & (w - 1)) == 0 && (h & (h - 1)) == 0);
+}
+void decode_argb(const uint8_t* src, int w, int h, bool linear, bool rgba, Img& out)
+{
+    out.w = w; out.h = h; out.px.assign((size_t)w * h * 4, 0);
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            const uint8_t* q = src + argb_index(x, y, w, h, linear) * 4;
+            uint8_t* d = &out.px[((size_t)y * w + x) * 4];
+            if (rgba) memcpy(d, q, 4);
+            else { d[0] = q[1]; d[1] = q[2]; d[2] = q[3]; d[3] = q[0]; }
+        }
+}
+void encode_argb(const Img& im, bool linear, bool rgba, uint8_t* dst)
+{
+    for (int y = 0; y < im.h; y++)
+        for (int x = 0; x < im.w; x++) {
+            const uint8_t* s = &im.px[((size_t)y * im.w + x) * 4];
+            uint8_t* q = dst + argb_index(x, y, im.w, im.h, linear) * 4;
+            if (rgba) memcpy(q, s, 4);
+            else { q[0] = s[3]; q[1] = s[0]; q[2] = s[1]; q[3] = s[2]; }
+        }
+}
 
 /* Half size, box filtered with alpha weighting. */
 Img half(const Img& s)
@@ -437,13 +479,23 @@ bool outline_ring(const Entry& e, int style, Img& im)
 std::vector<uint8_t> build(const Entry& e, int style, unsigned w, unsigned h, unsigned fmt,
                            unsigned levels, unsigned nbytes, const uint8_t* src)
 {
-    if ((fmt & 0x9F) != 0x88 || w != e.w || h != e.h) return {};   /* DXT5 only */
-    if (nbytes < bc3_size((int)w, (int)h)) return {};
+    /* DXT5, or A8R8G8B8 (GT5P_GLYPHS_ARGB=0: DXT5 only, as before). */
+    static int argb_on = -1;
+    if (argb_on < 0) { const char* v = getenv("GT5P_GLYPHS_ARGB"); argb_on = !(v && v[0] == '0'); }
+    const bool argb = argb_on && (fmt & 0x9F) == 0x85, linear = (fmt & 0x20) != 0;
+    if (((fmt & 0x9F) != 0x88 && !argb) || w != e.w || h != e.h) return {};
     Img im;
-    decode_bc3(src, (int)w, (int)h, im);
+    if (argb) {
+        if (nbytes < (size_t)w * h * 4 || !argb_layout_ok((int)w, (int)h, linear)) return {};
+        decode_argb(src, (int)w, (int)h, linear, e.rgba, im);
+    } else {
+        if (nbytes < bc3_size((int)w, (int)h)) return {};
+        decode_bc3(src, (int)w, (int)h, im);
+    }
     if (e.outline) {
         if (e.cells.empty() || !outline_ring(e, style, im)) return {};
         std::vector<uint8_t> out(src, src + nbytes);
+        if (argb) { encode_argb(im, linear, e.rgba, out.data()); return out; }
         size_t at = 0;
         Img lv = im;
         for (unsigned l = 0; l < std::max(1u, levels); l++) {
@@ -476,6 +528,7 @@ std::vector<uint8_t> build(const Entry& e, int style, unsigned w, unsigned h, un
     }
     if (!changed) return {};
     std::vector<uint8_t> out(src, src + nbytes);   /* anything not rewritten stays the game's */
+    if (argb) { encode_argb(im, linear, e.rgba, out.data()); return out; }   /* level 0 only, as uploaded */
     size_t at = 0;
     Img lv = im;
     for (unsigned l = 0; l < std::max(1u, levels); l++) {
@@ -508,6 +561,19 @@ int rsx_replace(unsigned long long hash, unsigned w, unsigned h, unsigned fmt, u
         if (g_dbg)
             fprintf(stderr, "[glyphs] %016llX %ux%u fmt 0x%02X levels %u: %s for style %d%c",
                     hash, w, h, fmt, levels, c->second.empty() ? "kept" : "replaced", style, 10);
+        /* GT5P_GLYPHS_DBG=2: the game's bytes and the replacement, raw, in
+         * scratch/glyphs (game-derived: keep them out of the repository). */
+        if (g_dbg && !c->second.empty()) {
+            const char* e = getenv("GT5P_GLYPHS_DBG");
+            if (e && e[0] == '2') {
+                CreateDirectoryA("scratch", NULL); CreateDirectoryA("scratch\\glyphs", NULL);
+                char path[160];
+                for (int k = 0; k < 2; k++) {
+                    snprintf(path, sizeof path, "scratch\\glyphs\\%016llX_%ux%u_%02X_s%d_%s.bin", hash, w, h, fmt, style, k ? "out" : "in");
+                    if (FILE* f = fopen(path, "wb")) { fwrite(k ? c->second.data() : src, 1, nbytes, f); fclose(f); }
+                }
+            }
+        }
     }
     if (c->second.size() == nbytes) *out = c->second.data();
     return 1;
@@ -538,6 +604,8 @@ void load_table()
             if (cell[0] == '#') break;
             if (!cell.compare(0, 6, "inset=")) { e.inset = atoi(cell.c_str() + 6); continue; }
             if (!cell.compare(0, 5, "ring=")) { e.ring = atoi(cell.c_str() + 5); continue; }
+            if (cell == "order=rgba") { e.rgba = true; continue; }
+            if (cell == "order=argb") { e.rgba = false; continue; }
             if (!cell.compare(0, 8, "outline:")) { e.outline = true; cell.erase(0, 8); }
             const size_t at = cell.find('@');
             Cell c{};

@@ -782,6 +782,9 @@ int main(int argc, char* argv[])
     /* gt5p_settings.toml, before anything below reads the environment: the
      * settings are handed to the runtime as environment variables that are
      * not already set (see gt5p_settings.h). */
+    /* The opening movie's screen for "Skip opening movie", before the
+     * settings turn that option into PAD_SKIP_MOVIE. */
+    if (GT5P_MOVIE_SCREEN[0] && !getenv("GT5P_MOVIE_SCREEN")) _putenv_s("GT5P_MOVIE_SCREEN", GT5P_MOVIE_SCREEN);
     gt5p_settings_load();
 
     /* Quiet for every launch path, including IDE output pipes and the debug
@@ -860,11 +863,16 @@ int main(int argc, char* argv[])
       if (GT5P_SCREEN_FILES[0] && GT5P_SCOPE_LABELS[0] && !(scope && scope[0] == '0')) {
           if (!getenv("PAD_MILESTONE_FILES")) _putenv_s("PAD_MILESTONE_FILES", GT5P_SCREEN_FILES);
           if (!getenv("RSX_SCOPE_LABELS")) _putenv_s("RSX_SCOPE_LABELS", GT5P_SCOPE_LABELS);
+          /* The same screens tell the settings page when a race runs and
+           * when the Options screen is up (gt5p_settings_ui.cpp). */
+          if (GT5P_SCREEN_ROLES[0] && !getenv("GT5P_SCREEN_ROLES")) _putenv_s("GT5P_SCREEN_ROLES", GT5P_SCREEN_ROLES);
+          if (GT5P_TOP_MENU_WORD[0] && !getenv("GT5P_TOP_MENU_WORD")) _putenv_s("GT5P_TOP_MENU_WORD", GT5P_TOP_MENU_WORD);
       } }
 
     /* The mListBox vtable, for the settings page's race-pause check
      * (gt5p_settings_ui.cpp, Phase 117). */
     if (GT5P_LISTBOX_VT[0] && !getenv("GT5P_LISTBOX_VTABLE")) _putenv_s("GT5P_LISTBOX_VTABLE", GT5P_LISTBOX_VT);
+    if (GT5P_LISTBOX_RANGE[0] && !getenv("GT5P_LISTBOX_RANGE")) _putenv_s("GT5P_LISTBOX_RANGE", GT5P_LISTBOX_RANGE);
 
     /* Run a SPURS workload only while its ready count is nonzero, on as many
      * virtual SPUs as the count asks for. This title fills a job list first

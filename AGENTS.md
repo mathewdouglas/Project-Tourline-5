@@ -83,6 +83,14 @@ inputs, pinned downloads) and `scripts/release/package_player.py`
 (allowlist; never game files). Releases carry the ZIP; the tag is
 `v<CMake project VERSION>`.
 
+**GT5 screens for the settings page (GT5 Phase 37).** Skip opening movie,
+F1 race pause, the Options "PC settings" tag and controller-style button
+prompts work on GT5. Their GT5 values are in `config/targets.json`
+(`movie_screen`, `screen_roles`, `top_menu_word`, `menu_listbox_vtable`,
+`menu_listbox_range`, the `OpeningMovie`/`RaceGrid`/`Options` screen files)
+and `assets/glyphs/textures.txt` (GT5 section, `order=rgba`). All are
+measured for v104; never reuse them for another executable.
+
 **GT5 race scope (GT5 Phase 36).** GT5 has no `.gpb` screen names, so the
 renderer never learned or prepared a race set until its screen files were
 measured. `config/targets.json` (`screen_files`, `scope_labels`) names them

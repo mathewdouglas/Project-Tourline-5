@@ -80,6 +80,19 @@ string(JSON GT5P_SCOPE_LABELS ERROR_VARIABLE GT5P_SCOPE_LABELS_ERR GET "${GT5P_T
 if(GT5P_SCOPE_LABELS_ERR)
     set(GT5P_SCOPE_LABELS "")
 endif()
+# The settings page's roles for those labels, and the opening movie's label.
+string(JSON GT5P_SCREEN_ROLES ERROR_VARIABLE GT5P_SCREEN_ROLES_ERR GET "${GT5P_T}" screen_roles)
+if(GT5P_SCREEN_ROLES_ERR)
+    set(GT5P_SCREEN_ROLES "")
+endif()
+string(JSON GT5P_MOVIE_SCREEN ERROR_VARIABLE GT5P_MOVIE_SCREEN_ERR GET "${GT5P_T}" movie_screen)
+if(GT5P_MOVIE_SCREEN_ERR)
+    set(GT5P_MOVIE_SCREEN "")
+endif()
+string(JSON GT5P_TOP_MENU_WORD ERROR_VARIABLE GT5P_TOP_MENU_WORD_ERR GET "${GT5P_T}" top_menu_word)
+if(GT5P_TOP_MENU_WORD_ERR)
+    set(GT5P_TOP_MENU_WORD "")
+endif()
 # vtable of the title's mListBox widget: the settings page finds the race
 # pause bar by it (Phase 117); absent: none.
 string(JSON GT5P_ASPECT_ADDR ERROR_VARIABLE GT5P_ASPECT_ADDR_ERR GET "${GT5P_T}" aspect_16_9_float)
@@ -97,6 +110,11 @@ endif()
 string(JSON GT5P_LISTBOX_VT ERROR_VARIABLE GT5P_LISTBOX_VT_ERR GET "${GT5P_T}" menu_listbox_vtable)
 if(GT5P_LISTBOX_VT_ERR)
     set(GT5P_LISTBOX_VT "")
+endif()
+# Where those objects live (the guest heap); absent: the settings page's default.
+string(JSON GT5P_LISTBOX_RANGE ERROR_VARIABLE GT5P_LISTBOX_RANGE_ERR GET "${GT5P_T}" menu_listbox_range)
+if(GT5P_LISTBOX_RANGE_ERR)
+    set(GT5P_LISTBOX_RANGE "")
 endif()
 message(STATUS "game build: ${GT5P_TARGET} (code end ${GT5P_CODE_END}, boot_from=${GT5P_BOOT_FROM})")
 
@@ -237,7 +255,11 @@ set(GT5P_MAIN_DEFS
     "GT5P_PACER_LR=\"${GT5P_PACER_LR}\""
     "GT5P_SCREEN_FILES=\"${GT5P_SCREEN_FILES}\""
     "GT5P_SCOPE_LABELS=\"${GT5P_SCOPE_LABELS}\""
+    "GT5P_SCREEN_ROLES=\"${GT5P_SCREEN_ROLES}\""
+    "GT5P_MOVIE_SCREEN=\"${GT5P_MOVIE_SCREEN}\""
+    "GT5P_TOP_MENU_WORD=\"${GT5P_TOP_MENU_WORD}\""
     "GT5P_LISTBOX_VT=\"${GT5P_LISTBOX_VT}\""
+    "GT5P_LISTBOX_RANGE=\"${GT5P_LISTBOX_RANGE}\""
     "GT5P_ASPECT_ADDR=\"${GT5P_ASPECT_ADDR}\""
     "GT5P_UI_ASPECT_ADDR=\"${GT5P_UI_ASPECT_ADDR}\""
     "GT5P_CAM_ASPECT_ADDR=\"${GT5P_CAM_ASPECT_ADDR}\"")

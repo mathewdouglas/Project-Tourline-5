@@ -1,4 +1,5 @@
-# Game textures that hold PlayStation button art (BCUS98158), for
+# Game textures that hold PlayStation button art (BCUS98158 and
+# BCUS98114-v104; hashes are content hashes, so one list serves both), for
 # src/gt5p_glyphs.cpp. One texture per line:
 #   <hash> <w>x<h> <button>@<x>,<y>,<w>,<h> ...
 # <hash> is the backend's FNV-1a 64 of the texture's bytes, as
@@ -35,3 +36,13 @@ D84C1E7DDF0B11A2 52x52 inset=6 outline:triangle@311,230,51,53
 EAC346F4F46927D6 52x52 inset=6 outline:cross@311,313,51,53
 CA74717BAA2CFCD0 48x32 ring=3 outline:select@140,439,45,31/142,441,40,26
 A0FB2A82627E4998 52x36 ring=4 outline:start@275,437,51,35/278,440,44,28
+
+# ---- Gran Turismo 5 (BCUS98114-v104) ----------------------------------------
+# The face-button icons of the menus' help bars and pause screens, 36x36
+# A8R8G8B8 (linear, bytes R,G,B,A: order=rgba), and R1, 68x52 DXT5 (RSX_TEX_REPL_DUMP during an Arcade
+# race visit, 2026-11-11).
+27B7FD722BA78BF1 36x36 inset=2 order=rgba triangle@0,0,36,36
+3AFCD589A900E087 36x36 inset=2 order=rgba circle@0,0,36,36
+8C8F5CEF28A171D7 36x36 inset=2 order=rgba cross@0,0,36,36
+C4B5B533D8DF79A5 36x36 inset=2 order=rgba square@0,0,36,36
+D7DC3540C43ABFB8 68x52 inset=4 r1@0,0,68,52

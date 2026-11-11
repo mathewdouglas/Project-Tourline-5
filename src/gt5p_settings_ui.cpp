@@ -1060,11 +1060,62 @@ bool s_hint_shown;
 /* Which screen the title is on, from the screen scripts (.gpb) it reads.
  * GT5P_SETTINGS_UI_DBG=1 prints each one. */
 volatile int s_dbg_screens = -1;
+/* A title without screen scripts (Gran Turismo 5) names its screens by
+ * measured files instead: cellPad passes their labels (PAD_MILESTONE_FILES
+ * "<label>=<path tail>") here too. GT5P_SCREEN_ROLES gives each label a role:
+ * "<label>:race" starts a race (the page pauses it), "<label>:options" is the
+ * Options screen (the hint), "<label>:screen" is any other screen, which ends
+ * both. Set per executable from config/targets.json (screen_roles). Returns 1
+ * when the label was listed. */
+int screen_role_seen(const char* b)
+{
+    static char list[512]; static int init;
+    if (!init) { init = 1; const char* e = getenv("GT5P_SCREEN_ROLES"); if (e) snprintf(list, sizeof list, "%s", e); }
+    const size_t n = strlen(b);
+    for (const char* p = list; *p; ) {
+        const char* c = strchr(p, ',');
+        const size_t len = c ? (size_t)(c - p) : strlen(p);
+        if (len > n + 1 && p[n] == ':' && !strncmp(p, b, n)) {
+            const char* role = p + n + 1; const size_t rl = len - n - 1;
+            const int race = rl == 4 && !strncmp(role, "race", 4);
+            const int options = rl == 7 && !strncmp(role, "options", 7);
+            s_in_race = race; s_in_options = options;
+            if (s_dbg_screens > 0) fprintf(stderr, "[settings-ui] %llu ms screen label %s (%.*s)%c",
+                                           GetTickCount64(), b, (int)rl, role, 10);
+            return 1;
+        }
+        if (!c) break;
+        p = c + 1;
+    }
+    return 0;
+}
+/* GT5P_TOP_MENU_WORD=<addr>=<value> (hex): a guest word that holds that
+ * value while the title's top menu is up. Gran Turismo 5 reads no file when
+ * it returns to the top menu (from Options or a race's exit), so no label
+ * can end those screens; this word does (top_menu_word in targets.json,
+ * found by GT5P_MEMSNAP and confirmed with GT5P_WATCH). Checked each UI tick. */
+extern "C" uint8_t* vm_base;
+void top_menu_poll()
+{
+    static int on = -1; static uint32_t addr, value;
+    if (on < 0) {
+        const char* e = getenv("GT5P_TOP_MENU_WORD");
+        unsigned a = 0, v = 0;
+        on = e && vm_base && sscanf(e, "%x=%x", &a, &v) == 2 && a;
+        addr = a; value = v;
+    }
+    if (!on) return;
+    uint32_t w; memcpy(&w, vm_base + addr, 4);
+    if (_byteswap_ulong(w) != value || (!s_in_options && !s_in_race)) return;
+    if (s_dbg_screens > 0) fprintf(stderr, "[settings-ui] %llu ms top menu (word %08X)%c", GetTickCount64(), addr, 10);
+    s_in_options = 0; s_in_race = 0;
+}
 void screen_seen(const char* b)
 {
     const size_t n = strlen(b);
-    if (n < 5 || strcmp(b + n - 4, ".gpb")) return;
     if (s_dbg_screens < 0) { const char* e = getenv("GT5P_SETTINGS_UI_DBG"); s_dbg_screens = e && e[0] == '1'; }
+    if (screen_role_seen(b)) return;
+    if (n < 5 || strcmp(b + n - 4, ".gpb")) return;
     if (s_dbg_screens) fprintf(stderr, "[settings-ui] %llu ms screen %s\n", GetTickCount64(), b);
     /* Entering Options reads OptionRoot (then the gadget layer, DLSGadgetRoot);
      * leaving it reads the top menu's scripts again (TopRoot,
@@ -1110,7 +1161,7 @@ void redraw()
  * bytes]. Comparing snapshots taken in two states (paused and running, say)
  * finds the variable that tells them apart (scripts/diag/memsnap_diff.py).
  * The files hold game memory: they stay in the gitignored scratch folder. */
-extern "C" uint8_t* vm_base;
+// vm_base is declared above top_menu_poll().
 extern "C" long long pad_milestone_age_ms(const char* name);
 
 void memsnap_write()
@@ -1318,7 +1369,10 @@ bool s_release_wait;     /* closed; the title's input waits for all buttons up *
  * while shown, 3 while hidden (measured with GT5P_MEMSNAP and
  * scripts/diag/memsnap_diff.py; the vtable is menu_listbox_vtable in
  * config/targets.json). They live on the heap, so the page scans guest
- * memory for them when it opens (tens of milliseconds).
+ * memory for them when it opens (tens of milliseconds). The heap's range is
+ * GT5P_LISTBOX_RANGE=<lo>-<hi> (hex; menu_listbox_range in targets.json),
+ * 20000000-40000000 when unset. Gran Turismo 5's objects have the same
+ * layout and sit near 0x4F000000 (measured with GT5P_MEMSNAP).
  * GT5P_SETTINGS_PAUSE=0: never press Start. */
 enum { kRaceUnknown = -1, kRaceRunning = 0, kRaceInMenu = 1 };
 int race_menu_state()
@@ -1326,8 +1380,15 @@ int race_menu_state()
     static uint32_t vt = 1;
     if (vt == 1) { const char* e = getenv("GT5P_LISTBOX_VTABLE"); vt = e ? (uint32_t)strtoul(e, nullptr, 16) : 0; }
     if (!vt || !vm_base) return kRaceUnknown;
+    static unsigned long long lo = 0x20000000ull, hi = 0x40000000ull; static int range_read;
+    if (!range_read) {
+        range_read = 1;
+        const char* e = getenv("GT5P_LISTBOX_RANGE");
+        unsigned long long l = 0, h = 0;
+        if (e && sscanf(e, "%llx-%llx", &l, &h) == 2 && l < h && h <= 0x100000000ull) { lo = l; hi = h; }
+    }
     int hidden = 0, shown = 0;
-    for (unsigned long long a = 0x20000000ull; a < 0x40000000ull;) {
+    for (unsigned long long a = lo; a < hi;) {
         MEMORY_BASIC_INFORMATION mi;
         if (!VirtualQuery(vm_base + a, &mi, sizeof mi)) break;
         const unsigned long long end = (unsigned long long)((uint8_t*)mi.BaseAddress + mi.RegionSize - vm_base);
@@ -1747,6 +1808,7 @@ DWORD WINAPI ui_thread(LPVOID)
         watch_poll();
         poke_poll();
         toggle_poll();
+        top_menu_poll();
         if (s_open && !s_overlay) place();
         Sleep(16);
     }

@@ -5243,7 +5243,7 @@ index 49e13905..3f759a9a 100644
  /* Internal: feed a key event from the host input system */
  void cellKb_keyEvent(u32 port, u16 keycode, int pressed);
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index f2b4c119..d2cf2a3c 100644
+index f2b4c119..dd3addfc 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -4,7 +4,8 @@
@@ -5494,7 +5494,7 @@ index f2b4c119..d2cf2a3c 100644
  static u8 pad_xinput_stick_to_u8(short raw, short deadzone)
  {
      float normalized;
-@@ -140,13 +330,330 @@ static int pad_host_window_focused(void)
+@@ -140,13 +330,337 @@ static int pad_host_window_focused(void)
      return pid == GetCurrentProcessId();
  }
  
@@ -5639,6 +5639,13 @@ index f2b4c119..d2cf2a3c 100644
 +            static int hook = -1;
 +            if (hook < 0) { const char* e = getenv("PAD_LABEL_HOOK"); hook = !(e && *e == '0'); }
 +            if (hook) g_pad_milestone_hook(m);
++        }
++        /* The settings page (race pause, Options hint) follows labels the
++         * same way; it tells them from base names by GT5P_SCREEN_ROLES. */
++        if (m && m != b && g_pad_screen_hook) {
++            static int hook = -1;
++            if (hook < 0) { const char* e = getenv("PAD_LABEL_HOOK"); hook = !(e && *e == '0'); }
++            if (hook) g_pad_screen_hook(m);
 +        }
 +    }
 +}
@@ -5828,7 +5835,7 @@ index f2b4c119..d2cf2a3c 100644
      if (!pad_host_window_focused()) {
          /* Release everything on focus loss, or a key held while alt-tabbing
           * would stay down forever. */
-@@ -157,19 +664,7 @@ static void pad_poll_keyboard(void)
+@@ -157,19 +671,7 @@ static void pad_poll_keyboard(void)
          return;
      }
  
@@ -5849,7 +5856,7 @@ index f2b4c119..d2cf2a3c 100644
  
      hs->buttons   = btns;
      hs->connected = 1;
-@@ -188,17 +683,35 @@ static void pad_poll_keyboard(void)
+@@ -188,17 +690,35 @@ static void pad_poll_keyboard(void)
  }
  #endif
  
@@ -5887,7 +5894,7 @@ index f2b4c119..d2cf2a3c 100644
  
          s_host_state[i].connected = 1;
          XINPUT_GAMEPAD* gp = &state.Gamepad;
-@@ -253,7 +766,8 @@ static void pad_poll_xinput(void)
+@@ -253,7 +773,8 @@ static void pad_poll_xinput(void)
  
  static void pad_init_backend(void)
  {
@@ -5897,7 +5904,7 @@ index f2b4c119..d2cf2a3c 100644
  }
  
  static void pad_shutdown_backend(void)
-@@ -287,30 +801,142 @@ static u8 pad_sdl_trigger_to_u8(int raw)
+@@ -287,30 +808,142 @@ static u8 pad_sdl_trigger_to_u8(int raw)
      return (u8)val;
  }
  
@@ -6053,7 +6060,7 @@ index f2b4c119..d2cf2a3c 100644
          u16 btns = 0;
          if (SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_BACK))          btns |= CELL_PAD_CTRL_SELECT;
          if (SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_LEFTSTICK))     btns |= CELL_PAD_CTRL_L3;
-@@ -363,32 +989,490 @@ static void pad_init_backend(void)
+@@ -363,32 +996,490 @@ static void pad_init_backend(void)
  {
      if (!s_sdl_inited) {
          if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0) {
@@ -6553,7 +6560,7 @@ index f2b4c119..d2cf2a3c 100644
  
  /* ---------------------------------------------------------------------------
   * Poll dispatcher
-@@ -407,7 +1491,6 @@ static void pad_shutdown_backend(void)
+@@ -407,7 +1498,6 @@ static void pad_shutdown_backend(void)
   * 4 ms is 250 Hz, well above the 60 Hz a title can actually observe (and above
   * a real DualShock 3's own report rate), so no game can tell the difference,
   * including one sampling for button-press edges. */
@@ -6561,7 +6568,7 @@ index f2b4c119..d2cf2a3c 100644
  
  static unsigned long long pad_now_ms(void)
  {
-@@ -421,27 +1504,123 @@ static unsigned long long pad_now_ms(void)
+@@ -421,27 +1511,123 @@ static unsigned long long pad_now_ms(void)
  #endif
  }
  
@@ -6690,7 +6697,7 @@ index f2b4c119..d2cf2a3c 100644
  }
  
  /* ---------------------------------------------------------------------------
-@@ -465,12 +1644,21 @@ s32 cellPadInit(u32 max_connect)
+@@ -465,12 +1651,21 @@ s32 cellPadInit(u32 max_connect)
      s_pad_initialized = 1;
      s_max_connect = max_connect > CELL_PAD_MAX_PORT_NUM ? CELL_PAD_MAX_PORT_NUM : max_connect;
      memset(s_port_setting, 0, sizeof(s_port_setting));
@@ -6713,7 +6720,7 @@ index f2b4c119..d2cf2a3c 100644
  
      return CELL_OK;
  }
-@@ -482,7 +1670,14 @@ s32 cellPadEnd(void)
+@@ -482,7 +1677,14 @@ s32 cellPadEnd(void)
      if (!s_pad_initialized)
          return CELL_PAD_ERROR_NOT_OPENED;
  
@@ -6728,7 +6735,7 @@ index f2b4c119..d2cf2a3c 100644
  
      s_pad_initialized = 0;
      s_max_connect = 0;
-@@ -581,6 +1776,17 @@ skip_inject: ;
+@@ -581,6 +1783,17 @@ skip_inject: ;
          len = CELL_PAD_LEN_CHANGE_PRESS_ON;
  
      data->len = len;
@@ -6746,7 +6753,7 @@ index f2b4c119..d2cf2a3c 100644
      /* button[0] is reserved and 0 on hardware; button[1] carries the pad mode
       * in its high nibble (0x7) and len/2 in its low one. GH3 drops any packet
       * whose button[0] is non-zero -- with len (8) there, every press was
-@@ -610,7 +1816,7 @@ skip_inject: ;
+@@ -610,7 +1823,7 @@ skip_inject: ;
        } }
  
      /* PAD_SCRIPT="<sec>:<mask>,<sec>:<mask>,..." -- press a NAMED button at a
@@ -6755,7 +6762,7 @@ index f2b4c119..d2cf2a3c 100644
       * CROSS and START, which is enough to clear a "press start" screen but not
       * to navigate a menu: You Don't Know Jack needs DOWN to move off its name
       * field before CROSS means anything. Masks are CELL_PAD_CTRL_* packed as
-@@ -618,7 +1824,7 @@ skip_inject: ;
+@@ -618,7 +1831,7 @@ skip_inject: ;
       * LEFT 0x0080, RIGHT 0x0020, CROSS 0x4000, CIRCLE 0x2000, TRIANGLE 0x1000.
       * Legit input simulation on the same footing as PAD_AUTOPRESS/PAD_STICK. */
      { static int s_sc = -1;
@@ -6764,7 +6771,7 @@ index f2b4c119..d2cf2a3c 100644
        static unsigned long long t0 = 0;   /* not ULONGLONG: this builds on POSIX too */
        if (s_sc < 0) {
            s_sc = 0;
-@@ -626,32 +1832,33 @@ skip_inject: ;
+@@ -626,32 +1839,33 @@ skip_inject: ;
            if (e && *e) {
                s_sc = 1; t0 = GetTickCount64();
                const char* p = e;
@@ -6803,7 +6810,7 @@ index f2b4c119..d2cf2a3c 100644
                    if (!said[i]) { said[i] = 1;
                        printf("[cellPad] PAD_SCRIPT t=%.1fs press 0x%04X\n", ev[i].t, ev[i].mask); }
                }
-@@ -660,14 +1867,15 @@ skip_inject: ;
+@@ -660,14 +1874,15 @@ skip_inject: ;
  
      /* PAD_FILE=<path> -- closed-loop input. Each poll, if the file holds a
       * button mask (same encoding as PAD_SCRIPT), press it for a fixed number
@@ -6822,7 +6829,7 @@ index f2b4c119..d2cf2a3c 100644
       *                            # long hold; the default is 40)
       */
      { static int s_pf = -1; static char pf_path[512];
-@@ -691,7 +1899,8 @@ skip_inject: ;
+@@ -691,7 +1906,8 @@ skip_inject: ;
                    if (held_n > 0) { FILE* w = fopen(pf_path, "wb"); if (w) fclose(w); }
                }
            }
@@ -6832,7 +6839,7 @@ index f2b4c119..d2cf2a3c 100644
                data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] |= (u16)(held_mask & 0xFF);
                data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= (u16)((held_mask >> 8) & 0xFF); }
        } }
-@@ -714,7 +1923,7 @@ skip_inject: ;
+@@ -714,7 +1930,7 @@ skip_inject: ;
                   sscanf(e, "%d,%d,%d,%d,%lf,%lf", &a,&b,&c,&d,&s_from,&s_until);
                   s_v[0]=(unsigned char)a; s_v[1]=(unsigned char)b;
                   s_v[2]=(unsigned char)c; s_v[3]=(unsigned char)d; } }
@@ -6841,7 +6848,7 @@ index f2b4c119..d2cf2a3c 100644
                    hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
                    hs->connected = 1; }
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
-@@ -781,8 +1990,16 @@ skip_inject: ;
+@@ -781,8 +1997,16 @@ skip_inject: ;
              { CELL_PAD_BTN_OFFSET_DIGITAL2, 0x08, CELL_PAD_BTN_OFFSET_PRESS_R1 },
              { CELL_PAD_BTN_OFFSET_DIGITAL2, 0x01, CELL_PAD_BTN_OFFSET_PRESS_L2 },
              { CELL_PAD_BTN_OFFSET_DIGITAL2, 0x02, CELL_PAD_BTN_OFFSET_PRESS_R2 } };
@@ -6859,7 +6866,7 @@ index f2b4c119..d2cf2a3c 100644
                  data->button[pm[k].off] = 255;
      }
  
-@@ -808,7 +2025,8 @@ emit:
+@@ -808,7 +2032,8 @@ emit:
       * call made that loop infinite: the main thread pegged one core inside
       * libpad and the title never got past its first rendered screen.
       *
@@ -6869,7 +6876,7 @@ index f2b4c119..d2cf2a3c 100644
       * after that until the next one arrives (pad_poll_backend sets the flag when
       * it actually re-polls, every PAD_POLL_INTERVAL_MS). That is what the
       * hardware does: a pad streams reports at a fixed rate whether or not
-@@ -821,14 +2039,6 @@ emit:
+@@ -821,14 +2046,6 @@ emit:
       * attack firing once.
       *
       * PAD_ALWAYS_CHANGE=1 restores the old always-a-packet behaviour. */
@@ -6884,7 +6891,7 @@ index f2b4c119..d2cf2a3c 100644
      {
          unsigned int ea = (unsigned int)(uintptr_t)data_guest;
          vm_write32((unsigned long long)ea + 0, (unsigned int)data->len);   /* len (s32) */
-@@ -881,7 +2091,7 @@ s32 cellPadGetInfo(CellPadInfo2* info)
+@@ -881,7 +2098,7 @@ s32 cellPadGetInfo(CellPadInfo2* info)
                    (s_host_state[i].connected || i == 0));
          vm_write16(gaddr + 0x00C + i * 2, on ? 0x054C : 0);   /* vendor: Sony  */
          vm_write16(gaddr + 0x10A + i * 2, on ? 0x0268 : 0);   /* product: DS3  */
@@ -6893,7 +6900,7 @@ index f2b4c119..d2cf2a3c 100644
      }
      return CELL_OK;
  }
-@@ -908,7 +2118,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
+@@ -908,7 +2125,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
           * boot flows that block until a controller is connected can proceed even
           * with no physical device attached. */
          if (s_host_state[i].connected || i == 0) {
@@ -6902,7 +6909,7 @@ index f2b4c119..d2cf2a3c 100644
              info->port_setting[i]      = s_port_setting[i];
              info->device_capability[i] = CELL_PAD_CAPABILITY_PS3_CONFORMITY
                                         | CELL_PAD_CAPABILITY_PRESS_MODE
-@@ -918,7 +2128,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
+@@ -918,7 +2135,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
              info->device_type[i]       = CELL_PAD_DEV_TYPE_STANDARD;
              connected++;
          } else {
@@ -6911,7 +6918,7 @@ index f2b4c119..d2cf2a3c 100644
          }
      }
      info->now_connect = connected;
-@@ -963,7 +2173,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -963,7 +2180,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
          /* Same virtual-pad-on-port-0 rule as cellPadGetInfo2, so both views of
           * the ports agree (a game that cross-checks them must see one truth). */
          if ((i < PAD_MAX_HOST_PORTS && s_host_state[i].connected) || i == 0) {
@@ -6920,7 +6927,7 @@ index f2b4c119..d2cf2a3c 100644
              info->port_setting[i]      = s_port_setting[i];
              info->device_capability[i] = CELL_PAD_CAPABILITY_PS3_CONFORMITY
                                         | CELL_PAD_CAPABILITY_PRESS_MODE
-@@ -975,7 +2185,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -975,7 +2192,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
              info->pclass_profile[i]    = 0;
              connected++;
          } else {
@@ -6929,7 +6936,7 @@ index f2b4c119..d2cf2a3c 100644
          }
      }
      info->now_connect = connected;
-@@ -985,7 +2195,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -985,7 +2202,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
            vm_write32((unsigned long long)ea + _o, *(u32*)((char*)info + _o)); }
  
      { static int _n = 0;
@@ -6938,7 +6945,7 @@ index f2b4c119..d2cf2a3c 100644
            printf("[cellPad] PeriphGetInfo(max=%u now=%u) -> STANDARD class\n",
                   info->max_connect, connected); }
      return CELL_OK;
-@@ -1039,6 +2249,39 @@ s32 cellPadSetPressMode(u32 port_no, u32 mode)
+@@ -1039,6 +2256,39 @@ s32 cellPadSetPressMode(u32 port_no, u32 mode)
      return CELL_OK;
  }
  
@@ -6978,7 +6985,7 @@ index f2b4c119..d2cf2a3c 100644
  s32 cellPadGetCapabilityInfo(u32 port_no, CellPadCapabilityInfo* info)
  {
      if (!s_pad_initialized)
-@@ -1048,8 +2291,12 @@ s32 cellPadGetCapabilityInfo(u32 port_no, CellPadCapabilityInfo* info)
+@@ -1048,8 +2298,12 @@ s32 cellPadGetCapabilityInfo(u32 port_no, CellPadCapabilityInfo* info)
          return CELL_PAD_ERROR_INVALID_PARAMETER;
  
      u32 info_ea = (u32)(uintptr_t)info;
@@ -6993,7 +7000,7 @@ index f2b4c119..d2cf2a3c 100644
  
      /* Report standard DualShock 3 capabilities */
      vm_write32(info_ea, CELL_PAD_CAPABILITY_PS3_CONFORMITY
-@@ -1071,25 +2318,46 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+@@ -1071,25 +2325,46 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
  
      param = GUEST_PTR(param, CellPadActParam*);
  

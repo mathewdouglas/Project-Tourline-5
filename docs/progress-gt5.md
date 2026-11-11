@@ -4,6 +4,73 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Phase 37 — Skip movie, button prompts, F1 race pause and the Options hint on GT5 (2026-11-11)
+
+Four settings-page features came from Prologue keyed to its screen-script
+names, texture hashes and addresses, so on GT5 they did nothing
+([prologue-gaps.md](prologue-gaps.md) 1.1, 1.2, 1.4, 1.5). Each was
+measured on BCUS98114-v104 with this branch's own build.
+
+**Skip opening movie.** With `PAD_FILE_LOG=2` and no presses, the whole
+opening (logos and film) is one file, `MOVIE/tv_451_120285132.pam`, first read
+1.4 s after `installed00.dat`. It is now the labelled screen `OpeningMovie`
+(`screen_files`, `movie_screen` in `config/targets.json`); `src/main.cpp`
+gives it to the settings as `GT5P_MOVIE_SCREEN`, which `skip_movie` turns
+into `PAD_SKIP_MOVIE`. Cross 2 s into the movie skips it: the menu's
+`MusicDecode` came 4.8 s after the movie started (it had not come within 60 s
+without the press). Checked through a settings file with `skip_movie = true`
+and the target's defaults, not only by environment.
+
+**Screens for the settings page.** cellPad now passes labelled screens to
+the page's screen hook as well as the renderer's (`PAD_LABEL_HOOK=0` off).
+`GT5P_SCREEN_ROLES` (`screen_roles`) gives labels a role: `RaceStart:race`,
+`Options:options`, and `screen` for the menus that end both.
+
+- Returning to the top menu, from Options or from a race, reads no file.
+  Memory snapshots at the top menu and in Options (`GT5P_MEMSNAP`, two of
+  each) found the word at `0x0199359C`: 2 at the top menu, 1 elsewhere;
+  `GT5P_WATCH` confirmed it through boot, menu and an Arcade race. It is
+  `top_menu_word` (`GT5P_TOP_MENU_WORD=0199359C=2`) and ends both states.
+- Options is `9/7T/AN`, read when the Options screen loads and in no Arcade
+  run. The new label `RaceGrid` (`9/RA/HH`, the grid screen) ends a race.
+
+**F1 pauses a race.** GT5 has the same `mListBox` class (vtable
+`0x01870B78`). Snapshots of a running and a paused race show one object
+with the word at +4 equal to 3 and +8 changing 3 to 7 while the pause bar is
+up: Prologue's layout. The page found none at first only because it scanned
+0x20000000 to 0x40000000; GT5's heap objects sit near 0x4F000000, so the range
+is now `GT5P_LISTBOX_RANGE` (`menu_listbox_range`, 0x40000000-0x50000000 for
+GT5; Prologue keeps its default). Live: F1 while racing pressed Start and the
+race stayed paused after F1 closed; F1 while already paused pressed nothing
+(1 shown) and the race stayed paused.
+
+**Options hint.** The "PC settings" tag shows on GT5's Options screen,
+Select opens the page there, and the tag goes when Options is left for the
+top menu.
+
+**Button prompts.** A texture dump of menus and an Arcade race
+(`RSX_TEX_REPL_DUMP`) found GT5's help-bar buttons: Cross, Circle, Triangle
+and Square as 36x36 A8R8G8B8 linear textures, and R1 as 68x52 DXT5. The
+replacer handled DXT5 only; it now also handles A8R8G8B8 (linear, or
+swizzled with power-of-two sides; `GT5P_GLYPHS_ARGB=0` off). These icons'
+bytes are R,G,B,A in memory (the alpha is the fourth byte; the title's
+sampler remap reorders them), so `textures.txt` entries take `order=rgba`.
+`GT5P_GLYPHS_DBG=2` writes the game's and the replacement bytes to
+`scratch/glyphs`. Live on the Arcade and car-list screens: Xbox (A/B/Y),
+Nintendo and keyboard (Z/X) art replace the PlayStation buttons; a
+PlayStation pad keeps the game's art. The R1 texture was replaced but the
+screen showing it was not captured.
+
+**Tests.** `debug_export.ps1` passes (36 checks). The runtime patch's
+`cellPad.c` section changed; the patch applies cleanly and reproduces the
+tested runtime.
+
+**Limits.** Measured on Arcade screens, Options and High Speed Ring only.
+GT Life, licence and replay screens may use other button textures or other
+screen files. Where another GT5 screen draws a button with a texture not in
+the list, it keeps the PlayStation art. The top-menu word is one address in
+the executable's data; a different executable would need it measured again.
+
 ## Phase 36 — GT5 race scope: the race set is learned and prepared (2026-11-11)
 
 **Found.** On GT5 the renderer never knew a race was loading. Race scope and

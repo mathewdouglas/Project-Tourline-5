@@ -346,7 +346,12 @@ void apply_env(const Gt5pSettings& s)
     set_default_env("PAD_KEYMAP", gt5p_keymap_format(s.keys).c_str());
     set_default_env("GT5P_GLYPHS", kPromptNames[s.button_prompts >= 0 && s.button_prompts < 5 ? s.button_prompts : 0]);
     /* The screen whose first read starts the presses (cellPad.c). */
-    if (s.skip_movie)       set_default_env("PAD_SKIP_MOVIE", "MovieRoot");
+    /* GT5P_MOVIE_SCREEN: the target's opening-movie screen (src/main.cpp,
+     * config/targets.json movie_screen); Prologue's script name otherwise. */
+    if (s.skip_movie) {
+        const char* m = getenv("GT5P_MOVIE_SCREEN");
+        set_default_env("PAD_SKIP_MOVIE", m && *m ? m : "MovieRoot");
+    }
     if (!s.smooth_colour)   set_default_env("RSX_HIGH_PRECISION", "0");
     snprintf(buf, sizeof buf, "%d", s.anisotropy);
     set_default_env("RSX_ANISO", buf);
