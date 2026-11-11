@@ -5,6 +5,11 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Disc assets in setups with separate writable storage: absolute disc mappings
+  now bypass the save-data root, allowing GT5 to open `GT.VOL` and read artwork
+  not present in the installed update.
+
 ### Added
 - Native `tourline5.exe` setup: Prologue-style storage selection, GT5 disc and
   01.04 installed-data pickers, verified executable import and temporary-copy

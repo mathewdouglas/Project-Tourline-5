@@ -4,6 +4,7 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+<<<<<<< HEAD
 ## Phase 38 — Skip movie, button prompts, F1 race pause and the Options hint on GT5 (2026-11-11)
 
 Four settings-page features came from Prologue keyed to its screen-script
@@ -70,6 +71,33 @@ GT Life, licence and replay screens may use other button textures or other
 screen files. Where another GT5 screen draws a button with a texture not in
 the list, it keeps the PlayStation art. The top-menu word is one address in
 the executable's data; a different executable would need it measured again.
+=======
+## Phase 38 - Disc access with separate player storage (2026-11-11)
+
+The user's SSD setup showed text but no foreground panel/controller diagram
+in Options > Button Assignments, with both DXC and FXC. All 156 installed
+assets opened in the original session matched their source files byte for
+byte. However, cellFs prepended the writable storage root to the launcher's
+absolute disc mapping. Both attempts to open `GT.VOL` failed with an invalid
+host path containing two drive letters. Update assets could still load,
+masking the missing disc access. The earlier launcher fixture tests did not
+exercise the actual runtime's path translation.
+
+The runtime now roots only relative mapping destinations under its VFS root;
+absolute drive, UNC and slash-rooted destinations retain their own root.
+Overlong output paths fail instead of silently truncating.
+`PS3_FS_ABSOLUTE_MAPPINGS=0` restores the old concatenation.
+
+Validation: production cellFs translator regression checks cover absolute
+paths on the same and different drives, UNC/slash roots, relative developer
+mappings, bare device roots, short output buffers and rollback. Release build
+and runtime patch verification pass. A live SSD-profile launch now opens and
+reads the actual disc `GT.VOL` successfully. The user confirmed restored
+artwork; paired RenderDoc captures retain the before and after evidence:
+`scratch/ui-ssd/options_frame1833.rdc` and
+`scratch/ui-ssd/fixed-options_frame2582.rdc` (private/ignored).
+
+>>>>>>> a7029ed (Fix absolute disc mappings with separate player storage)
 ## Phase 37 - Native player setup and storage selection (2026-11-11)
 
 Adapted Prologue's native launcher for GT5's disc/update layout. `tourline5.exe`
