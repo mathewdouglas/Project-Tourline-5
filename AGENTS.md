@@ -76,6 +76,10 @@ still owed are in the review document's "Follow-up" section.
 `patches/incremental/` holds single-change copies of runtime edits that are
 already inside the main patch; `setup_runtime.py` does not read them.
 
+**Release 0.1.2** (tag `v0.1.2`) includes the Phase 42 race-freeze fix,
+Phase 43 Eiger weather-crash fix and RecompLauncher Easy Setup. It uses the
+same clean-build/player-package workflow; only changes on main are included.
+
 **Release 0.1.1** (tag `v0.1.1`) adds the launcher, ultrawide and Phase 40 CPU
 work; built and packaged the same way as 0.1.0.
 

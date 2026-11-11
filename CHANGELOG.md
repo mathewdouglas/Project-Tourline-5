@@ -5,7 +5,18 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-12
+
+Fixes the intermittent race freeze and Eiger Nordwand weather-change crash,
+and adds RecompLauncher Easy Setup. Built from main with the same clean
+release pipeline as 0.1.1. The player ZIP contains no game files; you need
+your own BCUS98114 disc and matching 01.04 installed data/executable.
+
 ### Added
+- RecompLauncher Easy Setup: named disc/update inputs and an optional decrypted
+  executable or RPCS3 input, with verified import through the native launcher.
+  Missing or invalid inputs fail without opening another setup dialog. Direct
+  launches retain the built-in setup dialogs.
 - A RecompLauncher manifest (`launcher/recomplauncher.json`, 16 GT5 settings,
   storage and log buttons) and relocated-storage following; see
   [docs/recomplauncher.md](docs/recomplauncher.md). RecompLauncher's own UI is
