@@ -1,0 +1,519 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "name": "Project Tourline 5",
+  "repo": "mathewdouglas/Project-Tourline-5",
+  "start": {
+    "program": [
+      "tourline5.exe"
+    ]
+  },
+  "config": [
+    {
+      "id": "main",
+      "format": "toml",
+      "file": [
+        {
+          "path": "{local}/ProjectTourline5/selected-storage/gt5p_settings.toml",
+          "if": "{local}/ProjectTourline5/selected-storage"
+        },
+        {
+          "path": "{local}/ProjectTourline5/gt5p_settings.toml"
+        }
+      ],
+      "new": {
+        "video/resolution": "\"720p\"",
+        "video/msaa": "2",
+        "video/shader_compiler": "\"dxc\"",
+        "video/shader_warmup": "true"
+      }
+    }
+  ],
+  "folders": {
+    "logs": [
+      {
+        "path": "{local}/ProjectTourline5/selected-storage/logs",
+        "if": "{local}/ProjectTourline5/selected-storage"
+      },
+      {
+        "path": "{local}/ProjectTourline5/logs"
+      }
+    ],
+    "storage": [
+      {
+        "path": "{local}/ProjectTourline5/selected-storage",
+        "if": "{local}/ProjectTourline5/selected-storage"
+      },
+      {
+        "path": "{local}/ProjectTourline5"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "open-storage",
+      "label": "Open Storage Folder",
+      "open": "storage"
+    },
+    {
+      "id": "open-logs",
+      "label": "Open Logs",
+      "open": "logs"
+    }
+  ],
+  "settings": [
+    {
+      "id": "resolution",
+      "label": "Resolution",
+      "group": "Video",
+      "help": "Rendered natively at this size. 720p is the console's own.",
+      "choices": [
+        {
+          "label": "720p",
+          "set": {
+            "video/resolution": "\"720p\""
+          }
+        },
+        {
+          "label": "1080p",
+          "set": {
+            "video/resolution": "\"1080p\""
+          }
+        },
+        {
+          "label": "1440p",
+          "set": {
+            "video/resolution": "\"1440p\""
+          }
+        },
+        {
+          "label": "4K",
+          "set": {
+            "video/resolution": "\"2160p\""
+          }
+        }
+      ],
+      "defaults": {
+        "video/resolution": "\"720p\""
+      }
+    },
+    {
+      "id": "aspect",
+      "label": "Aspect Ratio",
+      "group": "Video",
+      "help": "21:9 widens races and the dealer view; menus stay centred.",
+      "choices": [
+        {
+          "label": "16:9",
+          "set": {
+            "video/aspect": "\"16:9\""
+          }
+        },
+        {
+          "label": "21:9 Ultrawide",
+          "set": {
+            "video/aspect": "\"21:9\""
+          }
+        }
+      ],
+      "defaults": {
+        "video/aspect": "\"16:9\""
+      }
+    },
+    {
+      "id": "window",
+      "label": "Window Mode",
+      "group": "Video",
+      "choices": [
+        {
+          "label": "Windowed",
+          "set": {
+            "video/window": "\"windowed\""
+          }
+        },
+        {
+          "label": "Borderless",
+          "set": {
+            "video/window": "\"borderless\""
+          }
+        }
+      ],
+      "defaults": {
+        "video/window": "\"windowed\""
+      }
+    },
+    {
+      "id": "msaa",
+      "label": "Anti-Aliasing",
+      "group": "Video",
+      "help": "Multisampling for the scenes the game antialiases. Higher costs more GPU time.",
+      "choices": [
+        {
+          "label": "Off",
+          "set": {
+            "video/msaa": "1"
+          }
+        },
+        {
+          "label": "2x MSAA",
+          "set": {
+            "video/msaa": "2"
+          }
+        },
+        {
+          "label": "4x MSAA",
+          "set": {
+            "video/msaa": "4"
+          }
+        },
+        {
+          "label": "8x MSAA",
+          "set": {
+            "video/msaa": "8"
+          }
+        }
+      ],
+      "defaults": {
+        "video/msaa": "2"
+      }
+    },
+    {
+      "id": "vsync",
+      "label": "V-Sync",
+      "group": "Video",
+      "choices": [
+        {
+          "label": "On",
+          "set": {
+            "video/vsync": "true"
+          }
+        },
+        {
+          "label": "Off",
+          "set": {
+            "video/vsync": "false"
+          }
+        }
+      ],
+      "defaults": {
+        "video/vsync": "true"
+      }
+    },
+    {
+      "id": "anisotropy",
+      "label": "Texture Filtering",
+      "group": "Video",
+      "help": "Anisotropic filtering keeps roads sharp into the distance.",
+      "choices": [
+        {
+          "label": "Trilinear",
+          "set": {
+            "game/anisotropy": "1"
+          }
+        },
+        {
+          "label": "4x Anisotropic",
+          "set": {
+            "game/anisotropy": "4"
+          }
+        },
+        {
+          "label": "8x Anisotropic",
+          "set": {
+            "game/anisotropy": "8"
+          }
+        },
+        {
+          "label": "16x Anisotropic",
+          "set": {
+            "game/anisotropy": "16"
+          }
+        }
+      ],
+      "defaults": {
+        "game/anisotropy": "16"
+      }
+    },
+    {
+      "id": "smooth_colour",
+      "label": "Smooth Colour",
+      "group": "Video",
+      "advanced": true,
+      "help": "16-bit colour without the console's dither noise.",
+      "choices": [
+        {
+          "label": "On",
+          "set": {
+            "game/smooth_colour": "true"
+          }
+        },
+        {
+          "label": "Off",
+          "set": {
+            "game/smooth_colour": "false"
+          }
+        }
+      ],
+      "defaults": {
+        "game/smooth_colour": "true"
+      }
+    },
+    {
+      "id": "shader_warmup",
+      "label": "Preload Known Shaders",
+      "group": "Video",
+      "advanced": true,
+      "help": "Prepares recorded shaders in the background at startup to reduce stutter.",
+      "choices": [
+        {
+          "label": "On",
+          "set": {
+            "video/shader_warmup": "true"
+          }
+        },
+        {
+          "label": "Off",
+          "set": {
+            "video/shader_warmup": "false"
+          }
+        }
+      ],
+      "defaults": {
+        "video/shader_warmup": "true"
+      }
+    },
+    {
+      "id": "shader_compiler",
+      "label": "Shader Compiler",
+      "group": "Video",
+      "advanced": true,
+      "help": "DXC is the default. FXC uses its own shader cache. Restart to apply.",
+      "choices": [
+        {
+          "label": "DXC",
+          "set": {
+            "video/shader_compiler": "\"dxc\""
+          }
+        },
+        {
+          "label": "FXC",
+          "set": {
+            "video/shader_compiler": "\"fxc\""
+          }
+        }
+      ],
+      "defaults": {
+        "video/shader_compiler": "\"dxc\""
+      }
+    },
+    {
+      "id": "skip_movie",
+      "label": "Skip Opening Movie",
+      "group": "Game",
+      "help": "Presses through the opening movie as soon as it starts. Applies on the next launch.",
+      "choices": [
+        {
+          "label": "Off",
+          "set": {
+            "game/skip_movie": "false"
+          }
+        },
+        {
+          "label": "On",
+          "set": {
+            "game/skip_movie": "true"
+          }
+        }
+      ],
+      "defaults": {
+        "game/skip_movie": "false"
+      }
+    },
+    {
+      "id": "button_prompts",
+      "label": "Button Prompts",
+      "group": "Input",
+      "help": "Automatic follows the controller in use.",
+      "choices": [
+        {
+          "label": "Automatic",
+          "set": {
+            "input/button_prompts": "\"auto\""
+          }
+        },
+        {
+          "label": "PlayStation",
+          "set": {
+            "input/button_prompts": "\"playstation\""
+          }
+        },
+        {
+          "label": "Xbox",
+          "set": {
+            "input/button_prompts": "\"xbox\""
+          }
+        },
+        {
+          "label": "Nintendo",
+          "set": {
+            "input/button_prompts": "\"nintendo\""
+          }
+        },
+        {
+          "label": "Keyboard",
+          "set": {
+            "input/button_prompts": "\"keyboard\""
+          }
+        }
+      ],
+      "defaults": {
+        "input/button_prompts": "\"auto\""
+      }
+    },
+    {
+      "id": "trigger_deadzone",
+      "label": "Trigger Dead Zone",
+      "group": "Controls",
+      "help": "Removes initial travel and rescales both triggers. Restart to apply.",
+      "choices": [
+        {
+          "label": "0%",
+          "set": {
+            "input/trigger_deadzone": "0"
+          }
+        },
+        {
+          "label": "2%",
+          "set": {
+            "input/trigger_deadzone": "2"
+          }
+        },
+        {
+          "label": "5%",
+          "set": {
+            "input/trigger_deadzone": "5"
+          }
+        },
+        {
+          "label": "10%",
+          "set": {
+            "input/trigger_deadzone": "10"
+          }
+        },
+        {
+          "label": "15%",
+          "set": {
+            "input/trigger_deadzone": "15"
+          }
+        },
+        {
+          "label": "20%",
+          "set": {
+            "input/trigger_deadzone": "20"
+          }
+        }
+      ],
+      "defaults": {
+        "input/trigger_deadzone": "0"
+      }
+    },
+    {
+      "id": "trigger_curve",
+      "label": "Trigger Response",
+      "group": "Controls",
+      "help": "Gentle gives finer control near rest; Quick reaches high pressure sooner. Restart to apply.",
+      "choices": [
+        {
+          "label": "Linear",
+          "set": {
+            "input/trigger_curve": "0"
+          }
+        },
+        {
+          "label": "Gentle",
+          "set": {
+            "input/trigger_curve": "1"
+          }
+        },
+        {
+          "label": "Quick",
+          "set": {
+            "input/trigger_curve": "2"
+          }
+        }
+      ],
+      "defaults": {
+        "input/trigger_curve": "0"
+      }
+    },
+    {
+      "id": "adaptive_triggers",
+      "label": "DualSense Fixed Resistance",
+      "group": "Controls",
+      "help": "Experimental fixed resistance through SDL2; no telemetry. Unsupported devices ignore it. Restart to apply.",
+      "choices": [
+        {
+          "label": "Off",
+          "set": {
+            "input/adaptive_triggers": "false"
+          }
+        },
+        {
+          "label": "On",
+          "set": {
+            "input/adaptive_triggers": "true"
+          }
+        }
+      ],
+      "defaults": {
+        "input/adaptive_triggers": "false"
+      }
+    },
+    {
+      "id": "trigger_rumble",
+      "label": "Xbox Trigger Rumble",
+      "group": "Controls",
+      "help": "Experimental: game large/small motor commands to supported left/right trigger motors through SDL2. No ABS or slip telemetry. Restart to apply.",
+      "choices": [
+        {
+          "label": "Off",
+          "set": {
+            "input/trigger_rumble": "false"
+          }
+        },
+        {
+          "label": "On",
+          "set": {
+            "input/trigger_rumble": "true"
+          }
+        }
+      ],
+      "defaults": {
+        "input/trigger_rumble": "false"
+      }
+    },
+    {
+      "id": "sdl_rumble",
+      "label": "SDL Controller Vibration",
+      "group": "Controls",
+      "help": "Forward the game's body-motor commands through SDL2. Also enable the game's Vibration Function. Bluetooth DualSense uses enhanced reports; power cycle before using DirectInput in another app if needed. Restart to apply.",
+      "choices": [
+        {
+          "label": "Off",
+          "set": {
+            "input/sdl_rumble": "false"
+          }
+        },
+        {
+          "label": "On",
+          "set": {
+            "input/sdl_rumble": "true"
+          }
+        }
+      ],
+      "defaults": {
+        "input/sdl_rumble": "false"
+      }
+    }
+  ]
+}

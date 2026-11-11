@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 from unittest.mock import patch
 import zipfile
@@ -23,6 +24,18 @@ for name, content in {'gt5.exe': b'MZsynthetic engine', 'tourline5.exe': b'MZsyn
                       'START-HERE.txt': b'synthetic instructions'}.items():
     source=fixture/name; source.write_bytes(content); files[name]=source
 generated={'licenses/NOTICE.txt':'synthetic notice'}
+files['recomplauncher.json'] = package.recomplauncher_manifest()
+# The production collector must refuse a manifest that bypasses native setup.
+(fixture/'launcher').mkdir()
+manifest = fixture/'launcher/recomplauncher.json'
+for program, valid in [('tourline5.exe', True), ('gt5.exe', False)]:
+    manifest.write_text(json.dumps({'format': 1, 'start': {'program': [program]}}))
+    with patch.object(package, 'ROOT', fixture):
+        try:
+            package.recomplauncher_manifest()
+            assert valid
+        except ValueError:
+            assert not valid
 
 
 def run(*args, fails=False):
@@ -43,6 +56,7 @@ assert {p.relative_to(stage).as_posix() for p in stage.rglob('*') if p.is_file()
 with zipfile.ZipFile(archive) as z:
     assert set(z.namelist()) == expected
     assert z.read('gt5.exe') == files['gt5.exe'].read_bytes()
+    assert json.loads(z.read('recomplauncher.json'))['start']['program'] == ['tourline5.exe']
     assert 'engine_sha256='+package.sha(files['gt5.exe']) in z.read('pt5-release.ini').decode()
     assert all(not z.read(name).startswith(b'\x7fELF') for name in z.namelist())
 run('--stage-dir',stage,fails=True)
@@ -61,5 +75,10 @@ def changed(source,destination):
 
 with patch.object(package.shutil,'copy2',changed):
     run('--stage-dir',work/'changed',fails=True)
+# Exercise source-build staging without configuring or rebuilding the shared build/.
+cmake_stage = work/'cmake-stage'; cmake_stage.mkdir()
+subprocess.run(['cmake', '-DPT5_ENGINE='+str(files['gt5.exe']), '-DPT5_DEST='+str(cmake_stage),
+                '-DPT5_SOURCE='+str(ROOT), '-P', str(ROOT/'scripts/stage_player.cmake')], check=True)
+assert (cmake_stage/'recomplauncher.json').read_bytes() == files['recomplauncher.json'].read_bytes()
 print('PASS: stage/ZIP allowlist, launcher/engine manifests, no ELF, existing destinations, wrong identity and changing inputs')
 print('Evidence:',work)

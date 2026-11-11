@@ -123,6 +123,15 @@ def ffmpeg_pin():
     return dict(tag=pick('Tag'), name=pick('Name'), sha=pick('Sha256'))
 
 
+def recomplauncher_manifest():
+    path = text(ROOT / 'launcher/recomplauncher.json')
+    document = json.loads(path.read_text(encoding='utf-8'))
+    if (not isinstance(document, dict) or document.get('format') != 1 or
+            document.get('start', {}).get('program') != ['tourline5.exe']):
+        raise ValueError('recomplauncher.json must start tourline5.exe')
+    return path
+
+
 def collect(args, version):
     build = args.build_dir.resolve()
     cache = regular(build / 'CMakeCache.txt').read_text(encoding='utf-8', errors='replace')
@@ -136,6 +145,7 @@ def collect(args, version):
              'LICENSE.txt': text(ROOT / 'LICENSE'),
              'START-HERE.txt': text(ROOT / 'launcher/START-HERE.txt'),
              'CHANGELOG.md': text(ROOT / 'CHANGELOG.md')}
+    files['recomplauncher.json'] = recomplauncher_manifest()
     for name in ('Change storage.cmd', 'Change game files.cmd', 'Open storage.cmd'):
         files[name] = text(ROOT / 'launcher' / name)
     for name in RUNTIME_DLLS:
