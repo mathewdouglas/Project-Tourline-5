@@ -76,6 +76,9 @@ still owed are in the review document's "Follow-up" section.
 `patches/incremental/` holds single-change copies of runtime edits that are
 already inside the main patch; `setup_runtime.py` does not read them.
 
+**Release 0.1.1** (tag `v0.1.1`) adds the launcher, ultrawide and Phase 40 CPU
+work; built and packaged the same way as 0.1.0.
+
 **Release 0.1.0.** DXC is the default guest compiler (`RSX_SHADER_COMPILER=fxc`
 for FXC; measurement runs now use DXC's cache folder). Player ZIPs come from
 `scripts/release/clean_build.py` (fresh clone of the tag, explicit private

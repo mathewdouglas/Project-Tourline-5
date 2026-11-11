@@ -5,15 +5,13 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
-- Ultrawide 21:9 for GT5 (F1 VIDEO > Aspect ratio, `video.aspect`): the race
-  and scene cameras widen with the same vertical view, and menus and the HUD
-  stay centred at 16:9. The aspect constants are measured for v104 (GT5 Phase 41).
+## [0.1.1] - 2026-11-11
 
-### Fixed
-- Disc assets in setups with separate writable storage: absolute disc mappings
-  now bypass the save-data root, allowing GT5 to open `GT.VOL` and read artwork
-  not present in the installed update.
+Adds the native setup launcher, 21:9 ultrawide and GT5-specific CPU work to
+0.1.0. The player ZIP, `project-tourline-5-v0.1.1-windows-x64.zip`, still
+contains no game files: `tourline5.exe` asks for your own GT5 disc dump,
+01.04 installed data and decrypted update executable. Pre-alpha. The full
+record is [docs/progress-gt5.md](docs/progress-gt5.md), Phases 37 to 41.
 
 ### Added
 - Native `tourline5.exe` setup: Prologue-style storage selection, GT5 disc and
@@ -22,6 +20,11 @@ versions follow [SemVer](https://semver.org/).
 - Change storage/game files and Open storage shortcuts, verified migration with
   the source retained, managed F1 restarts, and launcher-aware player packaging.
   [Setup instructions](docs/setup.md).
+- Ultrawide 21:9 for GT5 (F1 VIDEO > Aspect ratio, `video.aspect`): the race
+  and scene cameras widen with the same vertical view, and menus and the HUD
+  stay centred at 16:9. The aspect constants are measured for v104 (GT5 Phase 41).
+- GT5 screens for the settings page: skip opening movie, F1 pauses a race,
+  the Options "PC settings" tag and controller-style button prompts (GT5 Phase 38).
 
 ### Changed
 - GT5 audio now uses its own CPU-dispatched FMA mixer/decoder/output images
@@ -29,6 +32,11 @@ versions follow [SemVer](https://semver.org/).
 - Verified SPU-progress wait loops can yield, and native table clears use
   bulk writes. A fingerprint-checked FMA render-body copy is available for
   testing with `GT5P_SPU_FMA=1`, off by default. See GT5 Phase 40 for coverage.
+
+### Fixed
+- Disc assets in setups with separate writable storage: absolute disc mappings
+  now bypass the save-data root, allowing GT5 to open `GT.VOL` and read artwork
+  not present in the installed update.
 
 ## [0.1.0] - 2026-11-11
 
