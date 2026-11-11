@@ -7,14 +7,14 @@ import zipfile
 
 exe, root = map(Path, sys.argv[1:])
 for case, value, override, disabled, file_value, effective in (
-    ('default', '', None, False, False, False),
+    ('default', '', None, False, True, True),
     ('fxc', '"fxc"', None, False, False, False),
     ('dxc', '"dxc"', None, False, True, True),
     ('override_fxc', '"dxc"', 'fxc', False, True, False),
     ('override_dxc', '"fxc"', 'dxc', False, False, True),
-    ('invalid_file', '"invalid"', None, False, False, False),
+    ('invalid_file', '"invalid"', None, False, True, True),
     ('invalid_env', '"dxc"', 'invalid', False, True, False),
-    ('no_settings', '"dxc"', None, True, False, False),
+    ('no_settings', '"fxc"', None, True, True, True),
 ):
     folder = root / ('compiler_' + case); folder.mkdir()
     settings = folder / 'settings.toml'

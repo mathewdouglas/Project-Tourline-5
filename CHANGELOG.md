@@ -9,9 +9,11 @@ versions follow [SemVer](https://semver.org/).
 
 The first tagged release of **Project Tourline 5**, the Gran Turismo 5
 (BCUS98114, 01.04 update executable `BCUS98114-v104`) target of this port.
-It is a **source release**: there is no player ZIP and no prebuilt
-executable. Build it with [Building from source](README.md#building-from-source)
-against your own copy of the game. Pre-alpha: GT5 boots to the main menu,
+A game-file-free player ZIP, `project-tourline-5-v0.1.0-windows-x64.zip`,
+is attached to the release: the engine, its runtime DLLs, glyph art and
+licences, with setup notes (`START-HERE.txt`). It contains no game files;
+you supply your own disc and the decrypted 01.04 executable. Or build it
+with [Building from source](README.md#building-from-source). Pre-alpha: GT5 boots to the main menu,
 plays its movies and sound, and Arcade races load and drive; known faults,
 including the intermittent race freeze (GT5 Phase 32), are open. The full
 record is [docs/progress-gt5.md](docs/progress-gt5.md).
@@ -26,10 +28,15 @@ record is [docs/progress-gt5.md](docs/progress-gt5.md).
   badges, above-normal process priority, an optional texture LRU (off) and
   bounded hitch tracing. Each has an environment switch that restores the
   old behaviour.
-- Optional DXC (Shader Model 6) guest shader compiler with its own cache
-  directory (GT5 Phase 34; [docs/dxc.md](docs/dxc.md)). FXC stays the
-  default; select DXC in F1 > Shaders. `scripts/get_dxc.py` fetches the
-  pinned DLL pair.
+- DXC (Shader Model 6) guest shader compiler with its own cache directory
+  (GT5 Phase 34; [docs/dxc.md](docs/dxc.md)), and **the default**. FXC is
+  F1 > Shaders > Shader compiler, or `RSX_SHADER_COMPILER=fxc`.
+  `scripts/get_dxc.py` fetches the pinned DLL pair.
+- Release tooling: `scripts/release/clean_build.py` builds the player ZIP
+  from a fresh clone of the tag with only explicit private inputs (the
+  decrypted executable and captured SPU images) and pinned third-party
+  downloads; `scripts/release/package_player.py` packages an allowlist and
+  refuses game-format files. `get_sdl2.ps1` now checks a SHA-256 pin.
 - Race preparation on helper threads and a one-file race pipeline pack,
   `shadercache/warmup-v1/race-pack-v1.bin` (GT5 Phase 35). Switches:
   `RSX_RACE_PREWARM_THREADS=1`, `RSX_RACE_PREWARM_PACK=0`.
@@ -52,9 +59,12 @@ record is [docs/progress-gt5.md](docs/progress-gt5.md).
   (`RSX_PSO_MENU_EXCLUDE_RACE=0` keeps them in both).
 
 ### Known limits
-- No player package or installer; source build only.
-- DXC is not yet the default: synthetic comparisons found output
-  differences against FXC (see docs/dxc.md).
+- No installer or launcher: the game files are placed by hand
+  (START-HERE.txt).
+- DXC became the default with synthetic output differences against FXC
+  still open (see docs/dxc.md); FXC is the rollback.
+- The first launch with DXC compiles every shader afresh: DXC uses its own
+  cache folder, and FXC caches are kept but not used.
 - GT Life, licence tests, special events and online modes were not measured
   for race scope.
 - Native control-assignment and opening-movie options from Prologue need

@@ -1,0 +1,54 @@
+Project Tourline 5 - Gran Turismo 5 for Windows (static recompilation)
+=====================================================================
+
+This package contains the port's program and the libraries it uses. It
+contains NO game files. You need your own copy of Gran Turismo 5, US disc
+BCUS98114, and its 01.04 update. Gran Turismo is a trademark of Sony
+Interactive Entertainment; this is a fan project, not affiliated with Sony
+or Polyphony Digital.
+
+Requirements: Windows 10 or 11 (64-bit), a Direct3D 12 GPU, and RPCS3 (only
+to decrypt one file and, once, to install the game's update).
+
+Setup
+-----
+Extract this ZIP to a folder of its own, for example C:\Games\PT5. Then put
+your game files beside gt5.exe, exactly like this:
+
+  gt5.exe
+  input\EMAIN.ELF          the decrypted 01.04 EBOOT.BIN (see 2)
+  input\target             a text file whose only line is: BCUS98114-v104
+  input\pkg\PARAM.SFO      from your disc's PS3_GAME folder
+  input\pkg\USRDIR\...     your disc's PS3_GAME\USRDIR, including GT.VOL
+  gamedata\dev_hdd0\game\BCUS98114\...   the installed update (see 3)
+
+1. Copy PARAM.SFO and the USRDIR folder from your disc dump's PS3_GAME
+   folder into input\pkg\.
+2. Install the 01.04 update in RPCS3 (the disc's INSDIR\DATA000.PKG is
+   installed on its first boot), then decrypt
+   dev_hdd0\game\BCUS98114\USRDIR\EBOOT.BIN with RPCS3's
+   Utilities > Decrypt PS3 Binaries. Copy the resulting EBOOT.elf to
+   input\EMAIN.ELF. release.ini lists the SHA-256 of the executable this
+   build was made for (elf_sha256); a different file will not work.
+3. Copy RPCS3's dev_hdd0\game\BCUS98114 folder to
+   gamedata\dev_hdd0\game\BCUS98114. With only the update's files there, the
+   first boot runs the game's own install from GT.VOL (a few minutes).
+4. Run gt5.exe. F1 opens the settings, F3 the profiler.
+
+The first launches compile shaders for your GPU, so expect stutter the first
+time you see a menu or track; compiled shaders are kept in the shadercache
+folder. Settings are saved in gt5p_settings.toml beside gt5.exe.
+
+Controls: any XInput or SDL controller (DualSense, DualShock 4 and others),
+or the keyboard: arrows, Z Cross, X Circle, A Square, S Triangle, Q/W L1/R1,
+1/2 L2/R2, Enter Start, Tab Select. Rebind keys in F1 > Keyboard.
+
+Shader compiler: DXC (shader model 6.0) is the default. If you see wrong
+colours or missing surfaces, choose F1 > Shaders > Shader compiler > FXC and
+restart, and please report it.
+
+This is pre-alpha software. Known problems, source code and reports:
+https://github.com/mathewdouglas/Project-Tourline-5
+
+Third-party licences are in the licenses folder; the port's own licence is
+LICENSE.txt (MIT). The licence does not cover the game.

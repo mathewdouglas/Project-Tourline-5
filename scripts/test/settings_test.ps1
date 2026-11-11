@@ -71,11 +71,11 @@ try {
         throw 'Race preparation setting was not saved'
     }
     cap "race_preload_off"; key 0x27 # restore on
-    key 0x28; key 0x27          # compiler: FXC -> DXC (restart required)
-    if (-not (Select-String -LiteralPath $toml -Pattern '^shader_compiler = "dxc"$' -Quiet)) {
+    key 0x28; key 0x25          # compiler: DXC (default) -> FXC (restart required)
+    if (-not (Select-String -LiteralPath $toml -Pattern '^shader_compiler = "fxc"$' -Quiet)) {
         throw 'Shader compiler setting was not saved'
     }
-    cap 'compiler_dxc'; key 0x27 # restore FXC
+    cap 'compiler_fxc'; key 0x27 # restore DXC
     "--- file:"; Get-Content $toml | Select-String "^(resolution|aspect|window|msaa|vsync|shader_cache|shader_warmup|pipeline_async|race_preload|sdl_controllers|keyboard|verbose_log) ="
     key 0x26 4; key 0x0D          # up to Background shader compilation; Enter opens its list
     Start-Sleep -Milliseconds 300; cap "list_open"

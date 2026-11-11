@@ -1,8 +1,9 @@
 # DXC guest shader compiler
 
 GT5 can compile its translated vertex and fragment shaders with Microsoft's
-DirectX Shader Compiler (DXC), targeting shader model 6.0. **FXC remains the
-default** until the GT5 output differences below have been resolved or accepted.
+DirectX Shader Compiler (DXC), targeting shader model 6.0. **DXC is the default
+since 0.1.0** (maintainer decision, 2026-11-11). The synthetic output
+differences below are still open; FXC is one setting away.
 GT5's address tables, SPU code and rendering fixes are unchanged.
 
 From the repository root:
@@ -18,16 +19,18 @@ and their notices to `build/licenses/dxc`. Binaries stay gitignored. Downloads
 are explicit; a build does not download dependencies. `--zip FILE` supports a
 previously downloaded pinned archive.
 
-Select **F1 > Shaders > Shader compiler > DXC**, then restart. The equivalent
-setting is:
+To use FXC, select **F1 > Shaders > Shader compiler > FXC**, then restart.
+The equivalent setting is:
 
 ```toml
 [video]
-shader_compiler = "dxc"
+shader_compiler = "fxc"
 ```
 
-`RSX_SHADER_COMPILER=dxc` overrides the file. Set it to `fxc`, or choose FXC in
-F1 and restart, to roll back. Unknown environment selections use FXC. Missing
+`RSX_SHADER_COMPILER=fxc` (or `dxc`) overrides the file; with neither set,
+DXC is used, also for test runs with `GT5P_NO_SETTINGS=1`. An existing
+settings file that already says `"fxc"` keeps FXC. Unknown environment
+selections use FXC. Missing
 compiler/validator DLLs or a device without shader model 6.0 also select FXC
 before any guest shaders compile. Startup logs and F8 diagnostics identify the
 actual compiler. A failure to compile an individual DXC shader is reported;
@@ -82,5 +85,6 @@ had values beyond the diagnostic's 1/1024 tolerance. There were no discard
 coverage differences. Smooth textures reduced the flagged pixel count to four.
 An FXC-vs-FXC optimization-level control produced zero output differences.
 These synthetic inputs do not establish a visible game defect, but they also
-do not establish parity. DXC therefore remains an explicit option while those
-cases are investigated.
+do not establish parity. They were open when DXC became the default; FXC is
+the rollback if a visible difference is found. The offline preparer
+(`precompile_shaders.py`) also defaults to DXC now.

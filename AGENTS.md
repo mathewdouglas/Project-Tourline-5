@@ -76,6 +76,13 @@ still owed are in the review document's "Follow-up" section.
 `patches/incremental/` holds single-change copies of runtime edits that are
 already inside the main patch; `setup_runtime.py` does not read them.
 
+**Release 0.1.0.** DXC is the default guest compiler (`RSX_SHADER_COMPILER=fxc`
+for FXC; measurement runs now use DXC's cache folder). Player ZIPs come from
+`scripts/release/clean_build.py` (fresh clone of the tag, explicit private
+inputs, pinned downloads) and `scripts/release/package_player.py`
+(allowlist; never game files). Releases carry the ZIP; the tag is
+`v<CMake project VERSION>`.
+
 **GT5 race scope (GT5 Phase 36).** GT5 has no `.gpb` screen names, so the
 renderer never learned or prepared a race set until its screen files were
 measured. `config/targets.json` (`screen_files`, `scope_labels`) names them

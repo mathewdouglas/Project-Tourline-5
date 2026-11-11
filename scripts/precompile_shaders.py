@@ -73,8 +73,8 @@ def main():
     parser.add_argument('--unpacker', type=Path, help='GTToolsSharp executable; extracts local GT.VOL to ignored scratch/')
     parser.add_argument('--scope', choices=('all', 'executable'), default='all')
     parser.add_argument('--cache', type=Path, default=ROOT / 'shadercache')
-    parser.add_argument('--compiler', choices=('fxc', 'dxc'), default=os.environ.get('RSX_SHADER_COMPILER', 'fxc'),
-                        help='Compiler to prepare (default: RSX_SHADER_COMPILER or fxc). DXC has a separate cache namespace.')
+    parser.add_argument('--compiler', choices=('fxc', 'dxc'), default=os.environ.get('RSX_SHADER_COMPILER', 'dxc'),
+                        help='Compiler to prepare (default: RSX_SHADER_COMPILER or dxc). DXC has a separate cache namespace.')
     parser.add_argument('--catalog', type=Path, help='Catalog destination (default: CACHE/library-v1/SCOPE)')
     parser.add_argument('--catalog-only', action='store_true')
     parser.add_argument('--compile-only', action='store_true', help='Reuse an existing extracted catalog; useful after interruption')

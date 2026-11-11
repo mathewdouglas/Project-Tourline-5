@@ -24,7 +24,7 @@ subprocess.run(['cmd', '/c', str(work / 'build.cmd')], check=True)
 missing = work / 'missing'; missing.mkdir(); shutil.copy2(work / 'test.exe', missing / 'test.exe')
 missing_validator = work / 'missing-validator'; missing_validator.mkdir()
 for name in ('test.exe', 'dxcompiler.dll'): shutil.copy2(work / name, missing_validator / name)
-for mode, expected, exe in [('dxc', 1, work), ('fxc', 0, work), ('invalid', 0, work), ('dxc', 0, missing), ('dxc', 0, missing_validator), ('unset', 0, work)]:
+for mode, expected, exe in [('dxc', 1, work), ('fxc', 0, work), ('invalid', 0, work), ('dxc', 0, missing), ('dxc', 0, missing_validator), ('unset', 1, work), ('unset', 0, missing)]:
     cache = work / ('cache-' + mode + '-' + exe.name); cache.mkdir()
     sentinel = cache / 'fxc-sentinel'; sentinel.write_bytes(b'preserve')
     env = dict(os.environ, RSX_SHADER_CACHE=str(cache), RSX_SHADER_COMPILER=mode)

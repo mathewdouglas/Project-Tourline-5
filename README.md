@@ -30,7 +30,7 @@ This tree continues [Tourline Prologue](https://github.com/mathewdouglas/Tourlin
 
 ## Getting started
 
-Release [0.1.0](CHANGELOG.md) is a source release; there is no player ZIP or prebuilt executable. Build from source with the steps in [Building from source](#building-from-source), then run **build\\gt5.exe**.
+Release [0.1.0](https://github.com/mathewdouglas/Project-Tourline-5/releases/tag/v0.1.0) has a player ZIP with no game files: extract it and follow its `START-HERE.txt`, which lists the files below. Or build from source with the steps in [Building from source](#building-from-source), then run **build\\gt5.exe**.
 
 1. Put the extracted disc where the port reads it: `input/pkg/PARAM.SFO` and `input/pkg/USRDIR/`, including `GT.VOL`. The port maps `/dev_bdvd/PS3_GAME/` to `input/pkg/`.
 2. Decrypt the installed update executable, `dev_hdd0/game/BCUS98114/USRDIR/EBOOT.BIN`, to `input/EMAIN.ELF`. RPCS3's **Utilities → Decrypt PS3 Binaries** writes an ELF beside that file. Write `BCUS98114-v104` as the only line of `input/target`.
