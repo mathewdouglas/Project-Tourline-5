@@ -4,6 +4,7 @@ No game process/data, RPCS3 installation, GPU or real user profile is touched.
 """
 import ctypes
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -142,6 +143,78 @@ def snapshot(folder):
 
 
 original_disc = snapshot(disc); original_data = snapshot(installed)
+
+# Drive preparation from the shipped manifest, including omitted optional arguments.
+manifest = json.loads((ROOT/'launcher/recomplauncher.json').read_text())
+assert manifest['prepare']['program'] == ['tourline5.exe']
+easy_home = WORK/'Easy Setup profile'
+easy_env = {'PT5_LAUNCHER_HOME': str(easy_home), 'PT5_SETUP_UI': '1'}
+
+
+def prepare(update=installed.parents[2], optional=None, success=True, extra=None, source=disc.parent):
+    selected = {'disc': str(source), 'update': str(update)}
+    if optional is not None:
+        selected['executable'] = str(optional)
+    args = []
+    for argument in manifest['prepare']['args']:
+        for key, value in selected.items():
+            argument = argument.replace('{input:'+key+'}', value)
+        if '{input:' not in argument:
+            args.append(argument)
+    before_runs = count.read_bytes() if count.exists() else b''
+    result = run(*args, success=success, extra={**easy_env, **(extra or {})})
+    assert (count.read_bytes() if count.exists() else b'') == before_runs, 'Preparation launched the game'
+    progress = [float(line.split()[1]) for line in result.stdout.decode().splitlines() if line.startswith('progress ')]
+    if success:
+        assert progress and progress[-1] == 1 and progress == sorted(progress), result.stdout
+        run('--check', extra=easy_env)
+    else:
+        assert 1 not in progress
+    return result
+
+
+prepare(optional=executable)
+assert (easy_home/'input/EMAIN.ELF').read_bytes() == ELF
+easy_settings = easy_home/'gt5p_settings.toml'
+easy_settings.write_text('[video]\nmsaa=4\nshader_warmup=false\n')
+before_setup = (easy_home/'setup.ini').read_bytes()
+prepare(success=False)  # no inferred ELF or RPCS3: fail with an actionable error, never a dialog
+assert (easy_home/'setup.ini').read_bytes() == before_setup
+assert b'optional Executable / RPCS3 input' in prepare(success=False).stderr
+(installed/'USRDIR/EBOOT.elf').write_bytes(ELF)
+prepare()
+(installed/'USRDIR/EBOOT.elf').unlink()
+fake_rpcs3 = installed.parents[2]/'rpcs3.exe'
+shutil.copyfile(WORK/'gt5.exe', fake_rpcs3)
+prepare(extra={'PT5_TEST_DECRYPT_SOURCE': str(executable)})
+prepare(update=installed, optional=fake_rpcs3, extra={'PT5_TEST_DECRYPT_SOURCE': str(executable)})
+prepare(optional=fake_rpcs3, success=False,
+        extra={'PT5_TEST_DECRYPT_SOURCE': str(executable), 'PT5_TEST_DECRYPT_FAIL': '1'})
+prepare(optional=fake_rpcs3, success=False,
+        extra={'PT5_TEST_DECRYPT_SOURCE': str(executable), 'PT5_TEST_DECRYPT_NO_OUTPUT': '1'})
+wrong_easy = WORK/'wrong easy executable.elf'; wrong_easy.write_bytes(b'wrong build')
+prepare(optional=wrong_easy, success=False)
+assert b'does not match GT5' in prepare(optional=fake_rpcs3, success=False,
+        extra={'PT5_TEST_DECRYPT_SOURCE': str(wrong_easy)}).stderr
+fake_rpcs3.unlink()
+prepare(optional=WORK/'gt5.exe', success=False)
+prepare(optional=executable, source=WORK/'missing disc', success=False)
+prepare(update=WORK/'missing update', optional=executable, success=False)
+assert (easy_home/'setup.ini').read_bytes() == before_setup
+assert (easy_home/'input/EMAIN.ELF').read_bytes() == ELF
+assert easy_settings.read_text() == '[video]\nmsaa=4\nshader_warmup=false\n'
+assert snapshot(disc) == original_disc and snapshot(installed) == original_data
+run(extra=easy_env)  # ordinary Play after preparation still uses the native launch/restart owner
+assert 'GT5P_ROOT='+str(easy_home) in (easy_home/'logs/play.out').read_text()
+easy_storage = WORK/'Easy Setup external storage'
+run('--set-storage', easy_storage, extra=easy_env)
+prepare(optional=executable)
+assert (easy_storage/'input/EMAIN.ELF').read_bytes() == ELF
+assert os.path.samefile(easy_home/'selected-storage', easy_storage)
+assert easy_settings.read_bytes() == (easy_storage/'gt5p_settings.toml').read_bytes()
+count.unlink()
+print('PASS: manifest Easy Setup, optional/automatic ELF/RPCS3, progress, no game launch/dialogs, failure retention and native Play')
+
 run('--check', success=False)
 configure(); run('--check')
 assert not count.exists(), 'Setup/check must not execute guest code'

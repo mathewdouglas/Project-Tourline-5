@@ -36,6 +36,13 @@ struct Handle {
 static fs::path install, data;
 static bool quiet = false;
 static bool silent_errors = false;
+static bool easy_setup = false;
+// RecompLauncher consumes these lines from its redirected preparation stdout.
+static void setup_progress(double fraction, const char* message) {
+    if (!easy_setup) return;
+    printf("progress %.3f %s\n", fraction, message);
+    fflush(stdout);
+}
 static std::wstring profile(const fs::path& file, const wchar_t* section, const wchar_t* key) {
     std::array<wchar_t, 32768> b{};
     const DWORD n = GetPrivateProfileStringW(section, key, L"", b.data(), (DWORD)b.size(), file.c_str());
@@ -255,11 +262,15 @@ static fs::path decrypt_executable(const fs::path& installed, const fs::path& te
     if (!fs::is_regular_file(result)) fail(L"RPCS3 did not produce EBOOT.elf. Decrypt update 1.04 in RPCS3 and select the ELF.");
     return result;
 }
-static fs::path executable_for(const fs::path& installed, const fs::path& temporary) {
+static fs::path installed_executable(const fs::path& installed) {
     for (const wchar_t* name : {L"EBOOT.elf", L"EBOOT.ELF", L"EMAIN.ELF"}) {
         const auto candidate = installed / L"USRDIR" / name;
         if (fs::is_regular_file(candidate) && hash(candidate) == PT5_ELF_SHA256) return candidate;
     }
+    return {};
+}
+static fs::path executable_for(const fs::path& installed, const fs::path& temporary) {
+    if (const auto found = installed_executable(installed); !found.empty()) return found;
     TASKDIALOG_BUTTON buttons[] = {{100,L"Select my decrypted 1.04 executable"}, {101,L"Decrypt it using my installed RPCS3"}};
     TASKDIALOGCONFIG td{}; td.cbSize = sizeof td;
     td.dwFlags = static_cast<TASKDIALOG_FLAGS>(TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION);
@@ -276,14 +287,37 @@ static fs::path executable_for(const fs::path& installed, const fs::path& tempor
     return decrypt_executable(installed, temporary, rpcs3);
 }
 static void configure(fs::path disc, fs::path installed, fs::path executable) {
+    setup_progress(0.02, "Checking GT5 disc and update folders");
     if (disc.empty()) disc = pick(true, L"Select your extracted Gran Turismo 5 disc or PS3_GAME folder");
     if (disc.empty()) throw Cancelled{};
     disc = game_folder(disc);
     if (installed.empty()) installed = pick(true, L"Select your GT5 1.04 installed data or RPCS3 folder");
     if (installed.empty()) throw Cancelled{};
+    const auto selected_update = installed;
     installed = installed_folder(installed);
     Import staging;
-    if (executable.empty()) executable = executable_for(installed, staging.path);
+    if (easy_setup) {
+        setup_progress(0.10, "Checking the update executable");
+        if (executable.empty()) executable = installed_executable(installed);
+        if (executable.empty()) {
+            // Only search the folder the player supplied and its standard RPCS3 layout.
+            std::vector<fs::path> roots{selected_update};
+            if (installed.parent_path().filename() == L"game" && installed.parent_path().parent_path().filename() == L"dev_hdd0")
+                roots.push_back(installed.parent_path().parent_path().parent_path());
+            for (const auto& folder : roots) {
+                const auto candidate = folder/L"rpcs3.exe";
+                if (fs::is_regular_file(candidate)) { executable = candidate; break; }
+            }
+        }
+        if (executable.empty())
+            fail(L"No matching decrypted update executable was found. Add your update 01.04 EBOOT.elf or installed rpcs3.exe to the optional Executable / RPCS3 input in Easy Setup, then retry.");
+        if (_wcsicmp(executable.extension().c_str(), L".exe") == 0) {
+            if (_wcsicmp(executable.filename().c_str(), L"rpcs3.exe") != 0 || !fs::is_regular_file(executable))
+                fail(L"Select your installed rpcs3.exe or the decrypted GT5 update 01.04 EBOOT.elf.");
+            setup_progress(0.12, "Decrypting a temporary copy with your RPCS3");
+            executable = decrypt_executable(installed, staging.path, executable);
+        }
+    } else if (executable.empty()) executable = executable_for(installed, staging.path);
     if (executable.empty()) throw Cancelled{};
     if (!fs::is_regular_file(executable) || fs::file_size(executable) != PT5_ELF_BYTES || hash(executable) != PT5_ELF_SHA256)
         fail(L"That executable does not match GT5 BCUS98114 update 01.04. The original disc executable and newer updates are different builds. Select the decrypted update 1.04 EBOOT.elf.");
@@ -291,12 +325,15 @@ static void configure(fs::path disc, fs::path installed, fs::path executable) {
     if (within(staging.path, installed) || within(installed, staging.path) || within(data, installed))
         fail(L"Choose the source installation outside the launcher's import/storage root.");
     const bool reuse = fs::exists(game) && fs::equivalent(game, installed);
+    setup_progress(0.20, "Copying and verifying installed update data");
     if (!reuse) copy_verified(installed, staging.path / L"game", L"Importing GT5 installed data");
+    setup_progress(0.90, "Verifying imported executable");
     fs::copy_file(executable, staging.path / L"EMAIN.ELF");
     if (hash(staging.path / L"EMAIN.ELF") != PT5_ELF_SHA256) fail(L"The executable changed during import. Previous setup is unchanged.");
     fs::create_directories(game.parent_path()); fs::create_directories(data / L"input");
     const auto backup = data / L"backups" / unique_name(); const auto elf = data / L"input/EMAIN.ELF";
     bool old_game = false, old_elf = false, new_game = false, new_elf = false;
+    setup_progress(0.95, "Activating verified GT5 setup");
     try {
         if (!reuse && fs::exists(game)) { fs::create_directories(backup); fs::rename(game, backup/L"game"); old_game = true; }
         if (!reuse) { fs::rename(staging.path/L"game", game); new_game = true; }
@@ -367,23 +404,28 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         for (int i = 1; i < argc; ++i) {
             const std::wstring arg = argv[i];
             if (arg == L"--setup") force = true;
+            else if (arg == L"--recomplauncher-prepare") { easy_setup = true; force = true; configure_only = true; silent_errors = true; }
             else if (arg == L"--configure") { force = true; configure_only = true; silent_errors = true; }
             else if (arg == L"--check") { quiet = true; silent_errors = true; }
             else if (arg == L"--open-data") open = true;
             else if (arg == L"--choose-storage") change_storage = true;
+            else if (arg.rfind(L"--executable=", 0) == 0) {
+                if (arg.size() == 13) fail(L"The Executable / RPCS3 input is empty.");
+                elf = fs::absolute(arg.substr(13));
+            }
             else if ((arg == L"--set-storage" || arg == L"--game" || arg == L"--game-data" || arg == L"--elf") && i+1 < argc) {
                 const fs::path value = fs::absolute(argv[++i]);
                 if (arg == L"--set-storage") { storage = value; silent_errors = true; }
                 else if (arg == L"--game") disc = value;
                 else if (arg == L"--game-data") installed = value;
                 else elf = value;
-            } else fail(L"Supported options: --setup, --check, --open-data, --choose-storage, --set-storage <empty folder>, --configure --game <dump> --game-data <installation> --elf <decrypted file>.");
+            } else fail(L"Supported options: --setup, --check, --open-data, --choose-storage, --set-storage <empty folder>, --configure --game <dump> --game-data <installation> --elf <decrypted file>, --recomplauncher-prepare --game <dump> --game-data <installation> [--executable=<ELF or rpcs3.exe>].");
         }
         if ((quiet && (force || open || change_storage || !storage.empty())) ||
             (open && (force || change_storage || !storage.empty())) ||
             (force && (change_storage || !storage.empty())) ||
             (change_storage && !storage.empty()) ||
-            (configure_only && (disc.empty() || installed.empty() || elf.empty())) ||
+            (configure_only && (disc.empty() || installed.empty() || (!easy_setup && elf.empty()))) ||
             (!configure_only && (!disc.empty() || !installed.empty() || !elf.empty())))
             fail(L"Use --configure with all three game-file paths, or --setup for the file pickers. --check cannot change setup or storage.");
         if (FAILED(com)) fail(L"Windows COM initialization failed.");
@@ -443,7 +485,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             if (silent_errors && !configure_only) fail(L"Setup is missing or invalid. Run tourline5.exe --setup.");
             configure(disc, installed, elf);
         }
-        if (configure_only) return 0;
+        if (configure_only) {
+            if (easy_setup) { validate_setup(); setup_progress(1.0, "GT5 setup complete"); }
+            return 0;
+        }
         validate_setup(); const auto engine = validate_engine();
         if (!fs::is_directory(install/L"assets/glyphs")) fail(L"The player assets folder is missing. Rebuild or re-extract the complete player folder.");
         fs::create_directories(data/L"assets");

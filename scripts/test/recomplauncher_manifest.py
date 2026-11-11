@@ -198,7 +198,20 @@ def main():
     assert doc['format'] == 1
     assert doc['start']['program'] == ['tourline5.exe'], 'Play must go through the Tourline launcher'
     assert not doc['start'].get('args'), 'the Tourline launcher takes no arguments for a normal launch'
-    assert 'game' not in doc, 'the Tourline launcher selects and verifies the game folder itself'
+    assert 'game' not in doc, 'named inputs carry the disc and installed update separately'
+    inputs = {item['id']: item for item in doc['inputs']}
+    assert set(inputs) == {'disc', 'update', 'executable'}
+    for name in ('disc', 'update'):
+        assert not inputs[name].get('optional')
+        assert inputs[name]['formats'] == [{'type': 'folder'}], 'ISO import is unsupported'
+    assert inputs['executable']['optional']
+    assert inputs['executable']['formats'] == [{'type': 'file', 'extensions': ['elf', 'exe']}]
+    assert all('destination' not in item for item in inputs.values()), 'keep sources outside the install'
+    assert doc['prepare']['program'] == ['tourline5.exe']
+    assert doc['prepare']['args'] == ['--recomplauncher-prepare', '--game', '{input:disc}',
+                                      '--game-data', '{input:update}', '--executable={input:executable}']
+    assert doc['prepare']['timeout'] >= 3600
+    print('Easy Setup: disc/update folders and optional ELF/RPCS3, noninteractive prepare')
     print('start: tourline5.exe')
 
     (config,) = doc['config']

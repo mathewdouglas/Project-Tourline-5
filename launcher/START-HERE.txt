@@ -1,5 +1,14 @@
 Project Tourline 5 - setup and play
 
+Using RecompLauncher: open Easy Setup and drop your extracted disc folder
+and installed 01.04 update/RPCS3 folder into the matching inputs. If needed,
+add the decrypted update EBOOT.elf or installed rpcs3.exe in Executable / RPCS3.
+It imports and verifies your files with progress, then Play starts the game.
+ISO files must be extracted first. The disc alone does not contain the
+installed update this build requires.
+
+Without RecompLauncher, use the built-in setup:
+
 1. Run tourline5.exe. Keep the default storage folder, or choose an empty
    folder on another drive (including an external SSD).
 2. Select your extracted Gran Turismo 5 US disc dump (BCUS98114, version 02.00),
