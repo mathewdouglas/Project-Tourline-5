@@ -4,6 +4,50 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Phase 44 - Car list and race frame: where the time goes; two switches measured (2026-11-11)
+
+User report: the Arcade car list drops when a car is selected and settles
+near 45 fps; races (Eiger Nordwand) are not a steady 60. 720p, defaults.
+
+**Car list.** 60 fps until the car appears, then ~43-45 (`pfC1`: 215-227
+frames per 5 s). Process CPU 2.8 of 12 logical CPUs. Timeline (`pfC9`,
+`"PS3_TIMELINE=60,4"`, 13 s into the page): no blocking presents; frames
+16-30 ms, mostly 20-24 ms, not vblank-quantised. Critical path: SPU render
+workload 4 (4 lanes) runs 17-22 ms a pass; the game thread (`gFKsE`) waits
+in `cond_wait` until it ends, then flips and kicks the next pass. Lane CPU
+profile while running workload 4 (`pfS2`, `GT5P_SAMPLE=8 GT5P_SAMPLE_WID=4`):
+59% body `0x0196FF40` (`0xB240` 19%, `0xAD30`, `0xF970`, `0xC5E0`, `0xA408`)
+and 41% runtime (`mfc_do_transfer` 8%, `spu_indirect_branch` 7%,
+`spu_lookup_fast` 4%, `spu_drain_call_impl` 4%, `spu_irq_regs_maybe_restore`
+2.6%). Not reconciled: lanes run ~20 ms a pass but used only 31-44% of a
+core each (`pfC1 -Cpu`).
+
+**Two existing switches, A/B** (frames per 5 s at the car list, steady
+state; HSR frame test FPS, 50 s, two runs each):
+
+| Case | Car list | HSR race |
+| --- | ---: | ---: |
+| baseline | ~227 | 52.1, 52.0 |
+| `GT5P_SPU_FMA=1` (FMA copy of body 0x0196FF40) | ~246 | 50.9, 50.9 |
+| `SPURS_LANE_CPU_WIDS=4` (pin workload 4's lanes) | ~240 | 45.1, 51.3 |
+| both | ~250 | 48.3, 49.8 |
+
+Both help the car list ~8-10% and do not help races, whose frame is
+bounded elsewhere (Phase 29: the game thread, FIFO walk and the ring-space
+label wait). Neither becomes a default. Deeper work (SPU runtime overhead,
+the label wait, job-list parallelism) continues on branch
+`perf/spu-render-pass`.
+
+**Also seen.** An intermittent boot hang, 2 of ~50 boots today (`pfC2`
+at OpeningMovie, `rf_fma1` at LoadData): frames keep presenting with 3-80
+draws, and after the 120 s grace the policy module (image 1, pc 0x2534) is
+halted on ea `0x40026000`. Older logs (12:00 `a1`, `b1`; 28 in the root
+checkout) show the same halt, so it predates this session's changes;
+open. Harness pitfalls: a PowerShell `if` returning a one-element array
+yields a string, and `@v` then splats its characters (declare
+`[string[]]`); quote values with commas (`"PS3_TIMELINE=60,4"`); timeline
+time counts from the present thread's start.
+
 ## Phase 43 - Eiger Nordwand weather-change crash: unlifted job-body functions (2026-11-11)
 
 **Report.** Arcade, Eiger Nordwand with weather change: the track loaded,
