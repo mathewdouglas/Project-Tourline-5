@@ -4,6 +4,28 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Profile-guided release builds (2026-11-13)
+
+`scripts/release/clean_build.py --profile <profdata>` makes the player ZIP
+profile-guided; `release.ini` records `pgo_profile_sha256`. clang now names
+every function the profile has no record of (`pgocc.py` adds
+`-pgo-warn-missing-function`). The build fails if any function with counts
+changed (limit 0) or if more than 2000 have no record. Workflow and limits:
+[pgo.md](pgo.md), "Releases".
+
+- **First test failed, correctly**: 25 hot SPU functions (bodies `b01697100`,
+  `b0196FF40`) lost their counts. This checkout's `generated/` had never had
+  `spu_regpromo.py` / `spu_region.py` applied; the release lift applies them.
+  After applying them, the dev and release lifts were byte-identical.
+  `pgo.py gen`/`use` now refuse a lift that misses a post-lift step.
+- **Second test, from commit 23ccd0b with a new profile**: 0 lost counts.
+  435 functions have no record, all code the race route never runs: launcher
+  186, settings page 171, debug export 22, glyphs 20, cellL10n 19, others 17.
+- **The packaged exe is the fast one**: High Speed Ring frame tests of the ZIP's
+  `gt5.exe` gave 55.1 and 55.7 FPS. The earlier measured PGO build gave 54.9
+  in the same session. These are single runs, not an interleaved A/B, and this
+  session ran about 1.5 FPS below the 2026-11-12 one.
+
 ## Profile-guided builds: +6% at High Speed Ring (2026-11-12)
 
 `scripts/pgo/pgo.py` builds an instrumented `gt5.exe` (`build_pgo_gen/`),
@@ -20,7 +42,7 @@ Interleaved frame tests, 4 rounds, same sources, runtime and lift:
 - p99 unchanged.
 
 The picture and race state match. The car list, out of sample, is about +2.5%
-(both PGO runs above both normal ones). Player builds are not PGO yet; see
+(both PGO runs above both normal ones). Release builds: see the 2026-11-13 entry and
 pgo.md, "Open".
 
 ## Bitdefender "Gen:Variant.Lazy" on gt5.exe: located and changed (2026-11-12)

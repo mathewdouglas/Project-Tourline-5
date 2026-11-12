@@ -132,6 +132,9 @@ them. Both sides of the A/B used the same lift, so the High Speed Ring result
 stands. `spu_region` targets an Eiger loop that does not run there, and the
 promoted copies are off by default. After the two steps were applied, the dev
 lift was byte-identical to the release lift, and the profile was made again.
+The release test then passed (0 lost counts, 435 without a record), and its
+packaged `gt5.exe` ran 55.1 and 55.7 FPS at High Speed Ring against 54.9 for
+the earlier PGO build in the same session.
 
 ## Open
 
