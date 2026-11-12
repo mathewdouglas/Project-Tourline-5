@@ -5,6 +5,18 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-12
+
+Antivirus hotfix for 0.1.2: no gameplay changes. Built from the 0.1.2 tag
+plus one change, with the same clean release pipeline.
+
+### Fixed
+- Bitdefender and engines using it (ALYac, Arcabit, Emsisoft, GData, VIPRE)
+  flagged `gt5.exe` as `Gen:Variant.Lazy`. Byte bisection on VirusTotal traced
+  the static score to a run of about 25 `getenv`/`_putenv_s` default-setting
+  pairs at the top of `main`; they are now one table and loop with the same
+  variables, values and precedence. The fixed package scanned clean.
+
 ## [0.1.2] - 2026-11-12
 
 Fixes the intermittent race freeze and Eiger Nordwand weather-change crash,
