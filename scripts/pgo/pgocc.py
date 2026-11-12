@@ -21,6 +21,10 @@ gen flags:
   -mllvm -disable-vp=true               continuous mode keeps no value profiles
 use flags:
   -fprofile-use=<profdata> -Wno-profile-instr-unprofiled
+  -mllvm -pgo-warn-missing-function     names each function the profile has
+                                        no record of ("no profile data
+                                        available"), so a profile that fits
+                                        nothing cannot pass unnoticed
 both:
   -mllvm -static-func-full-module-prefix=false   a static function's profile
                                         name uses its file's base name, so a
@@ -50,7 +54,8 @@ def main() -> int:
         if not os.path.isfile(path):
             sys.stderr.write(f'pgocc.py: no profile at {path}\n')
             return 2
-        extra = ['-fprofile-use=' + path] + keep_names + ['-Wno-profile-instr-unprofiled']
+        extra = (['-fprofile-use=' + path] + keep_names +
+                 ['-Wno-profile-instr-unprofiled', '-mllvm', '-pgo-warn-missing-function'])
     else:
         sys.stderr.write(f'pgocc.py: unknown mode {mode}\n')
         return 2

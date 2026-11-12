@@ -148,6 +148,14 @@ def cmd_merge(a):
     say(f'merged {len(files)} run(s) into {out} ({out.stat().st_size >> 20} MB); next: pgo.py use')
 
 
+def profile_fit(log):
+    """(changed functions that lost counts, functions the profile has no record of) in a build log."""
+    lines = log.splitlines()
+    stale = sum(1 for l in lines if 'hash mismatch' in l and 'up to 0 count discarded' not in l)
+    missing = sum(1 for l in lines if 'no profile data available for function' in l)
+    return stale, missing
+
+
 def cmd_use(a):
     prof = Path(a.profile) if a.profile else PGO / 'gt5.profdata'
     if not prof.is_file():
@@ -160,8 +168,9 @@ def cmd_use(a):
         shutil.copyfile(prof, use)
     d = build('use', str(use).replace('\\', '/'), a.jobs)
     log = (d / 'pgo_build.log').read_text(errors='replace')
-    stale = sum(1 for l in log.splitlines() if 'hash mismatch' in l and 'up to 0 count discarded' not in l)
-    say(f'functions the profile no longer fits, in what this build compiled: {stale}')
+    stale, missing = profile_fit(log)
+    say(f'in what this build compiled: {stale} function(s) the profile no longer fits, '
+        f'{missing} it has no record of')
     say('next: scripts/pgo/pgo.py ab')
 
 

@@ -210,6 +210,7 @@ def main():
     ap.add_argument('--vc-runtime-dir', required=True, type=Path)
     ap.add_argument('--output', type=Path, help='write a player ZIP')
     ap.add_argument('--stage-dir', type=Path, help='write an unpacked player folder (must be empty)')
+    ap.add_argument('--pgo-profile', type=Path, help='the profile a profile-guided build used; only its SHA-256 is stored')
     args = ap.parse_args()
     version = port_version()
     if not args.output and not args.stage_dir:
@@ -232,6 +233,8 @@ def main():
     release = ('[release]\nschema=1\nproduct=Project Tourline 5\n'
                f'port_version={version}\ntarget={TARGET}\ngame=BCUS98114 01.04\n'
                f'elf_sha256={sha(elf)}\nengine_sha256={sha(files[ENGINE])}\n')
+    if args.pgo_profile:
+        release += f'pgo_profile_sha256={sha(regular(args.pgo_profile))}\n'
     generated['pt5-release.ini'] = f'[game]\ntarget={TARGET}\nengine_sha256={sha(files[ENGINE])}\n'
     before = {n: (p.stat().st_size, p.stat().st_mtime_ns) for n, p in files.items()}
     if stage:
