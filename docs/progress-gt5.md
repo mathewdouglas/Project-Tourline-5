@@ -43,7 +43,7 @@ Interleaved frame tests, 4 rounds, same sources, runtime and lift:
 
 The picture and race state match. The car list, out of sample, is about +2.5%
 (both PGO runs above both normal ones). Release builds: see the 2026-11-13 entry and
-pgo.md, "Open".
+pgo.md, "Releases".
 
 ## Bitdefender "Gen:Variant.Lazy" on gt5.exe: located and changed (2026-11-12)
 
