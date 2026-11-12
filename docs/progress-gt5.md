@@ -4,6 +4,41 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Pipeline growth per track and car: no saturation (2026-11-13)
+
+Question: would scripted race runs through every track (Prologue's content
+sweep) give GT5 a starter set of a manageable size? `scripts/test/gt5_sweep.ps1`
+runs race routes one after another into one private cache and counts new
+pipeline recipes per run. `gt5boot.ps1 -Route race` now takes `-Track <n>` and
+`-Car <n>` (Rights on the track and car lists, `Get-GT5RaceRoute`). Selection
+is open loop, so the shots confirm what each run reached. Each route idles
+40 s after the race start at 1080p defaults (no throttle).
+
+| Run | Route | New pipelines | Race set after | Badge (s) |
+| --- | --- | ---: | ---: | ---: |
+| sw1-1 | High Speed Ring, first car (cold) | 834 | 775 | 29.9 |
+| sw1-2 | Track 6, Eiger Nordwand in rain | 614 | 1,080 | 33.3 |
+| sw1-3 | Stalled at the main menu (menu content only) | 647 | 1,080 | 13.0 |
+| sw1-4 | Track 2 | 903 | 1,454 | 36.3 |
+| sw1-5 | Track 3 | 833 | 2,256 | 40.6 |
+| sw1-6 | High Speed Ring again (control) | 60 | 2,256 | 10.2 |
+| sw1-7 | High Speed Ring, car 3 | 1,245 | 3,477 | 46.2 |
+
+- **Each new track adds 600-900 pipelines, with no sign of levelling off**
+  after four tracks.
+- **A different car on a known track added 1,245**, more than any track did.
+  Opponents follow the player's car class, so a car change brings a new
+  field of cars. With GT5's ~1,000 cars, a car sweep has no practical end.
+- **The control repeat added 60**, and its badge time (10.2 s) matches the
+  earlier warm run (13.1 s). A route the cache has seen is served.
+- **The shared race set is not built for this.** It reached 3,477 pipelines
+  after six races, and each race load prepares all of it within one
+  30-second wait budget, up to the 8,192 resident cap. A sweep of every
+  track would overflow it. Per-track race sets would be needed first.
+
+The sweep retries a run once when it stops before the race start (sw1-3).
+Not done: the full-track sweep and per-track race sets.
+
 ## Building driver pipelines from the disc: measured, not worth it (2026-11-13)
 
 Follow-up to the section below. That one showed that compiled shaders alone

@@ -17,6 +17,8 @@
 #   the -Settle window after -SampleDelay s (default 20), to
 #   scratch\pv\<t>.frames.txt. -Cpu adds per-thread CPU over the window.
 #   Each screen milestone reached is printed with its time after the menu.
+#   -Track <n> / -Car <n> (with -Route race): Rights on the track list / car
+#   list (Get-GT5RaceRoute; -Track 6 is Eiger Nordwand). Check the shots.
 #   -ExtraHold "<presses>": appended to the PAD_HOLD script (e.g. a camera
 #   change: "@RaceStart+3000-3200:TRIANGLE").
 #   -> scratch\pv\<t>.out/.err, <t>.menu<N>.png
@@ -24,6 +26,7 @@
 param([string]$Tag = "gt5", [int]$Settle = 60, [int]$Gap = 10, [switch]$Fresh, [switch]$FreshSave, [switch]$Movie,
       [ValidateSet("menu", "carlist", "grid", "race")][string]$Route = "menu", [string]$ShotsFrom = "",
       [switch]$FrameTest, [int]$SampleDelay = 20, [switch]$Cpu, [string]$ExtraHold = "",
+      [int]$Track = 0, [int]$Car = 0,
       [Parameter(ValueFromRemainingArguments = $true)] $Vars)
 . "$PSScriptRoot\milestone.ps1"
 Add-Type -AssemblyName System.Drawing
@@ -40,7 +43,7 @@ $set = @{ GT5P_NO_SETTINGS = "1"; FS_HIDE = "grim/file/contents"; PS3_VERBOSE = 
           PAD_MILESTONE_FILES = $GT5MilestoneFiles; PAD_HOLD = $GT5BootHold }
 if ($Route -eq "carlist") { $set.PAD_HOLD = $GT5CarListHold }
 if ($Route -eq "grid") { $set.PAD_HOLD = $GT5GridHold; if (-not $ShotsFrom) { $ShotsFrom = "RaceLoad" } }
-if ($Route -eq "race") { $set.PAD_HOLD = $GT5RaceHold; if (-not $ShotsFrom) { $ShotsFrom = "RaceStart" } }
+if ($Route -eq "race") { $set.PAD_HOLD = Get-GT5RaceRoute $Track $Car; if (-not $ShotsFrom) { $ShotsFrom = "RaceStart" } }
 if ($Movie) { $set.Remove("PAD_HOLD") }
 if ($FrameTest) { $set.GT5P_FRAME_LOG = "$dir\$Tag.frames.csv"; $set.PAD_HOLD += ",@RaceStart+1000-900000:CROSS" }
 if ($ExtraHold) { $set.PAD_HOLD += ",$ExtraHold" }
