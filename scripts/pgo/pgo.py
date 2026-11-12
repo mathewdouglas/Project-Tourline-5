@@ -118,7 +118,25 @@ def gt5boot(tag, exe, extra=(), frame_test=True, settle=40):
     return out
 
 
+POST_LIFT = ('spin_patch.py', 'ui_mask_patch.py', 'spu_native_patch.py', 'spu_regpromo.py', 'spu_region.py')
+
+
+def check_lift():
+    """Refuse a generated/ that misses a required post-lift step: a profile of
+    it would not fit a release build, whose lift applies them all."""
+    bad = []
+    for s in POST_LIFT:
+        out = subprocess.run([sys.executable, str(ROOT / 'scripts' / s), '--check'], cwd=ROOT,
+                             capture_output=True, text=True, errors='replace').stdout
+        bad += [f'{s}: {l.strip()}' for l in out.splitlines()
+                if 'NOT patched' in l or 'needs patching' in l or 'not listed' in l]
+    if bad:
+        print('\n'.join('    ' + l for l in bad[:20]))
+        sys.exit('[pgo] generated/ is missing post-lift steps (above): run them first (AGENTS.md, Tools)')
+
+
 def cmd_gen(a):
+    check_lift()
     (PGO / 'profraw').mkdir(parents=True, exist_ok=True)
     build('gen', str(PGO / 'profraw').replace('\\', '/'), a.jobs)
     say('next: scripts/pgo/pgo.py play')
@@ -160,6 +178,7 @@ def cmd_use(a):
     prof = Path(a.profile) if a.profile else PGO / 'gt5.profdata'
     if not prof.is_file():
         sys.exit(f'[pgo] no profile at {prof}: run merge first')
+    check_lift()
     # A copy named by content: a new profile is a new path, so ninja rebuilds.
     digest = hashlib.sha256(prof.read_bytes()).hexdigest()[:12]
     use = PGO / 'use' / f'gt5-{digest}.profdata'

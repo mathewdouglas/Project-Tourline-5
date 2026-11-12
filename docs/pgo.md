@@ -98,11 +98,45 @@ That is about +2.5%; the car list is held by the SPU job chain (workload 4).
 **Not measured**: other tracks, Eiger in rain, menus beyond the route, and a
 profile merged from several routes.
 
+## Releases
+
+`scripts\release\clean_build.py --profile <profdata>` builds the player ZIP
+profile-guided. The profile is one more private input, like the ELF: the clean
+clone's own `scripts\pgo\pgocc.py` compiles everything with it, and
+`release.ini` in the ZIP records its SHA-256 (`pgo_profile_sha256`).
+
+Make the profile from the release's sources:
+
+1. Check out the release tag in a development checkout. Its `generated\` must
+   be the tag's lift with every post-lift step applied. `pgo.py gen` and
+   `use` refuse a lift that misses one.
+2. `pgo.py gen`, `play`, `merge` (about 25 minutes).
+3. `clean_build.py --private <checkout> --work <new folder> --profile <checkout>\scratch\pgo\gt5.profdata`.
+
+`clean_build.py` reads clang's per-function warnings from the build log
+(`build.log` in the work folder):
+
+| Count | Meaning | Limit |
+|---|---|---|
+| lost counts (hash mismatch) | a function that ran while profiling has a different body now | 0 (`--profile-max-stale`) |
+| no record | code the profiling run never loaded: the launcher (another exe), the settings page, debug export, glyph art | 2000 (`--profile-max-missing`) |
+
+A profile that fits these sources gives no lost counts and about 500 functions
+with no record. A profile from other sources misses tens of thousands.
+
+**First test (2026-11-13)**: the profile behind the measurements above failed
+this check with 25 functions that lost counts. They were the hot loops of
+bodies `b01697100` and `b0196FF40`: this checkout's `generated\` had never had
+`spu_regpromo.py` and `spu_region.py` applied, and the release lift applies
+them. Both sides of the A/B used the same lift, so the High Speed Ring result
+stands. `spu_region` targets an Eiger loop that does not run there, and the
+promoted copies are off by default. After the two steps were applied, the dev
+lift was byte-identical to the release lift, and the profile was made again.
+
 ## Open
 
-- **Releases**: player builds are not PGO. `scripts\release\clean_build.py`
-  could take a profile as one more private input, as it does the ELF. Whether
-  to ship PGO builds is the maintainer's decision.
+- **Release cadence**: re-profile for every release. Code changes since the
+  profile lose their counts, and the release check refuses them.
 - **A/B measurements**: a change measured on PGO builds needs a profile per
   side, since changed code has no counts in the other side's profile. Keep
   A/Bs on normal builds unless both sides are profiled.
