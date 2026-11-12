@@ -4,7 +4,7 @@
  * Prints, per state, the median time of one call and a hash of the final
  * registers and local store, so builds with different helpers can be timed
  * and compared exactly.
- *   bench.exe <states file> <repeats> */
+ *   bench.exe <states file> <repeats> [entry:lo:hi,...] */
 #include "spu_helpers.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,12 +26,18 @@ static void (*lookup(uint32_t pc))(spu_context*)
     for (int i = 0; i < s_nfn; i++) if (s_fn[i].addr == (pc & 0x3FFFCu)) return s_fn[i].fn;
     return NULL;
 }
-static int s_bad;
-/* The runtime's indirect branch: here a lookup in this image's table. */
+static int s_bench_bad, s_bench_left;
+static uint32_t s_lo, s_hi = 0x40000;   /* the routine's address range (argv[3]) */
+static uint32_t s_ret;                   /* the call's return address (r0 on entry) */
+/* The runtime's indirect branch: here a lookup in this image's table. A
+ * target outside the routine's range ends the run there (s_bench_left): routines
+ * that leave through a register branch instead of returning. */
 void spu_indirect_branch(spu_context* ctx)
 {
-    void (*f)(spu_context*) = lookup(ctx->pc);
-    if (!f) { s_bad = 1; return; }
+    const uint32_t pc = ctx->pc & 0x3FFFCu;
+    if (pc < s_lo || pc >= s_hi || pc == (s_ret & 0x3FFFCu)) { s_bench_left = 1; return; }
+    void (*f)(spu_context*) = lookup(pc);
+    if (!f) { s_bench_bad = 1; return; }
     f(ctx);
 }
 /* Runtime entry points the measured path must never reach. */
@@ -42,21 +48,12 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel) { (void)ctx; (void)channel; un
 void spu_wrch(spu_context* ctx, uint32_t channel, u128 value) { (void)ctx; (void)channel; (void)value; unreached("spu_wrch"); }
 void spu_halt(spu_context* ctx) { (void)ctx; unreached("spu_halt"); }
 void spu_stop(spu_context* ctx) { (void)ctx; unreached("spu_stop"); }
-#if defined(BENCH_RP) || defined(BENCH_REGION)
+/* The native replacements and the switches of the post-lift steps already
+ * in generated/ (spu_native_patch.py, spu_regpromo.py, spu_region.py), as
+ * the game builds them. main() sets the regions and register promotion off
+ * unless this variant is built to test them. */
 volatile int g_spu_exp;
-#endif
-#ifdef BENCH_REGION
-/* The merged region (scripts/spu_region.py), switched on. */
-volatile int g_gt5p_spu_region = 1;
-int gt5p_spu_region_init(void) { return 1; }
-#endif
-#ifdef BENCH_RP
-/* Register-promoted copies (scripts/spu_regpromo.py), switched on. */
-volatile int g_gt5p_spu_regpromo = 1;
-int gt5p_spu_regpromo_init(void) { return 1; }
-void gt5p_spu_regpromo_check(spu_context* ctx, void (*orig)(spu_context*), void (*promo)(spu_context*), uint32_t block)
-{ (void)ctx; (void)orig; (void)promo; (void)block; }
-#endif
+#include "../../src/gt5p_spu_native.c"
 #ifdef BENCH_COUNT
 static unsigned s_cnt[0x40000 / 4];
 void bench_count(unsigned a) { s_cnt[(a & 0x3FFFF) / 4]++; }
@@ -78,6 +75,16 @@ static uint64_t fnv(const void* p, size_t n, uint64_t h)
 int main(int argc, char** argv)
 {
     if (argc < 3) { fprintf(stderr, "usage: bench <states> <repeats>\n"); return 2; }
+#ifdef BENCH_REGION
+    _putenv("GT5P_SPU_REGION=1");
+#else
+    _putenv("GT5P_SPU_REGION=0");
+#endif
+#ifdef BENCH_RP
+    _putenv("GT5P_SPU_REGPROMO=1");
+#else
+    _putenv("GT5P_SPU_REGPROMO=0");
+#endif
     BENCH_REGISTER();
     FILE* f = fopen(argv[1], "rb");
     if (!f) { perror(argv[1]); return 2; }
@@ -93,27 +100,40 @@ int main(int argc, char** argv)
         void (*entry)(spu_context*) = lookup(h.addr);
         if (!entry) { fprintf(stderr, "no function 0x%X\n", h.addr); return 2; }
         const uint32_t ret = s_init.gpr[0]._u32[0];
+        s_ret = ret;
+        /* argv[3]: "entry:lo:hi,..." (hex), the address range of each
+         * captured routine; default: the whole local store. */
+        s_lo = 0; s_hi = 0x40000;
+        for (const char* q = argc > 3 ? argv[3] : ""; *q; ) {
+            char* e; unsigned long a = strtoul(q, &e, 16), lo = 0, hi = 0x40000;
+            if (*e == ':') lo = strtoul(e + 1, &e, 16);
+            if (*e == ':') hi = strtoul(e + 1, &e, 16);
+            if (a == h.addr) { s_lo = (uint32_t)lo; s_hi = (uint32_t)hi; }
+            q = (*e == ',') ? e + 1 : e;
+            if (*e != ',') break;
+        }
         double best[64]; int nb = 0; uint64_t hash = 0;
         for (int r = 0; r < reps; r++) {
             memcpy(&s_ctx, &s_init, sizeof s_ctx);
             s_ctx.ls = s_ctx.ls_store;
             s_ctx.pc = h.addr; s_ctx.image_id = (int)h.image; s_ctx.host_depth = 1; s_ctx.int_enable = 0;
-            g_spu_trampoline_fn = NULL; s_bad = 0;
+            g_spu_trampoline_fn = NULL; s_bench_bad = 0; s_bench_left = 0;
             LARGE_INTEGER t0, t1; QueryPerformanceCounter(&t0);
             entry(&s_ctx);
-            for (int guard = 0; g_spu_trampoline_fn && guard < 100000000; guard++) {
+            for (int guard = 0; g_spu_trampoline_fn && !s_bench_left && guard < 100000000; guard++) {
                 void (*t)(spu_context*) = g_spu_trampoline_fn; g_spu_trampoline_fn = NULL; t(&s_ctx);
             }
             QueryPerformanceCounter(&t1);
-            if (s_bad || s_ctx.pc != ret) { fprintf(stderr, "state %d: ended at pc 0x%X, expected 0x%X (bad=%d)\n", k, s_ctx.pc, ret, s_bad); return 1; }
+            if (s_bench_bad || (!s_bench_left && s_ctx.pc != ret)) { fprintf(stderr, "state %d: ended at pc 0x%X, expected 0x%X (bad=%d)\n", k, s_ctx.pc, ret, s_bench_bad); return 1; }
             const double us = (double)(t1.QuadPart - t0.QuadPart) * 1e6 / (double)qf.QuadPart;
             if (nb < 64) best[nb++] = us;
-            const uint64_t hh = fnv(s_ctx.ls_store, SPU_LS_SIZE, fnv(s_ctx.gpr, sizeof s_ctx.gpr, 1469598103934665603ULL));
+            const uint32_t endpc = s_ctx.pc;
+            const uint64_t hh = fnv(&endpc, 4, fnv(s_ctx.ls_store, SPU_LS_SIZE, fnv(s_ctx.gpr, sizeof s_ctx.gpr, 1469598103934665603ULL)));
             if (r && hh != hash) { fprintf(stderr, "state %d: not deterministic\n", k); return 1; }
             hash = hh;
         }
         for (int i = 1; i < nb; i++) for (int j = i; j > 0 && best[j] < best[j - 1]; j--) { double t = best[j]; best[j] = best[j - 1]; best[j - 1] = t; }
-        printf("state %2d calls %6u: %9.1f us  hash %016llX\n", k, h.calls, best[nb / 2], (unsigned long long)hash);
+        printf("state %2d entry %05X calls %6u: %9.1f us  hash %016llX\n", k, h.addr, h.calls, best[nb / 2], (unsigned long long)hash);
         total += best[nb / 2]; k++;
     }
     printf("total %.1f us over %d states\n", total, k);

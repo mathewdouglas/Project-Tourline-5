@@ -797,6 +797,9 @@ static int locate_project_root(void)
  * - SPURS_LANE_PIN=2: render lanes on cores of their own (Phase 64).
  * - SPURS_LANE_STAGGER_MS=0, GT5 only: start all of a job list's lanes
  *   together (GT5 Phase 44); unless either stagger variable is set.
+ * - SPURS_LANE_PIN_SCOPE=1, GT5 with race scope: outside races pin workload
+ *   4's lanes (the car list's render pass) instead of 0 and 1 (GT5 Phase 46);
+ *   =0 the fixed SPURS_LANE_CPU_WIDS set.
  * - RSX_SHADER_ASYNC=1: shaders compile on background threads (Phase 65).
  * The settings file, loaded earlier, has already set any it covers. */
 static void apply_env_defaults()
@@ -827,6 +830,7 @@ static void apply_env_defaults()
         {"GCM_PARK_TIMEOUT_MS",  "3000",             gt5},
         {"SPURS_LANE_PIN",       "2",                true},
         {"SPURS_LANE_STAGGER_MS", "0",               stagger},
+        {"SPURS_LANE_PIN_SCOPE", "1",                gt5 && race_scope},
         {"RSX_SHADER_ASYNC",     "1",                true},
     };
     for (const auto& d : defaults)

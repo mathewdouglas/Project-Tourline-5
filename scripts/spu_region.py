@@ -144,7 +144,9 @@ def patch_image(image, regions, text, all_regs=True):
                 head = f"void gt5p_{image}_spu_func_{m:08X}(spu_context* ctx) {{"
                 s = lines.index(head)
                 e = lines.index("}", s + 1)
-                heads[m], bodies[m] = s, lines[s + 1:e]
+                # A member's register-promotion switch (spu_regpromo.py) has no
+                # place inside the region: its check mode reads ctx->gpr.
+                heads[m], bodies[m] = s, [l for l in lines[s + 1:e] if "/* spu_regpromo */" not in l]
             name, fn, what = region_lines(image, members, bodies, all_regs)
         except ValueError as ex:
             report.append(f"region 0x{members[0]:X}: skipped, {ex or 'member not found'}")

@@ -5,6 +5,12 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- The Arcade car list draws about 10% more frames (GT5 Phase 46): outside
+  races the render lanes of workload 4, which the car list waits on, are
+  pinned to their own cores; in races the pinning is unchanged.
+  `SPURS_LANE_PIN_SCOPE=0` restores the fixed set.
+
 ## [0.1.3] - 2026-11-12
 
 Antivirus hotfix for 0.1.2: no gameplay changes. Built from the 0.1.2 tag

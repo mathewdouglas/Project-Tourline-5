@@ -102,6 +102,15 @@ hot body functions (`scripts/spu_regpromo.py`, post-SPU-lift step after
 `spu_native_patch.py`; `GT5P_SPU_REGPROMO=1`, `=2` check, `=3` A/B) is 14%
 slower; `PS3_USLEEP_GCM_WAKE=1` and `SPU_DRAIN_RET_FAST` (on, exact) show no
 measurable change. Plan: [docs/plan-gt5-render-pass.md](docs/plan-gt5-render-pass.md).
+**Car list: lanes pinned by race scope (Phase 46).** Outside races GT5 pins
+workload 4's lanes (the car list's render pass) instead of 0 and 1
+(`SPURS_LANE_PIN_SCOPE=1`, set by `src/main.cpp`; `=0` the fixed set;
+`SPURS_LANE_PIN_MENU`/`_RACE` name the sets; the renderer reports the scope).
+Car list +8 to 18%; races unchanged within noise. `SPURS_LANE_PIN_AB=3`
+compares two pinning sets within one boot. Merging the render body's loops
+(`spu_region.py`) was exact but not measurable in game; the opt-in FMA copy
+adds about 5% more there. `spu_loop_bench.py` now handles routines that leave
+through indirect branches (`--ranges`) and several captured routines.
 **Eiger Nordwand in rain (Phase 45)** runs ~47 FPS, and no change or
 combination beats the default (spread ~5 FPS; `scratch\go.ps1 -Eiger` in the
 Phase 44 worktree drives there). Cause, measured by delay injection: one

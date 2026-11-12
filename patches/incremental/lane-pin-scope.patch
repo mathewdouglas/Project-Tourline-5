@@ -1,0 +1,99 @@
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -2344,6 +2344,25 @@
+       if (ppu & ((DWORD_PTR)1 << cpu)) return -1; }
+     return cpu;
+ }
++/* SPURS_LANE_PIN_SCOPE=1 (GT5's default, with SPURS_LANE_PIN=2): which
++ * workloads' lanes are pinned follows the race scope the renderer reports
++ * (g_spurs_race_scope, from its RSX_SCOPE_LABELS): SPURS_LANE_PIN_RACE
++ * (default "0,1", the SPURS_LANE_CPU_WIDS default) in a race,
++ * SPURS_LANE_PIN_MENU (default "4") elsewhere. Gran Turismo 5's car list
++ * waits on workload 4's four lanes; pinned they cut its frames 8-9% within
++ * one boot, while races were no better (GT5 Phase 46). Lanes of other
++ * workloads run free. =0: the fixed SPURS_LANE_CPU_WIDS set. */
++volatile long g_spurs_race_scope;
++static int spurs_lane_pin_scope_on(void)
++{
++    static int on = -1;
++    if (on < 0) {
++        const char* e = getenv("SPURS_LANE_PIN_SCOPE");
++        const char* pe = getenv("SPURS_LANE_PIN");
++        on = (e && *e == '1' && pe && atoi(pe) >= 2 && !getenv("SPURS_LANE_CPUS")) ? 1 : 0;
++    }
++    return on;
++}
+ struct spurs_pool_slot { struct spurs_wkl_group* g; int i; };
+ 
+ static struct spurs_pool_slot s_pool_slot[CELL_SPURS_MAX_WORKLOAD][8];
+@@ -2385,7 +2404,7 @@
+        * CPUs. Render workloads only (SPURS_LANE_CPU_WIDS). */
+       { static int pin = -1;
+         if (pin < 0) { const char* pe = getenv("SPURS_LANE_PIN"); pin = pe ? atoi(pe) : 0; }
+-        if (listed && pin && !(e && *e) && !getenv("SPURS_LANE_PIN_AB")) {
++        if (listed && pin && !(e && *e) && !getenv("SPURS_LANE_PIN_AB") && !spurs_lane_pin_scope_on()) {
+             const int cpu = spurs_lane_cpu(wid, i);
+             if (cpu >= 0) {
+                 if (pin >= 2) {
+@@ -2444,8 +2463,39 @@
+          * first hardware thread of cores 1-5 and workload 1's on the second,
+          * in every other lane-timing window; free in the rest. Measures
+          * whether placement matters within one boot. */
+-        { static int pab = -1; if (pab < 0) { const char* e = getenv("SPURS_LANE_PIN_AB"); pab = e ? (atoi(e) == 2 ? 2 : 1) : 0; }
++        { static int pab = -1; if (pab < 0) { const char* e = getenv("SPURS_LANE_PIN_AB"); pab = e ? (atoi(e) == 2 ? 2 : atoi(e) == 3 ? 3 : 1) : 0; }
+           const int w = (int)(g - s_wkl_group);
++          /* =3: two pinning sets in turn, SPURS_LANE_PIN_AB_A (default "4")
++           * while g_lane_pin is set, SPURS_LANE_PIN_AB_B (default "0,1", the
++           * normal set) otherwise: a lane of a workload in the active set is
++           * pinned as SPURS_LANE_PIN=2 would (hard mask, above normal), any
++           * other lane runs free at normal priority (GT5 Phase 46). */
++          if (pab == 3 || (!pab && spurs_lane_pin_scope_on())) {
++              static DWORD_PTR procmask3 = 0;
++              if (!procmask3) { DWORD_PTR sm; GetProcessAffinityMask(GetCurrentProcess(), &procmask3, &sm); }
++              static const char *sa, *sb, *sm_, *sr;
++              if (!sa) {
++                  sb = getenv("SPURS_LANE_PIN_AB_B"); if (!sb) sb = "0,1";
++                  sm_ = getenv("SPURS_LANE_PIN_MENU"); if (!sm_) sm_ = "4";
++                  sr = getenv("SPURS_LANE_PIN_RACE"); if (!sr) sr = "0,1";
++                  const char* a = getenv("SPURS_LANE_PIN_AB_A"); sa = a ? a : "4";
++              }
++              const char* set = pab == 3 ? (g_lane_pin ? sa : sb) : (g_spurs_race_scope ? sr : sm_);
++              int in = 0;
++              for (const char* q = set; *q; ) {
++                  if (atoi(q) == w) in = 1;
++                  while (*q && *q != ',') q++;
++                  if (*q == ',') q++;
++              }
++              const int cpu = in ? spurs_lane_cpu(w, i) : -1;
++              const DWORD_PTR want = cpu >= 0 ? ((DWORD_PTR)1 << cpu) : procmask3;
++              static __declspec(thread) DWORD_PTR have;   /* skip the calls when nothing changes */
++              if (want != have) {
++                  SetThreadAffinityMask(GetCurrentThread(), want);
++                  SetThreadPriority(GetCurrentThread(), cpu >= 0 ? THREAD_PRIORITY_ABOVE_NORMAL : THREAD_PRIORITY_NORMAL);
++                  have = want;
++              }
++          } else
+           if (pab && w <= 1) {
+               static DWORD_PTR procmask = 0;
+               if (!procmask) { DWORD_PTR sm; GetProcessAffinityMask(GetCurrentProcess(), &procmask, &sm); }
+diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
+--- a/libs/video/rsx_d3d12_backend.c
++++ b/libs/video/rsx_d3d12_backend.c
+@@ -5447,6 +5447,16 @@
+     if (role == PSO_SCOPE_LOAD) name = "LoadingRoot.gpb";
+     else if (role == PSO_SCOPE_MENU) name = "TopMenuTemplate.gpb";
+     if (!s_spack_active && !s_pso_race_active) spack_begin(0);
++    /* The SPURS lanes' pinning follows the race scope (cellSpurs.c,
++     * SPURS_LANE_PIN_SCOPE; GT5 Phase 46). */
++    { extern volatile long g_spurs_race_scope;
++      long v = -1;
++      if (!strcmp(name, "LoadingRoot.gpb")) v = 1;
++      else if (!strcmp(name, "TopMenuTemplate.gpb") || !strcmp(name, "CourseSelectRoot.gpb") ||
++               !strcmp(name, "PitSceneRoot.gpb") || !strcmp(name, "DrivingOptionRoot.gpb") ||
++               !strcmp(name, "DealerSelectRoot.gpb")) v = 0;
++      if (v >= 0 && InterlockedExchange(&g_spurs_race_scope, v) != v)
++          fprintf(stderr, "[spurs-lane] race scope %s%c", v ? "on" : "off", 10); }
+     if (!strcmp(name,"TopMenuTemplate.gpb")) InterlockedExchange(&s_menu_active,1);
+     else if (!strcmp(name,"LoadingRoot.gpb") || !strcmp(name,"CourseSelectRoot.gpb") ||
+              !strcmp(name,"PitSceneRoot.gpb") || !strcmp(name,"DrivingOptionRoot.gpb") ||

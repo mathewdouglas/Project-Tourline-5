@@ -262,51 +262,61 @@ void gt5p_spu_regpromo_check(spu_context* ctx, void (*orig)(spu_context*),
 }
 
 /* GT5P_SPU_CAPTURE=<file>: with scripts/diag/spu_capture_patch.py, append
- * the SPU state (registers, local store, pc) at entry of the patched lifted
- * function to <file>, for scripts/test/spu_loop_bench.py. The first state is
- * taken GT5P_SPU_CAPTURE_AFTER_MS after the function's first call (default
- * 20000: into the race), then one every GT5P_SPU_CAPTURE_GAP_MS (default
- * 500), GT5P_SPU_CAPTURE_N in all (default 8). The file holds game-derived
- * data: keep it under scratch/, never track it. Record: "SPUCAP1\0", u32
- * function address, u32 pc, u32 image id, u32 calls so far, then gpr[128]
- * and the 256 KB local store as in spu_context. */
+ * the SPU state (registers, local store, pc) at entry of each patched lifted
+ * function to <file>, for scripts/test/spu_loop_bench.py. Each function
+ * (up to 16) keeps its own schedule: its first state is taken
+ * GT5P_SPU_CAPTURE_AFTER_MS after its first call (default 20000), then one
+ * every GT5P_SPU_CAPTURE_GAP_MS (default 500), GT5P_SPU_CAPTURE_N per
+ * function (default 8). The file holds game-derived data: keep it under
+ * scratch/, never track it. Record: "SPUCAP1\0", u32 function address, u32
+ * pc, u32 image id, u32 calls of that function so far, then gpr[128] and
+ * the 256 KB local store as in spu_context. */
 void gt5p_spu_capture(spu_context* ctx, uint32_t addr)
 {
-    static volatile LONG calls, written, init;
-    static LONG n = 8;
-    static ULONGLONG t0, next, gap = 500;
+    static volatile LONG init;
+    static LONG n = 8, open_slots = 0, done_slots = 0;
+    static ULONGLONG after = 20000, gap = 500;
     static FILE* f;
     static SRWLOCK lk = SRWLOCK_INIT;
+    static struct { volatile uint32_t addr; volatile LONG calls, written; ULONGLONG next; } slot[16];
     if (init == 0) {
         AcquireSRWLockExclusive(&lk);
         if (init == 0) {
             const char* e = getenv("GT5P_SPU_CAPTURE");
             if (e && *e) f = fopen(e, "wb");
-            ULONGLONG after = 20000;
             if ((e = getenv("GT5P_SPU_CAPTURE_AFTER_MS"))) after = (ULONGLONG)atol(e);
             if ((e = getenv("GT5P_SPU_CAPTURE_GAP_MS")) && atol(e) > 0) gap = (ULONGLONG)atol(e);
             if ((e = getenv("GT5P_SPU_CAPTURE_N"))) n = atol(e);
-            t0 = GetTickCount64(); next = t0 + after;
             init = f ? 1 : -1;
         }
         ReleaseSRWLockExclusive(&lk);
     }
     if (init < 0) return;
-    const LONG c = InterlockedIncrement(&calls);
-    if (GetTickCount64() < next) return;
+    int k = 0;
+    while (k < 16 && slot[k].addr && slot[k].addr != addr) k++;
+    if (k == 16) return;
+    if (!slot[k].addr) {
+        AcquireSRWLockExclusive(&lk);
+        k = 0;
+        while (k < 16 && slot[k].addr && slot[k].addr != addr) k++;
+        if (k < 16 && !slot[k].addr) { slot[k].next = GetTickCount64() + after; slot[k].addr = addr; open_slots++; }
+        ReleaseSRWLockExclusive(&lk);
+        if (k == 16) return;
+    }
+    const LONG c = InterlockedIncrement(&slot[k].calls);
+    if (slot[k].written >= n || GetTickCount64() < slot[k].next) return;
     AcquireSRWLockExclusive(&lk);
-    if (written < n && GetTickCount64() >= next) {
-        next = GetTickCount64() + gap;
+    if (f && slot[k].written < n && GetTickCount64() >= slot[k].next) {
+        slot[k].next = GetTickCount64() + gap;
         const uint32_t hdr[4] = { addr, ctx->pc, (uint32_t)ctx->image_id, (uint32_t)c };
         fwrite("SPUCAP1", 1, 8, f);
         fwrite(hdr, sizeof hdr, 1, f);
         fwrite(ctx->gpr, sizeof ctx->gpr, 1, f);
         fwrite(ctx->ls, SPU_LS_SIZE, 1, f);
         fflush(f);
-        if (++written == n) {
-            fclose(f); f = NULL; init = -1;
-            fprintf(stderr, "[spu-capture] %ld states of 0x%X written; %ld calls in %llu ms%c",
-                    (long)n, addr, (long)c, GetTickCount64() - t0, 10);
+        if (++slot[k].written == n) {
+            fprintf(stderr, "[spu-capture] %ld states of 0x%X written (%ld calls)%c", (long)n, addr, (long)c, 10);
+            if (++done_slots == open_slots) { fclose(f); f = NULL; }
         }
     }
     ReleaseSRWLockExclusive(&lk);
