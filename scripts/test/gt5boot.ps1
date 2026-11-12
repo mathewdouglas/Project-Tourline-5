@@ -17,13 +17,15 @@
 #   the -Settle window after -SampleDelay s (default 20), to
 #   scratch\pv\<t>.frames.txt. -Cpu adds per-thread CPU over the window.
 #   Each screen milestone reached is printed with its time after the menu.
+#   -Exe <path>: run another build of gt5.exe (default build\gt5.exe), e.g.
+#   build_pgo_use\gt5.exe (scripts\pgo\pgo.py).
 #   -ExtraHold "<presses>": appended to the PAD_HOLD script (e.g. a camera
 #   change: "@RaceStart+3000-3200:TRIANGLE").
 #   -> scratch\pv\<t>.out/.err, <t>.menu<N>.png
 [CmdletBinding(PositionalBinding = $false)]
 param([string]$Tag = "gt5", [int]$Settle = 60, [int]$Gap = 10, [switch]$Fresh, [switch]$FreshSave, [switch]$Movie,
       [ValidateSet("menu", "carlist", "grid", "race")][string]$Route = "menu", [string]$ShotsFrom = "",
-      [switch]$FrameTest, [int]$SampleDelay = 20, [switch]$Cpu, [string]$ExtraHold = "",
+      [switch]$FrameTest, [int]$SampleDelay = 20, [switch]$Cpu, [string]$ExtraHold = "", [string]$Exe = "",
       [Parameter(ValueFromRemainingArguments = $true)] $Vars)
 . "$PSScriptRoot\milestone.ps1"
 Add-Type -AssemblyName System.Drawing
@@ -53,7 +55,8 @@ if ($Fresh -or $FreshSave) {
     & "$root\.venv\Scripts\python.exe" @a
 }
 foreach ($k in $set.Keys) { Set-Item "Env:$k" $set[$k] }
-$p = Start-Process -FilePath "$root\build\gt5.exe" -WorkingDirectory $root -PassThru `
+if (-not $Exe) { $Exe = "$root\build\gt5.exe" }
+$p = Start-Process -FilePath $Exe -WorkingDirectory $root -PassThru `
     -RedirectStandardOutput "$dir\$Tag.out" -RedirectStandardError "$dir\$Tag.err"
 foreach ($k in $set.Keys) { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
 $tl = New-LogTail "$dir\$Tag.out"

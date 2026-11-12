@@ -4,6 +4,25 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Profile-guided builds: +6% at High Speed Ring (2026-11-12)
+
+`scripts/pgo/pgo.py` builds an instrumented `gt5.exe` (`build_pgo_gen/`),
+profiles one High Speed Ring race route on it, and builds an optimised exe
+from the profile (`build_pgo_use/`). Clang IR PGO is applied through a
+compiler launcher (`scripts/pgo/pgocc.py`), so `build/` is unchanged. Details,
+commands and timings: [pgo.md](pgo.md).
+
+Interleaved frame tests, 4 rounds, same sources, runtime and lift:
+
+- FPS 53.45 -> 56.65 (+6.0%), with every PGO run above every normal one;
+- late frames 24.1% -> 13.2%;
+- FIFO walk 8.79 -> 7.54 ms/frame;
+- p99 unchanged.
+
+The picture and race state match. The car list, out of sample, is about +2.5%
+(both PGO runs above both normal ones). Player builds are not PGO yet; see
+pgo.md, "Open".
+
 ## Bitdefender "Gen:Variant.Lazy" on gt5.exe: located and changed (2026-11-12)
 
 Release 0.1.2's ZIP had 7/64 VirusTotal detections: Bitdefender
