@@ -84,6 +84,13 @@ shaders N / M" badge. `<cache>/gpu-stamp.txt` records GPU and driver; after
 a change, older `pso_*.bin` and the race pack are rebuilt unread and the
 before-start pass runs once (`RSX_PSO_GPU_STAMP=0`,
 `RSX_PSO_GPU_STAMP_PRELOAD=0`). Test: `scripts/test/gpu_stamp.py` (WARP).
+**Release 0.1.3** (tag `v0.1.3`) is 0.1.2 plus the antivirus fix
+(runtime env defaults from one table; Bitdefender `Gen:Variant.Lazy`), built
+from the 0.1.2 tag, not from main.
+
+**Release 0.1.2** (tag `v0.1.2`) includes the Phase 42 race-freeze fix,
+Phase 43 Eiger weather-crash fix and RecompLauncher Easy Setup. It uses the
+same clean-build/player-package workflow; only changes on main are included.
 
 **Release 0.1.1** (tag `v0.1.1`) adds the launcher, ultrawide and Phase 40 CPU
 work; built and packaged the same way as 0.1.0.
@@ -94,6 +101,31 @@ for FXC; measurement runs now use DXC's cache folder). Player ZIPs come from
 inputs, pinned downloads) and `scripts/release/package_player.py`
 (allowlist; never game files). Releases carry the ZIP; the tag is
 `v<CMake project VERSION>`.
+
+**Car-list render pass (Phase 44).** Workload 4 (body `0x0196FF40`, four lanes)
+is the car-list frame's critical path. GT5 now starts all lanes together
+(`SPURS_LANE_STAGGER_MS` defaults to 0 for GT5; `=1` old): car list +9%,
+High Speed Ring unchanged. Measured and left off: register promotion of the
+hot body functions (`scripts/spu_regpromo.py`, post-SPU-lift step after
+`spu_native_patch.py`; `GT5P_SPU_REGPROMO=1`, `=2` check, `=3` A/B) is 14%
+slower; `PS3_USLEEP_GCM_WAKE=1` and `SPU_DRAIN_RET_FAST` (on, exact) show no
+measurable change. Plan: [docs/plan-gt5-render-pass.md](docs/plan-gt5-render-pass.md).
+**Eiger Nordwand in rain (Phase 45)** runs ~47 FPS, and no change or
+combination beats the default (spread ~5 FPS; `scratch\go.ps1 -Eiger` in the
+Phase 44 worktree drives there). Cause, measured by delay injection: one
+serial loop in workload 0's body `0x01697100` (LS 0x7F10-0x8948, ~20,000
+iterations, ~15 ms a frame) gates workload 1 and the frame; it does not run
+at High Speed Ring. Its offline benchmark is `scripts/test/spu_loop_bench.py`
+(states from `scripts/diag/spu_capture_patch.py b01697100 7FE0` and
+`GT5P_SPU_CAPTURE`, kept in `scratch/`). **`scripts/spu_region.py` is a
+required post-SPU-lift step (after `spu_regpromo.py`)**: it merges the listed
+loops (`spu_regions`) into one function each with the registers as `__m128i`
+locals; exact on the captured states, frames 7.5-8% shorter at Eiger
+(`GT5P_SPU_REGION=0` old, `=3` A/B). Faster helpers and `u128` promotion were
+not faster; `SPURS_SPU_KICK_WAKE=1` (SPU ready-count stores wake the kernel)
+was not measurable and is off. `GT5P_SPU_FMA` takes `1` (all `spu_fma_images`, now four
+bodies) or body names (`b0196FF40` = the old `1`); `SPURS_LANE_RETRY_MAX`
+and `SPURS_LANE_KICK_WAKE` are measured experiments, off.
 
 **Eiger weather crash fixed (Phase 43).** The SPU lift seeds uncovered code
 after unconditional branches in job bodies (`return_gap_seeds`,
@@ -1700,6 +1732,9 @@ Run Python through the repo's virtual environment: `.venv\Scripts\python`.
 | `scripts/spin_patch.py` | Post-lift patch, required after every lift: guest spin waits on SPU progress yield (`spin_waits` in `config/targets.json`) |
 | `scripts/ui_mask_patch.py` | Post-lift patch, required after every lift: menu label fade mask centred in ultrawide (`ui_label_mask_func`; `GT5P_UI_MASK_FIX=0` off) |
 | `scripts/spu_native_patch.py` | Post-SPU-lift patch, required: hooks native replacements (`src/gt5p_spu_native.c`) into lifted SPU blocks (`spu_native_hooks`); `GT5P_SPU_NATIVE=0` off, `=2` check |
+| `scripts/spu_regpromo.py` | Post-SPU-lift patch, after `spu_native_patch.py`: copies of hot lifted SPU functions with registers in locals (`spu_regpromo`); `GT5P_SPU_REGPROMO=0` off (default), `1` on, `2` check, `3` A/B; measured slower (Phase 44) |
+| `scripts/spu_region.py` | Post-SPU-lift patch, required, after `spu_regpromo.py`: merges listed loops of lifted SPU functions into one with registers as `__m128i` locals (`spu_regions`); `GT5P_SPU_REGION=1` default, `0` off, `3` A/B; Eiger frames 7.5-8% shorter (Phase 45) |
+| `scripts/test/spu_loop_bench.py`, `scripts/diag/spu_capture_patch.py` | Offline timing and exact comparison of a lifted SPU routine on captured real states (`GT5P_SPU_CAPTURE`; Phase 45) |
 | `scripts/lift_spu_jobs.py` | Lift the policy module, the captured job images and the job bodies; writes `src/gen/spu_workloads_bcus98158.c` |
 | `scripts/soak.sh`, `soak.py`, `boot.py` | Repeated or single headless boots with a summary |
 | `scripts/test/*.ps1` | Drive the game to a page and measure or shoot it (table under "Start here") |

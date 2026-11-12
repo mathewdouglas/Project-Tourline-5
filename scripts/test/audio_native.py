@@ -30,7 +30,7 @@ for target in ('BCUS98158','BCUS98114-v104'):
  subprocess.run([str(folder/'registry.exe')],check=True,timeout=10)
  for case in ('off','default','cpu','os','missing','identity','absent','on','body_mismatch','body_missing','render_only'):
   if case=='render_only' and target!='BCUS98114-v104': continue
-  for render in ('0','1') if target=='BCUS98114-v104' and case not in ('off','missing') else ('0',):
+  for render in ('0','1','b0196FF40','b01697100,b016D2700') if target=='BCUS98114-v104' and case not in ('off','missing') else ('0',):
    if case=='render_only': render='1'
    env=os.environ.copy();env.pop('GT5P_AUDIO_NATIVE',None)
    env['GT5P_SPU_FMA']=render

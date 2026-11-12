@@ -795,6 +795,8 @@ static int locate_project_root(void)
  *   PS3_MMAPPER_SHM=1 still corrupts the heap), PS3_TIMER_ONESHOT,
  *   GCM_SUBCH1_M2MF (Phase 21), GCM_PARK_TIMEOUT_MS=3000 (Phase 23).
  * - SPURS_LANE_PIN=2: render lanes on cores of their own (Phase 64).
+ * - SPURS_LANE_STAGGER_MS=0, GT5 only: start all of a job list's lanes
+ *   together (GT5 Phase 44); unless either stagger variable is set.
  * - RSX_SHADER_ASYNC=1: shaders compile on background threads (Phase 65).
  * The settings file, loaded earlier, has already set any it covers. */
 static void apply_env_defaults()
@@ -803,6 +805,7 @@ static void apply_env_defaults()
     const char* pad = getenv("GT5P_PACER_PAD");
     const bool pacer = !(pad && pad[0] == '1');
     const char* scope = getenv("GT5P_RACE_SCOPE");
+    const bool stagger = gt5 && !getenv("SPURS_LANE_STAGGER_US");
     const bool race_scope = GT5P_SCREEN_FILES[0] && GT5P_SCOPE_LABELS[0] && !(scope && scope[0] == '0');
     const struct { const char* name; const char* value; bool when; } defaults[] = {
         {"PS3_PPU_PRIO_SCHED",   "2",                true},
@@ -823,6 +826,7 @@ static void apply_env_defaults()
         {"GCM_SUBCH1_M2MF",      "1",                gt5},
         {"GCM_PARK_TIMEOUT_MS",  "3000",             gt5},
         {"SPURS_LANE_PIN",       "2",                true},
+        {"SPURS_LANE_STAGGER_MS", "0",               stagger},
         {"RSX_SHADER_ASYNC",     "1",                true},
     };
     for (const auto& d : defaults)

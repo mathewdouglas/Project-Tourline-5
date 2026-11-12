@@ -186,6 +186,366 @@ favours FMA (+2.2 FPS mean), but main's Phase 44 pairs went the other way
 (50.9 vs 52.1) and the run-to-run spread is ~5 FPS: no default change. The
 per-frame GPU drain at replay start is 0.0-0.9 ms a frame in these races;
 not worth the risk of overlapping frames yet.
+## Phase 45 - Eiger Nordwand in rain: the changes combined, and what its frame waits on (2026-11-12)
+
+Request: measure on Eiger Nordwand with weather change, a heavier track
+than High Speed Ring, and try the changes in combination. Same private
+build as Phase 44. Route: Arcade, track list, six Rights, Cross through car
+and options (`scratch\go.ps1 -Eiger`, built on `gt5boot.ps1 -Route race
+-FrameTest`); the shots confirm Eiger Nordwand in rain. Each run: 60 s frame
+test from 15 s after the start, throttle held, one `gt5.exe` at a time.
+
+**Combinations** (FPS; rounds 1-3 interleaved across all configs, rounds
+4-5 across default and the two full combinations):
+
+| Config | Runs | Median |
+| --- | --- | --- |
+| Before Phase 44 (`SPURS_LANE_STAGGER_MS=1 SPU_DRAIN_RET_FAST=0`) | 43.7, 43.4, 47.5 | 43.7 |
+| Default (Phase 44: lanes together, drain fast return) | 44.4, 46.7, 43.8, 48.3, 48.4 | 46.7 |
+| + render-body FMA (`GT5P_SPU_FMA=b0196FF40`) | 49.6, 46.1, 46.0 | 46.1 |
+| + `SPURS_LANE_CPU_WIDS=4` | 45.8, 46.6 | 46.2 |
+| FMA + `CPU_WIDS=4` | 45.9, 46.9, 46.8 | 46.8 |
+| FMA + `CPU_WIDS=4` + `PS3_USLEEP_GCM_WAKE=1` | 46.5, 47.8, 48.4, 47.3, 46.7 | 47.3 |
+| the same with FMA on all four bodies (`GT5P_SPU_FMA=1`) | 49.2, 46.0 | - |
+| `GT5P_SPU_REGPROMO=1` | 43.5, 45.2 | - |
+| FMA on the three workload-0 bodies only | 46.0 | - |
+| `SPURS_LANE_STAY=1 SPURS_LANE_RETRY_MAX=0` | 46.8 | - |
+| `SPURS_LANE_KICK_WAKE=1` | 45.7 | - |
+
+The spread within one config is about 5 FPS (default 43.8-48.4), larger
+than any difference between configs. After three rounds the full
+combination looked ahead (46.5-48.4 against 43.8-46.7), but two more
+interleaved rounds put the default level with it. **No change or
+combination is measurably better than the default at Eiger.** The Phase 44
+default against the old start is +3 FPS by median, inside the same spread.
+`SPURS_LANE_CPU_WIDS=4` is not "pin more": the default list is `0,1`, so it
+pins workload 4 and unpins workloads 0 and 1.
+
+**What an Eiger frame waits on** (`etl1`, `PS3_TIMELINE=125,4`, ~35 s into
+the race, 182 frames, mean 21.8 ms):
+
+- Not workload 4: its passes total 2.2 ms a frame here (the car list's
+  bottleneck). Workload 1 passes total 15.8 ms a frame (6.4 ms mean, ~2.5 a
+  frame) and workload 6 12.6 ms; the FIFO walk is 5.7 ms a frame.
+- The game thread `gFKsE` is busy for the whole frame (CPU 21.65 ms of
+  21.69 ms wall). Sampled (`esmp1`, `GT5P_SAMPLE=4`), 90% of its samples
+  are in `func_00D1AB10` and `func_00C350C0`: the ring-job completion polls
+  of Phase 40 (minimum of a list's per-SPU progress halfwords against a
+  target). It is waiting, not computing.
+- In a traced frame it kicks workload 0 ~70 times and workloads 1 and 6
+  ~20 times each, then spins from ~3 ms to 13 ms. It continues 0.1 ms after
+  the FIFO walker raises the frame's user command (`U` at 13.01, delivered
+  on `gFKsE` at 13.13). That command follows a workload 1 pass (10.61-12.15)
+  and a 1.1 ms walk. No kick is recorded between the previous workload 1
+  pass ending (6.48) and that dispatch: a workload-0 lane releases it
+  (below).
+- One workload-0 lane runs at ~98% of a core in bodies `0x01697100`,
+  `0x016B5B00` and `0x016D2700` (real float work: normalise, reciprocal
+  square root, a grid lookup), in single lane runs of seconds; the other
+  workload-0 lanes made 1-3 short runs in the 4 s window. Workload 1's lanes spend
+  64% of their samples in the retry loop's `Sleep(1)` (`ewidA`, 16
+  threads sampled), and only 12% in body `0x016CC680`.
+
+**Experiments, each off by default** (all measured above, none helped):
+
+- `SPURS_LANE_RETRY_MAX=<n>` (runtime, default 400, 0 = no cap): retries
+  before a lane that keeps finding nothing leaves. With `SPURS_LANE_STAY=1`
+  the other workload-0 lanes still ran only 5 short runs in 4 s: that
+  list's work does not spread (probably one long job, or jobs that depend
+  on each other; hypothesis).
+- `SPURS_LANE_KICK_WAKE=1` (runtime): a kick to a running workload wakes its
+  lanes sleeping in that retry, once per sleep. Workload 6 went from 281
+  passes to 4,326 shorter ones; the frame did not change (22.4 ms). So the
+  1 ms retry sleep is not the bound.
+- FMA copies of the three workload-0 bodies (`spu_fma_images` in
+  `config/targets.json`). `GT5P_SPU_FMA` now takes `1` (all four listed
+  bodies; before, `1` meant the render body, the only one listed) or a list
+  of body names, e.g. `GT5P_SPU_FMA=b0196FF40` for the Phase 40 behaviour.
+  Each body is fingerprint-checked as before; all three installed (1,034,
+  2,257 and 1,000 functions).
+
+Runtime changes are in the main patch (applied to a fresh 5244db9: identical
+tree, reverse check passes) and in `patches/incremental/spu-render-pass.patch`.
+
+**The cause: one serial SPU loop in workload 0.**
+
+1. *Who releases workload 1* (`erl1`: `SPU_ROWLOG=4FFC2000`, the `PDI`
+   instance's ready-count line, with `PS3_TIMELINE`; each write becomes an
+   `A` event with writer and SPU pc). Of 461 workload 1 dispatches, 243 follow
+   a store from a workload-0 lane at SPU pc `0x3334` (the job manager
+   kicking a dependent list), 218 a game-thread kick. For the pass before
+   each frame's user command it is a workload-0 lane in 150 of 169 frames,
+   a median 12.0 ms after the flip; the kernel dispatches 0.8 ms later (an
+   SPU store does not wake it; it waits for its 1 ms poll). Then the pass, the
+   walk, the marker, and ~6 ms of game thread work before the next flip.
+2. *What workload 0 does* (`ewid0`, `GT5P_SAMPLE=16 GT5P_SAMPLE_WID=0`).
+   Its lanes use 142% of a core, 31 ms of CPU per 21.8 ms frame. 51% of
+   those samples are body `0x01697100`, almost all in three functions of one
+   loop: `0x83D8` 20%, `0x8298` 18%, `0x7F10` 9% (LS 0x7F10-0x8948,
+   ~470 SPU instructions of vector loads, shuffles, float compare/select,
+   reciprocal (square root) estimates and `cflts`). Lock-line waits are
+   0.5%.
+3. *Causal test* (`edly1`, a temporary probe, not committed: a calibrated
+   spin at the entry of `0x83D8`, on and off in alternate 2 s windows of
+   one boot). `0x83D8` runs ~20,000 times a frame. 4.3 us per call would
+   add 86 ms a frame if every call were on the critical path; frames grew
+   by 90 ms (21.1 -> 111.1 ms median, 15 windows each). **Every call of the
+   loop is on Eiger's critical path.** The loop's time (~15 ms a frame) is
+   most of the 12 ms from the flip to the release of workload 1.
+4. *Specific to Eiger:* the same probe on High Speed Ring (`hdly1`) never
+   fired: the loop does not run there. It starts at Eiger's race start. That
+   it is the rain/weather simulation is a hypothesis (not run without
+   weather change).
+
+**Loop benchmark** (`scripts/test/spu_loop_bench.py`). Real states are
+captured in a race with `scripts/diag/spu_capture_patch.py b01697100 7FE0`
+and `GT5P_SPU_CAPTURE=<file>` (`gt5p_spu_capture` in `src/gt5p_spu_native.c`:
+registers and the 256 KB local store at the function's entry, from 20 s after
+its first call, one every 500 ms; the file is game-derived and stays in
+`scratch/`). The benchmark builds the whole lifted body standalone with the
+production flags, replays each state from `0x7FE0` to its return, checks the
+return address, times it and hashes the final registers and local store, so
+variants are compared exactly. `--count` counts function entries.
+
+- The loop's routine is `0x7FE0` (called from LS `0x5DA0`), not `0x7DC8`: a
+  first capture at `0x7DC8` (`loopcap`) never reached `0x8298`.
+- 16 states (`loopcap2`, ~1,900 calls of `0x7FE0` a second in the race): per
+  call 2,048 passes of `0x8298`, ~1,193 of `0x83D8`; 98-259 us a call
+  (3.1-3.2 ms for all 16), repeatable to ~2%; about 524,000 SPU instructions
+  a call, so ~1.5 host cycles per SPU instruction. Most frequent: `selb`
+  8.6%, local-store reads 6.6%, `shufb` 6.6%, `rotqbyi` 6.4%, `fcgt` 6.4%.
+
+**Helper work (step 2): nothing faster.** Every variant gives identical
+registers and local store on all 16 states:
+
+| Variant | Speed against the current code |
+| --- | --- |
+| `cflts`/`csflt`/`cuflt` as two-lane SSE doubles (same arithmetic) | 0.94-0.96x |
+| Register promotion of the 8 loop functions (`spu_regpromo.py`) | 0.81-0.82x |
+| The 8 functions merged into one, registers in locals (`scripts/spu_region.py`) | 0.74-0.75x |
+
+The conversions were already vectorised by clang. Promotion per function
+reloads and spills ~45 registers on every call of a 76-141 instruction
+function. Merged, the 81 live 128-bit registers spill to the stack and lanes
+are extracted one by one (the helpers work lane by lane on a union);
+memory-resident `ctx->gpr` compiles better (hypothesis for the cause). None
+was kept: the runtime is unchanged. Upper bounds from deliberately wrong cheap
+helpers do not work here: wrong values change the loop's control flow.
+
+**The loop merged, registers as `__m128i` (default on).** The merged form
+above was slow because its locals were `u128` unions. With the registers held
+as `__m128i` and each helper still given and returning its `u128` through a
+no-op conversion (the same arithmetic code), clang keeps them in XMM registers
+across iterations. `scripts/spu_region.py` is now a post-SPU-lift step (after
+`spu_regpromo.py`; `spu_regions` in `config/targets.json`; `--check`,
+`--restore`; in `clean_build.py`). Two regions of body `0x01697100`:
+
+- `0x8298` loop (8 functions, 81 registers): 1.28-1.48x on `loopcap2`;
+- `0x7E58`/`0x7F10`/`0x7FC4` (3 functions, the `0x7DC8` routine): 1.41-1.43x
+  on `loopcap`.
+
+Both give identical registers and local store on all 16 states of each set.
+Each member function starts with a switch on `GT5P_SPU_REGION`
+(`src/gt5p_spu_native.c`): 1 the region (default), 0 the lifted functions,
+3 the region while `g_spu_exp` is set. Only with the local-store probes
+compiled out (the default), as for register promotion.
+
+In the game, within one boot (`GT5P_SPU_REGION=3 SPU_EXP_AB=1
+SPURS_LANE_CYC=1`, 5 s windows matched to the frame log by the new wall-clock
+`t=` on `[lane-cyc]` lines, `scratch/abwin.py`), 90 s at Eiger:
+
+| Boot | Region off | Region on | Change |
+| --- | --- | --- | --- |
+| `erab1` | 23.81 ms | 22.02 ms | -1.79 ms (-7.5%) |
+| `erab2` | 24.50 ms | 22.52 ms | -1.98 ms (-8.1%) |
+
+Whole-run numbers on this machine now swing by 10 FPS with background load
+(~30% CPU busy without the game): High Speed Ring gave 45.3 FPS with the
+default and 36.2 with `GT5P_SPU_REGION=0` minutes apart, though the loop never
+runs there. Compare within one boot.
+
+**SPU kicks wake the kernel** (`SPURS_SPU_KICK_WAKE=1`, runtime, off). A new
+`spu_coh_watch_line` hook calls cellSpurs after writes to an instance's
+ready-count line; a count that goes from 0 to non-zero for an idle workload
+wakes the kernel. Release to dispatch: 0.66 ms median (p90 1.35) -> 0.010 ms
+(p90 0.016) (`erl2`). Within one boot (`=2` follows `g_spu_exp`): +1.4 ms
+before the idle-workload filter (`ekab1`), then +1.5 and -0.5 ms (`ekab2`,
+`ekab3`): not measurable against the lap's window-to-window spread. Off.
+
+**Next:** make that loop faster. Lane counts, FMA copies and wake changes do
+not shorten a single serial loop (the FMA copy of the body, one run, 46.0
+FPS). In order:
+
+1. ~~An offline benchmark~~ done (above).
+2. ~~Cheaper helpers~~ measured: no gain (above).
+3. ~~Merged loops~~ done: `spu_region.py`, default on, -7.5 to -8% frame
+   time at Eiger.
+4. ~~Wake the kernel on an SPU ready-count store~~ done, not measurable, off.
+Measured on the merged `0x8298` loop and kept off: exact double `fma` with
+`-mavx2 -mfma` 1.01x (the 1.21x of `-mavx2 -mfma` comes from hardware `fmaf`,
+which may round differently; it is the opt-in `GT5P_SPU_FMA=b01697100`);
+vectorised conversions 1.02-1.03x; only the written registers as locals
+(`regionw=`, 49 of 81) 1.01-1.02x. After the merge, workload 0's samples
+(`ewid0b`): the two regions 32%, body `0x016B5B00` 9.4% (branchy code spread
+over functions that call each other: no tail-call loop to merge),
+`0x016D2700` 2.9%. The per-workload sampler also counts the game thread when
+its thread id collides with a lane's modulo 4096 (`func_00D1AB10` in that
+table).
+
+5. More regions: the rest of workload 0's lane (bodies `0x016B5B00` 11%,
+   `0x016D2700` 3.6% of its samples), found with `spu_loop_bench.py --count`
+   on fresh captures; then a native loop if still needed.
+
+## Phase 44 - Workload 4's render pass: lane stagger, register promotion (2026-11-11)
+
+Goal: a smooth 60 FPS at the Arcade car list and in races. Plan and next
+steps: [plan-gt5-render-pass.md](plan-gt5-render-pass.md). Measured on a
+private build linked from the main checkout's objects plus every lifted SPU
+image, the changed sources and three runtime files recompiled against the
+updated runtime patch.
+
+**Where the car-list frame goes** (720p, `PS3_TIMELINE` evidence run `pfC9`,
+177 frames, mean 22.5 ms). The game thread flips, kicks workload 4
+(`PDI`, body `0x0196FF40`, four lanes) and works ~8.4 ms; the frame then
+waits for: the wid4 pass (20.2 ms mean), one last FIFO walk (~1.4 ms) to the
+user command, and its delivery (raise to handler 0.65 ms mean, 1.33 ms p90:
+handlers run at the next syscall of any guest thread, usually the
+force-feedback worker's usleep poll).
+
+- The four lanes started 0.0, 1.5, 2.9 and 3.9 ms after the dispatch (the
+  1 ms per lane `SPURS_LANE_STAGGER_MS`) and ended together; with an even
+  start the measured lane work fits ~2.1 ms sooner (60 passes).
+- During a pass the lanes are CPU-bound (72-91% of a core each, `pfS2`).
+  The body's ring-space wait (LS 0x4540-0x4600: DMA the per-SPU output-ring
+  read label, compare with the write window, delay 2,400 decrementer reads)
+  is 0.1% of the samples: the walker walks wid4's output as it arrives
+  (5-70 us walks every ~50 us), so at the car list it is not what the lanes
+  wait on.
+- Lane samples: 59% body code (0xB240 19%, 0xAD30 7.5%, 0xF970 6.7%,
+  0xC5E0 4.9%, 0xA408 4.5%, 0x96A0 4.1%, 0x9500 3.5%), 41% runtime.
+  The runtime samples that land in DLLs: `mfc_do_transfer` 4.5% (the copy),
+  `spu_irq_regs_maybe_restore` 2.6% (register-file copies and `longjmp`,
+  which unwinds host frames on Windows), `gcm_note_spu_put` 1.6% (walker wake
+  `SetEvent`), `spu_restart_dispatch`/`spu_halt` 1.1%.
+- `tl.py`'s lane list can show three lanes for a pass: the last lane's `L`
+  event shares its microsecond with `E` and sorts after it. All four ran.
+
+**Changes, each with a switch:**
+
+1. **GT5 lanes start together** (`src/main.cpp`: `SPURS_LANE_STAGGER_MS=0`
+   for GT5 unless set; `=1` old; Prologue unchanged).
+2. **Register promotion** (`scripts/spu_regpromo.py`, new post-SPU-lift
+   step after `spu_native_patch.py`; `spu_regpromo` in `config/targets.json`,
+   14 functions of body `0x0196FF40`). Each gets a copy with the SPU
+   registers in C locals, stored back before every exit or call given ctx.
+   `GT5P_SPU_REGPROMO`: 0 off (default), 1 on, 2 check (runs original and
+   promoted to their first exit from the same registers and local store,
+   compares, restores; `GT5P_SPU_REGPROMO_CHECK_EVERY`, default 64), 3 A/B
+   on `g_spu_exp`. Test: `scripts/test/spu_regpromo.py`.
+3. **Indirect returns skip the full drain** (runtime, `spu_context.h`
+   `spu_drain_call`): a callee that returns through a register other than
+   the link (pc + `spu_indirect_branch` trampoline) to exactly the expected
+   pc no longer calls `spu_drain_call_impl` (3.9% of the lane samples).
+   Exact: the full drain's first step does the same. `SPU_DRAIN_RET_FAST=0`
+   off; off while `SPU_IBHIST` is set.
+4. **User commands wake a sleeping thread** (runtime, `cellGcmSys.c`,
+   `sys_timer.c`): `PS3_USLEEP_GCM_WAKE=1` lets one thread in
+   `sys_timer_usleep` deliver a raised user command at once. Off by default.
+
+Runtime changes are in the main patch (hunks edited in place and checked by
+applying it to a fresh 5244db9: identical tree, reverse check passes) and in
+`patches/incremental/spu-render-pass.patch`.
+
+**Measured** (car list: steady `[present-thread] 5 s` windows after the list
+appears, 300 = 60 FPS; race: `gt5boot.ps1 -Route race -FrameTest -Settle 50`,
+High Speed Ring):
+
+| Case | Car list, frames / 5 s | HSR FPS |
+| --- | --- | --- |
+| Baseline (drain fast return on) | 222-223; 217-220 | 51.8; 52.5 |
+| `SPURS_LANE_STAGGER_MS=0` | 237-244; 243-245 | 52.9; 52.0 |
+| `SPURS_LANE_STAGGER_US=200` | 238-240; 238-244 | 51.6; 51.8 |
+| `SPU_DRAIN_RET_FAST=0` | 224-227; 224-227 | - |
+| `PS3_USLEEP_GCM_WAKE=1` | 222-226; 230-231 | - |
+| `GT5P_SPU_REGPROMO=1` | 173-200 (late car list) | - |
+
+- **Stagger: car list +9%** in all four runs; races unchanged (they are
+  bounded elsewhere, as the other thread found for lane pinning and the FMA
+  copy). Made the GT5 default; with the new build and no switches the car
+  list drew 242 and 242 (`cdef1`, `cdef2`), with `SPURS_LANE_STAGGER_MS=1`
+  223 (`cold1`).
+- **Register promotion is slower.** Within one boot (`=3 SPU_EXP_AB=1
+  SPURS_LANE_CYC=1`, `cab1`), workload 4's lane CPU per run was 18.0-18.9 ms
+  with it off and 20.4-22.6 ms on (+14%); frames per 5 s alternated
+  ~217-222 / ~189-206. The promoted 0xB240 compiles to 2,134 instructions with
+  772 stack references against about 1,280 for the original body: ~84 live
+  128-bit values on 16 XMM registers spill more than the memory-resident
+  original costs. The original already spends ~20 x86 instructions per SPU
+  instruction on the helpers (`pshufb`/`pblendvb` for shufb, float ops
+  through doubles); that, not `ctx->gpr` traffic, is the body's cost. Left
+  off by default; the step stays so the A/B can be repeated.
+- **Exactness:** `scripts/test/spu_regpromo.py`: 14 functions x 100 random
+  register/local-store states agree (loops guarded), the check routine
+  restores state. Live check mode (`rpchk0`, menu and car list): ~2.2 million
+  compared runs, 4 differ, all one lane of one register that is a NaN in
+  both copies with a different sign bit (`7FC563F0`/`FFC563F0`, blocks
+  0xAD30 and 0xF970): the NaN's sign follows instruction selection. The SPU
+  has no NaNs, so that lane is already outside exact emulation.
+- **Drain fast return, usleep wake:** no change beyond the ~+-3% spread at
+  the car list. Drain fast return stays on (exact); the wake stays off.
+
+**Race timeline** (`rtl1`, HSR, 4 s from 125 s, frame test 52.1 FPS): that
+window ran at 60 FPS (16.7 ms mean frame), with the game thread at 9.3 ms of
+CPU a frame (56% busy), the walk 7.0 ms/frame and workload 4's passes ~5 ms.
+The race's ~52 FPS average comes from slower stretches of the lap (30% of
+intervals over 20 ms); a timeline placed on one of those is the next step.
+
+**Not done:** that slow-stretch timeline; the 1080p car list. Eiger
+Nordwand and the combinations are in Phase 45.
+
+## Phase 44 - Initial car-list and race measurements: where the time goes; two switches measured (2026-11-11)
+
+User report: the Arcade car list drops when a car is selected and settles
+near 45 fps; races (Eiger Nordwand) are not a steady 60. 720p, defaults.
+
+**Car list.** 60 fps until the car appears, then ~43-45 (`pfC1`: 215-227
+frames per 5 s). Process CPU 2.8 of 12 logical CPUs. Timeline (`pfC9`,
+`"PS3_TIMELINE=60,4"`, 13 s into the page): no blocking presents; frames
+16-30 ms, mostly 20-24 ms, not vblank-quantised. Critical path: SPU render
+workload 4 (4 lanes) runs 17-22 ms a pass; the game thread (`gFKsE`) waits
+in `cond_wait` until it ends, then flips and kicks the next pass. Lane CPU
+profile while running workload 4 (`pfS2`, `GT5P_SAMPLE=8 GT5P_SAMPLE_WID=4`):
+59% body `0x0196FF40` (`0xB240` 19%, `0xAD30`, `0xF970`, `0xC5E0`, `0xA408`)
+and 41% runtime (`mfc_do_transfer` 8%, `spu_indirect_branch` 7%,
+`spu_lookup_fast` 4%, `spu_drain_call_impl` 4%, `spu_irq_regs_maybe_restore`
+2.6%). Not reconciled: lanes run ~20 ms a pass but used only 31-44% of a
+core each (`pfC1 -Cpu`).
+
+**Two existing switches, A/B** (frames per 5 s at the car list, steady
+state; HSR frame test FPS, 50 s, two runs each):
+
+| Case | Car list | HSR race |
+| --- | ---: | ---: |
+| baseline | ~227 | 52.1, 52.0 |
+| `GT5P_SPU_FMA=1` (FMA copy of body 0x0196FF40) | ~246 | 50.9, 50.9 |
+| `SPURS_LANE_CPU_WIDS=4` (pin workload 4's lanes) | ~240 | 45.1, 51.3 |
+| both | ~250 | 48.3, 49.8 |
+
+Both help the car list ~8-10% and do not help races, whose frame is
+bounded elsewhere (Phase 29: the game thread, FIFO walk and the ring-space
+label wait). Neither becomes a default. Deeper work (SPU runtime overhead,
+the label wait, job-list parallelism) continues on branch
+`perf/spu-render-pass`.
+
+**Also seen.** An intermittent boot hang, 2 of ~50 boots today (`pfC2`
+at OpeningMovie, `rf_fma1` at LoadData): frames keep presenting with 3-80
+draws, and after the 120 s grace the policy module (image 1, pc 0x2534) is
+halted on ea `0x40026000`. Older logs (12:00 `a1`, `b1`; 28 in the root
+checkout) show the same halt, so it predates this session's changes;
+open. Harness pitfalls: a PowerShell `if` returning a one-element array
+yields a string, and `@v` then splats its characters (declare
+`[string[]]`); quote values with commas (`"PS3_TIMELINE=60,4"`); timeline
+time counts from the present thread's start.
 
 ## Phase 43 - Eiger Nordwand weather-change crash: unlifted job-body functions (2026-11-11)
 

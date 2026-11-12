@@ -5,7 +5,30 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-12
+
+Antivirus hotfix for 0.1.2: no gameplay changes. Built from the 0.1.2 tag
+plus one change, with the same clean release pipeline.
+
+### Fixed
+- Bitdefender and engines using it (ALYac, Arcabit, Emsisoft, GData, VIPRE)
+  flagged `gt5.exe` as `Gen:Variant.Lazy`. Byte bisection on VirusTotal traced
+  the static score to a run of about 25 `getenv`/`_putenv_s` default-setting
+  pairs at the top of `main`; they are now one table and loop with the same
+  variables, values and precedence. The fixed package scanned clean.
+
+## [0.1.2] - 2026-11-12
+
+Fixes the intermittent race freeze and Eiger Nordwand weather-change crash,
+and adds RecompLauncher Easy Setup. Built from main with the same clean
+release pipeline as 0.1.1. The player ZIP contains no game files; you need
+your own BCUS98114 disc and matching 01.04 installed data/executable.
+
 ### Added
+- RecompLauncher Easy Setup: named disc/update inputs and an optional decrypted
+  executable or RPCS3 input, with verified import through the native launcher.
+  Missing or invalid inputs fail without opening another setup dialog. Direct
+  launches retain the built-in setup dialogs.
 - A RecompLauncher manifest (`launcher/recomplauncher.json`, 16 GT5 settings,
   storage and log buttons) and relocated-storage following; see
   [docs/recomplauncher.md](docs/recomplauncher.md). RecompLauncher's own UI is
@@ -20,6 +43,18 @@ versions follow [SemVer](https://semver.org/).
   and the race pack from the old driver are rebuilt without being read, and
   the learned sets are prepared before start once
   (`RSX_PSO_GPU_STAMP=0`, `RSX_PSO_GPU_STAMP_PRELOAD=0` turn these off).
+
+### Changed
+- GT5's SPU job lanes start together (GT5 Phase 44): the Arcade car list draws
+  about 9% more frames; races are unchanged. `SPURS_LANE_STAGGER_MS=1` restores
+  the 1 ms per lane stagger.
+- `GT5P_SPU_FMA` (opt-in) now covers four job bodies: `1` selects all of them,
+  or name bodies (`GT5P_SPU_FMA=b0196FF40` is the previous `1`). No gain
+  measured at Eiger Nordwand (GT5 Phase 45).
+- Eiger Nordwand in rain runs about 8% faster (GT5 Phase 45): its frame waits
+  on one SPU loop, now compiled as a single function with the SPU registers
+  in host vector registers. New required post-SPU-lift step
+  `scripts/spu_region.py`; `GT5P_SPU_REGION=0` restores the old code.
 
 ### Fixed
 - Crash after loading Eiger Nordwand with weather change (GT5 Phase 43): job-body
