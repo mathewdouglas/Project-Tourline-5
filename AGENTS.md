@@ -76,6 +76,11 @@ still owed are in the review document's "Follow-up" section.
 `patches/incremental/` holds single-change copies of runtime edits that are
 already inside the main patch; `setup_runtime.py` does not read them.
 
+**Unmapped texture reads are logged.** `[io-unmapped]` lines name a MAIN
+texture bound at an offset with no IO mapping (the backend then reads VRAM
+instead); `RSX_IO_UNMAPPED=0` off, `=2` check mode. None at High Speed Ring.
+See progress-gt5.md, 2026-11-12.
+
 **Release 0.1.3** (tag `v0.1.3`) is 0.1.2 plus the antivirus fix
 (runtime env defaults from one table; Bitdefender `Gen:Variant.Lazy`), built
 from the 0.1.2 tag, not from main.

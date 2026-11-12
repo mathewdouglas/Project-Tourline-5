@@ -25925,7 +25925,74 @@ index 68929ed2..066dad0c 100644
          /* Anchor for merging the next batch of this indexed stream. */
          s_d3d.merge_prev_draw = (primitive == RSX_PRIMITIVE_TRIANGLES);
          s_d3d.merge_first_end = first + count;
-@@ -6358,6 +17364,24 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
+@@ -6348,6 +17354,66 @@
+     }
+ }
+ 
++/* RSX_IO_UNMAPPED (on; =0 off, =2 check mode): name a MAIN-memory texture whose offset has
++ * no IO mapping when it is bound. The location bits say main memory, so the
++ * RSX would read through the IO table; with no entry there the resolver falls
++ * back to VRAM (localAddress + offset, or a page the guest once derived from a
++ * local address), and the texture samples bytes the title never put at that
++ * offset. "partly" means the first byte is mapped but level 0's estimated end
++ * is not. Each new offset is printed once (the first 64), and the running
++ * count at every power of two. One table read per MAIN bind; the walker
++ * thread is the only caller. */
++static u32 io_unmapped_level0_bytes(u32 base_fmt, u32 w, u32 h)
++{
++    switch (base_fmt) {
++    case 0x86: return ((w + 3) / 4) * ((h + 3) / 4) * 8;    /* DXT1 */
++    case 0x87: case 0x88: return ((w + 3) / 4) * ((h + 3) / 4) * 16;  /* DXT23/45 */
++    case 0x81: return w * h;                                 /* B8 */
++    case 0x8B: return w * h * 2;                             /* G8B8 */
++    case 0x9A: return w * h * 8;                             /* W16Z16Y16X16 */
++    default:   return w * h * 4;                             /* A8R8G8B8, depth */
++    }
++}
++
++static void io_unmapped_check(u32 unit, u32 offset, u32 ea, u32 format, u32 w, u32 h)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("RSX_IO_UNMAPPED"); on = e ? atoi(e) : 1; }
++    if (!on) return;
++    extern u32 cellGcmResolveIO(u32);
++    const u32 bytes = io_unmapped_level0_bytes(format & 0x9F, w, h);
++    const int head = cellGcmResolveIO(offset) != 0;
++    const int tail = bytes ? cellGcmResolveIO(offset + bytes - 1) != 0 : head;
++    if (head && tail) {
++        /* RSX_IO_UNMAPPED=2: also name the first 16 mapped MAIN offsets, to show
++         * the check runs when nothing is unmapped. */
++        static int shown; static u32 shown_off[16];
++        int dup = 0;
++        for (int i = 0; i < shown; i++) if (shown_off[i] == offset) { dup = 1; break; }
++        if (on == 2 && !dup && shown < 16) {
++            shown_off[shown++] = offset;
++            fprintf(stderr, "[io-unmapped] check: tex unit %u fmt 0x%02X %ux%u main offset 0x%08X"
++                            " (+%u bytes) mapped at 0x%08X%c", unit, format, w, h, offset, bytes, ea, 10);
++        }
++        return;
++    }
++    static unsigned long long count;
++    static u32 seen[64]; static int ns;
++    const unsigned long long n = ++count;
++    int known = 0;
++    for (int i = 0; i < ns; i++) if (seen[i] == offset) { known = 1; break; }
++    if (!known && ns < 64) {
++        seen[ns++] = offset;
++        fprintf(stderr, "[io-unmapped] tex unit %u fmt 0x%02X %ux%u main offset 0x%08X (+%u bytes) %s"
++                        " no IO mapping; reading 0x%08X instead (fp 0x%X, bind #%llu)%c",
++                unit, format, w, h, offset, bytes, head ? "partly has" : "has", ea,
++                s_d3d.current_rsx_state ? s_d3d.current_rsx_state->shader_program : 0, n, 10);
++    } else if ((n & (n - 1)) == 0) {
++        fprintf(stderr, "[io-unmapped] %llu unmapped texture binds so far, %d offsets%s%c",
++                n, ns, ns >= 64 ? " (only the first 64 named)" : "", 10);
++    }
++}
++
+ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
+ {
+     (void)ud;
+@@ -6358,6 +17424,24 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
      u32 height = tex->image_rect & 0xFFFF;
      u32 format = (tex->format >> 8) & 0xFF;
      u32 offset = tex->offset;
@@ -25950,7 +26017,7 @@ index 68929ed2..066dad0c 100644
      /* CUBEDBG=1: NV4097_SET_TEXTURE_FORMAT bit 2 is the cubemap flag, and the
       * line above throws it away with the rest of the low byte. Nothing in this
       * backend handles cube textures, so a cubemap bound for an environment
-@@ -6416,14 +17440,27 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
+@@ -6416,14 +17500,27 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
       * as-seen 0xA1 with the LN flag) is wired up so far; other formats fall
       * back to untextured. */
      u32 base_fmt = format & 0x9F;   /* strip LN(0x20)/UN(0x40) flags */
@@ -25980,8 +26047,10 @@ index 68929ed2..066dad0c 100644
          /* TEX_RESOLVE_AUTO=1: resolve through the page tables (local-page map
           * then IO table) instead of trusting the format's location bits. A
           * texture the guest built in main memory but tagged local resolves to
-@@ -6466,18 +17503,28 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
+@@ -6466,18 +17563,30 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
              } }
++          if ((tex->format & 3u) == 2u)
++              io_unmapped_check(unit, offset, _r, format, width, height);
            s_d3d.cur_texs[unit].off = _r; }
          s_d3d.cur_texs[unit].raw = offset;
 +        s_d3d.cur_texs[unit].local = (tex->format & 3u) == 1u;
@@ -26011,7 +26080,7 @@ index 68929ed2..066dad0c 100644
          s_d3d.cur_texs[unit].set = 1;
      }
      if (base_fmt == 0x81 /* B8 */) {
-@@ -6583,12 +17630,27 @@ static rsx_backend s_d3d12_backend = {0};
+@@ -6583,12 +17692,27 @@ static rsx_backend s_d3d12_backend = {0};
  int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
  {
      memset(&s_d3d, 0, sizeof(s_d3d));
@@ -26043,7 +26112,7 @@ index 68929ed2..066dad0c 100644
  
      /* Debug: dump the first N presented frames to BMP if CELLMARK_DUMP is set
       * (its numeric value when > 1, else 24). */
-@@ -6609,7 +17671,8 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
+@@ -6609,7 +17733,8 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
          snprintf(g_rsx_title_base, sizeof(g_rsx_title_base), "%s",
                   title ? title : "ps3recomp");
      }
@@ -26053,7 +26122,7 @@ index 68929ed2..066dad0c 100644
      if (!s_d3d.hwnd) {
          printf("[D3D12] ERROR: Window creation failed\n");
          return -1;
-@@ -6636,11 +17699,13 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
+@@ -6636,11 +17761,13 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
      s_d3d12_backend.set_shader        = d3d12_set_shader;
      s_d3d12_backend.set_vertex_attribs = d3d12_set_vertex_attribs;
      s_d3d12_backend.draw_arrays       = d3d12_draw_arrays;
@@ -26067,7 +26136,7 @@ index 68929ed2..066dad0c 100644
      s_d3d.initialized = 1;
      s_d3d.last_fps_time = GetTickCount64();
  
-@@ -6652,7 +17717,20 @@ void rsx_d3d12_backend_shutdown(void)
+@@ -6652,7 +17779,20 @@ void rsx_d3d12_backend_shutdown(void)
  {
      if (!s_d3d.initialized) return;
  
@@ -26088,7 +26157,7 @@ index 68929ed2..066dad0c 100644
  
      /* Release D3D12 resources */
      if (s_d3d.vertex_buffer) {
-@@ -6662,6 +17740,8 @@ void rsx_d3d12_backend_shutdown(void)
+@@ -6662,6 +17802,8 @@ void rsx_d3d12_backend_shutdown(void)
      if (s_d3d.pipeline_state)        s_d3d.pipeline_state->lpVtbl->Release(s_d3d.pipeline_state);
      if (s_d3d.pipeline_state_lines)  s_d3d.pipeline_state_lines->lpVtbl->Release(s_d3d.pipeline_state_lines);
      if (s_d3d.pipeline_state_points) s_d3d.pipeline_state_points->lpVtbl->Release(s_d3d.pipeline_state_points);
@@ -26097,7 +26166,7 @@ index 68929ed2..066dad0c 100644
      if (s_d3d.depth_buffer) s_d3d.depth_buffer->lpVtbl->Release(s_d3d.depth_buffer);
      if (s_d3d.dsv_heap)     s_d3d.dsv_heap->lpVtbl->Release(s_d3d.dsv_heap);
      if (s_d3d.root_signature) s_d3d.root_signature->lpVtbl->Release(s_d3d.root_signature);
-@@ -6671,13 +17751,14 @@ void rsx_d3d12_backend_shutdown(void)
+@@ -6671,13 +17813,14 @@ void rsx_d3d12_backend_shutdown(void)
      for (u32 i = 0; i < FRAME_COUNT; i++) {
          if (s_d3d.cmd_allocators[i]) s_d3d.cmd_allocators[i]->lpVtbl->Release(s_d3d.cmd_allocators[i]);
          if (s_d3d.render_targets[i]) s_d3d.render_targets[i]->lpVtbl->Release(s_d3d.render_targets[i]);
@@ -26113,7 +26182,7 @@ index 68929ed2..066dad0c 100644
  
      rsx_set_backend(NULL);
      s_d3d.initialized = 0;
-@@ -6687,6 +17768,7 @@ void rsx_d3d12_backend_shutdown(void)
+@@ -6687,6 +17830,7 @@ void rsx_d3d12_backend_shutdown(void)
  
  int rsx_d3d12_backend_pump_messages(void)
  {
@@ -26121,7 +26190,7 @@ index 68929ed2..066dad0c 100644
      MSG msg;
      while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
          if (msg.message == WM_QUIT) return -1;
-@@ -6700,7 +17782,7 @@ void rsx_d3d12_backend_present(void)
+@@ -6700,7 +17844,7 @@ void rsx_d3d12_backend_present(void)
  {
      if (blink_dbg())
          printf("[PRESENT] draws=%u clears_since_last=%u clear_presents=%u\n",
@@ -26130,7 +26199,7 @@ index 68929ed2..066dad0c 100644
      s_dbg_clears_since_present = 0;
  
      /* Once frame-boundary presents are active (d3d12_clear presents each
-@@ -6709,8 +17791,22 @@ void rsx_d3d12_backend_present(void)
+@@ -6709,8 +17853,22 @@ void rsx_d3d12_backend_present(void)
       * that partial present right after the FIFO ring recycle was the visible
       * blink. Keep the ticker present solely as the boot-time fallback (before
       * the first framed clear arrives). */
@@ -26155,7 +26224,7 @@ index 68929ed2..066dad0c 100644
  
      /* Same display gate as d3d12_present: a batch of offscreen pass work only
       * (render-to-texture) keeps accumulating until its composite arrives.
-@@ -6718,9 +17814,12 @@ void rsx_d3d12_backend_present(void)
+@@ -6718,9 +17876,12 @@ void rsx_d3d12_backend_present(void)
       * empty present is a flip/drain race and wipes the screen for a frame
       * (wave: black flashes and layout flicker between frames). */
      static int s_seen_content = 0;
@@ -26171,7 +26240,7 @@ index 68929ed2..066dad0c 100644
              has_display = 1;
              break;
          }
-@@ -6729,7 +17828,7 @@ void rsx_d3d12_backend_present(void)
+@@ -6729,7 +17890,7 @@ void rsx_d3d12_backend_present(void)
        if (gfb < 0) { const char* e = getenv("GCM_GUEST_FB"); gfb = e ? 1 : 0; }
        if (gfb) has_display = 1; }
      if (s_composite_src) has_display = 1;
@@ -26180,7 +26249,7 @@ index 68929ed2..066dad0c 100644
  
      /* VP_SUBMIT=<N>: has_display gates render_frame() entirely, so a batch whose
       * records all target an OFFSCREEN rt (rt_off != 0) presents without ever
-@@ -6737,26 +17836,26 @@ void rsx_d3d12_backend_present(void)
+@@ -6737,26 +17898,26 @@ void rsx_d3d12_backend_present(void)
       * reads as "nothing rasterizes" from every downstream check. */
      { static int cap = -1, n = 0;
        if (cap < 0) { const char* e = getenv("VP_SUBMIT"); cap = e ? atoi(e) : 0; }
@@ -26217,7 +26286,7 @@ index 68929ed2..066dad0c 100644
              }
              /* The execution loop skips anything without is_vp, so a batch full
               * of !is_vp records is counted, gated and then never drawn. */
-@@ -6767,7 +17866,7 @@ void rsx_d3d12_backend_present(void)
+@@ -6767,7 +17928,7 @@ void rsx_d3d12_backend_present(void)
            fprintf(stderr, "%c", 10); }
          fprintf(stderr, "[PRESENTGATE] records=%u onscreen=%u offscreen=%u clears=%u"
                          " has_display=%d seen_content=%d -> render_frame=%s\n",
@@ -26226,7 +26295,7 @@ index 68929ed2..066dad0c 100644
                  s_seen_content, (s_d3d.initialized && has_display) ? "YES" : "SKIPPED"); } }
  
      /* Execute the batch whenever it has draws. Gating the whole call on
-@@ -6775,14 +17874,14 @@ void rsx_d3d12_backend_present(void)
+@@ -6775,14 +17936,14 @@ void rsx_d3d12_backend_present(void)
       * offscreen surface -- was DISCARDED rather than deferred, so the texture
       * it produces was never written and whatever sampled it later read an
       * empty resource. Only the Present needs onscreen content. */
@@ -26244,7 +26313,7 @@ index 68929ed2..066dad0c 100644
      }
  }
  
-@@ -6799,7 +17898,12 @@ int rsx_d3d12_backend_init(u32 w, u32 h, const char* t)
+@@ -6799,7 +17960,12 @@ int rsx_d3d12_backend_init(u32 w, u32 h, const char* t)
      return -1;
  }
  void rsx_d3d12_backend_shutdown(void) {}

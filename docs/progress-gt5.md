@@ -4,6 +4,35 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## `[io-unmapped]`: texture binds from main memory with no IO mapping (2026-11-12)
+
+A diagnostic, from the idea in MormonFTP-hub/gt5-recomp v0.1.12 (MIT; our
+code is written for this backend, not copied). When a texture whose location
+bits say MAIN memory is bound, the backend now asks the IO table for the
+first byte and for level 0's estimated last byte. With no mapping there,
+`cellGcmResolveOffset` falls back to VRAM (or a page once derived from a
+local address), so the texture samples bytes the title never put at that
+offset. Such a bind prints, once per offset (the first 64):
+
+    [io-unmapped] tex unit U fmt 0xFF WxH main offset 0x........ (+N bytes) has no IO mapping; reading 0x........ instead (fp 0x..., bind #n)
+
+`partly has` replaces `has` when only the end is unmapped. The running count
+prints at every power of two. Cost: two table reads per MAIN bind, on the
+walker thread. Switches: `RSX_IO_UNMAPPED=0` off, `=2` also names the first
+16 distinct mapped MAIN offsets (proof the check runs). Code:
+`io_unmapped_check` in `rsx_d3d12_backend.c` (runtime patch).
+
+Measured on a High Speed Ring Arcade race (menus, car list, loading, grid,
+race; `gt5boot.ps1 -Route race`): **no unmapped binds** (`iou-race1`, 0
+lines). Check mode (`iou-race3`) lists 16 mapped MAIN offsets, among them the
+1920x1080 screen copies at `0x0B108100`-`0x0B402100` (fmt 0xA6) and
+`0x026BC280`-`0x0400C280` (0xA5), DXT1 at `0x0301D880` and small lookups,
+all at EA `0x40000000 + offset`. The unmapped branch itself has not fired
+live yet: its value is for other tracks/modes and player reports (Chamonix
+snow mis-texturing was the case that prompted it in the other port).
+Frame test with the line on: 53.0 FPS, walk 8.81 ms, inside this machine's
+~5 FPS run spread.
+
 ## Bitdefender "Gen:Variant.Lazy" on gt5.exe: located and changed (2026-11-12)
 
 Release 0.1.2's ZIP had 7/64 VirusTotal detections: Bitdefender
