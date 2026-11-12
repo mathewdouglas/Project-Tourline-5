@@ -4,6 +4,30 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Bitdefender "Gen:Variant.Lazy" on gt5.exe: located and changed (2026-11-12)
+
+Release 0.1.2's ZIP had 7/64 VirusTotal detections: Bitdefender
+`Gen:Variant.Lazy.746136` and its OEM engines (ALYac, Arcabit, Emsisoft,
+GData, VIPRE), plus Microsoft's `Tecabans.STV!cl` and CTX `Zip.unknown.generic`.
+The Microsoft one is a cloud verdict on that one ZIP hash: the same files
+re-zipped scan clean. The Bitdefender one is in `gt5.exe` alone, and was
+located by uploading byte-patched copies (each with a new timestamp, so a new
+hash):
+
+- Import names, `.rsrc`, `.data` and `.rdata` contents: not the cause.
+- Blanking the 11 KB of CRT startup code, or main.cpp's 20 KB, clears it;
+  blanking 114 MB of other code does not.
+- An `ExitProcess` patched in at the entry point is still flagged, so it is
+  a static score, not emulated behaviour.
+- NOP-filling quarters of `main`: only the first clears it; within that, only
+  the run of about 25 `getenv`/`_putenv_s` default pairs.
+
+That run is now one table and one loop (`apply_env_defaults`, `src/main.cpp`):
+same variables, values, conditions and precedence. A 25 s headless boot
+applies them (`topo-ht` placement, priority class). Whether VirusTotal now
+scores it clean is to be measured on the rebuilt exe. There is no switch:
+nothing behaves differently.
+
 ## Vertex-cache write tracking: measured, slower, kept off (2026-11-12)
 
 Opt-in Windows page-write tracking for the cross-frame raw vertex cache

@@ -768,6 +768,68 @@ static int locate_project_root(void)
     return 0;
 }
 
+/* The runtime's default settings, handed to it as environment variables that
+ * are not already set. An entry whose value is empty or whose condition is
+ * false is skipped. This is one table and one loop rather than a run of
+ * getenv/_putenv_s pairs in main: that run, together with the startup code,
+ * scored as "Gen:Variant.Lazy" in Bitdefender's static heuristic (VirusTotal,
+ * release 0.1.2; byte bisection of gt5.exe). Same variables, same values,
+ * same precedence as before.
+ *
+ * - PS3_PPU_PRIO_SCHED=2: guest threads scheduled by their PS3 priority on two
+ *   host cores; left to the host, about one boot in four failed during sound
+ *   start-up (Phase 22). Must be set before the first runtime thread.
+ * - PS3_PPU_CORES=topo-ht: separate physical cores, both hardware threads of
+ *   each (Phases 91, 102). =3 old placement, =topo one thread per core.
+ * - PS3_USLEEP_SKIP_LR: skip the title's frame-pacer sleep (Phase 106);
+ *   GT5P_PACER_PAD=1 keeps it.
+ * - PAD_MILESTONE_FILES, RSX_SCOPE_LABELS, GT5P_SCREEN_ROLES,
+ *   GT5P_TOP_MENU_WORD: the target's measured screen files, so race pipelines
+ *   are learned and prepared and the settings page knows the screens
+ *   (GT5 Phase 36); GT5P_RACE_SCOPE=0 leaves them unset.
+ * - GT5P_LISTBOX_VTABLE / _RANGE: the settings page's race-pause check (Phase 117).
+ * - SPURS_READY_GATE=1: run a workload only while its ready count is nonzero
+ *   (Phase 39).
+ * - GT5 only (docs/progress-gt5.md): PS3_LWCOND_REAL (Phase 3),
+ *   PS3_USER_MEM_ACCOUNT, PS3_PAGE_FAULT=2, PS3_MMAPPER_LV2_AREA (Phase 9;
+ *   PS3_MMAPPER_SHM=1 still corrupts the heap), PS3_TIMER_ONESHOT,
+ *   GCM_SUBCH1_M2MF (Phase 21), GCM_PARK_TIMEOUT_MS=3000 (Phase 23).
+ * - SPURS_LANE_PIN=2: render lanes on cores of their own (Phase 64).
+ * - RSX_SHADER_ASYNC=1: shaders compile on background threads (Phase 65).
+ * The settings file, loaded earlier, has already set any it covers. */
+static void apply_env_defaults()
+{
+    const bool gt5 = !strcmp(GT5P_TITLE_ID, "BCUS98114");
+    const char* pad = getenv("GT5P_PACER_PAD");
+    const bool pacer = !(pad && pad[0] == '1');
+    const char* scope = getenv("GT5P_RACE_SCOPE");
+    const bool race_scope = GT5P_SCREEN_FILES[0] && GT5P_SCOPE_LABELS[0] && !(scope && scope[0] == '0');
+    const struct { const char* name; const char* value; bool when; } defaults[] = {
+        {"PS3_PPU_PRIO_SCHED",   "2",                true},
+        {"PS3_PPU_CORES",        "topo-ht",          true},
+        {"PS3_USLEEP_SKIP_LR",   GT5P_PACER_LR,      pacer},
+        {"PAD_MILESTONE_FILES",  GT5P_SCREEN_FILES,  race_scope},
+        {"RSX_SCOPE_LABELS",     GT5P_SCOPE_LABELS,  race_scope},
+        {"GT5P_SCREEN_ROLES",    GT5P_SCREEN_ROLES,  race_scope},
+        {"GT5P_TOP_MENU_WORD",   GT5P_TOP_MENU_WORD, race_scope},
+        {"GT5P_LISTBOX_VTABLE",  GT5P_LISTBOX_VT,    true},
+        {"GT5P_LISTBOX_RANGE",   GT5P_LISTBOX_RANGE, true},
+        {"SPURS_READY_GATE",     "1",                true},
+        {"PS3_LWCOND_REAL",      "1",                gt5},
+        {"PS3_USER_MEM_ACCOUNT", "1",                gt5},
+        {"PS3_TIMER_ONESHOT",    "1",                gt5},
+        {"PS3_PAGE_FAULT",       "2",                gt5},
+        {"PS3_MMAPPER_LV2_AREA", "1",                gt5},
+        {"GCM_SUBCH1_M2MF",      "1",                gt5},
+        {"GCM_PARK_TIMEOUT_MS",  "3000",             gt5},
+        {"SPURS_LANE_PIN",       "2",                true},
+        {"RSX_SHADER_ASYNC",     "1",                true},
+    };
+    for (const auto& d : defaults)
+        if (d.when && d.value[0] && !getenv(d.name)) _putenv_s(d.name, d.value);
+}
+
+
 int main(int argc, char* argv[])
 {
     /* Buffer both streams, first thing: setvbuf has to come before any output.
@@ -814,22 +876,9 @@ int main(int argc, char* argv[])
     gt5p_keymap_init();   /* the keyboard's bindings ([keyboard], PAD_KEYMAP) */
     gt5p_glyphs_init();   /* button prompts for the device in use (GT5P_GLYPHS=0: off) */
 
-    /* Schedule guest threads by their PS3 priority on two host cores, as the
-     * console's two hardware threads would. Left to the host scheduler, about
-     * one boot in four fails during sound start-up; with this on, 1 in 52
-     * did (docs/progress.md, Phase 22). Set PS3_PPU_PRIO_SCHED=0 to turn it
-     * off. Must be set before the runtime creates its first thread. */
-    if (!getenv("PS3_PPU_PRIO_SCHED")) _putenv_s("PS3_PPU_PRIO_SCHED", "2");
-    /* The current race workload benefits from separate physical PPU cores;
-     * the older shared-SMT placement bottlenecks command production. The
-     * runtime's topology path also keeps render lanes off both sibling CPUs.
-     * PS3_PPU_CORES=3 restores the previous placement (Phase 91).
-     * topo-ht also gives the guest both hardware threads of those two cores:
-     * with one each, the race clock ran at about half of real time (slow
-     * motion, Phase 102). PS3_PPU_CORES=topo for one thread per core. */
-    if (!getenv("PS3_PPU_CORES")) _putenv_s("PS3_PPU_CORES", "topo-ht");
+    apply_env_defaults();
 
-    /* Those guest threads share four logical CPUs, and the scheme above gives most of them normal host
+    /* Those guest threads share four logical CPUs, and PS3_PPU_PRIO_SCHED (apply_env_defaults) gives most of them normal host
      * priority or less (the thread that prepares frames is "normal", the title's timer service "idle").
      * In a normal-class process any other program's CPU work that Windows places on those CPUs runs at the
      * same level or above and takes whole scheduler slices from them, while the rest of the machine is
@@ -844,103 +893,6 @@ int main(int argc, char* argv[])
                        : ABOVE_NORMAL_PRIORITY_CLASS;
       if (want && !(offline && offline[0] && strcmp(offline, "0")) && SetPriorityClass(GetCurrentProcess(), want))
           fprintf(stderr, "[sched] process priority class: %s\n", want == HIGH_PRIORITY_CLASS ? "high" : "above normal"); }
-
-    /* The title's frame pacer pads each frame with a sleep up to the slowest
-     * of the last four (up to 50 ms) once one passes a vblank. On a console
-     * frame times vary by microseconds; here an SPU wait or a preempted
-     * thread does it, and the pad copies one slow frame onto the next few
-     * (Phase 106). Skip that sleep: the race clock follows the title's timer
-     * service, not frames, so game speed is unchanged. GT5P_PACER_PAD=1 keeps
-     * the title's padding. */
-    { const char* pad = getenv("GT5P_PACER_PAD");
-      if (GT5P_PACER_LR[0] && !(pad && pad[0] == '1') && !getenv("PS3_USLEEP_SKIP_LR"))
-          _putenv_s("PS3_USLEEP_SKIP_LR", GT5P_PACER_LR); }
-
-    /* A title that reads hashed paths names no screens, so the renderer never
-     * learned which pipelines belong to a race and never prepared them while
-     * a race loads: Gran Turismo 5 filed every pipeline under the menu. The
-     * target's measured screen files (config/targets.json) name them here.
-     * GT5P_RACE_SCOPE=0 leaves both unset, as before. A PAD_MILESTONE_FILES
-     * or RSX_SCOPE_LABELS already in the environment wins. */
-    { const char* scope = getenv("GT5P_RACE_SCOPE");
-      if (GT5P_SCREEN_FILES[0] && GT5P_SCOPE_LABELS[0] && !(scope && scope[0] == '0')) {
-          if (!getenv("PAD_MILESTONE_FILES")) _putenv_s("PAD_MILESTONE_FILES", GT5P_SCREEN_FILES);
-          if (!getenv("RSX_SCOPE_LABELS")) _putenv_s("RSX_SCOPE_LABELS", GT5P_SCOPE_LABELS);
-          /* The same screens tell the settings page when a race runs and
-           * when the Options screen is up (gt5p_settings_ui.cpp). */
-          if (GT5P_SCREEN_ROLES[0] && !getenv("GT5P_SCREEN_ROLES")) _putenv_s("GT5P_SCREEN_ROLES", GT5P_SCREEN_ROLES);
-          if (GT5P_TOP_MENU_WORD[0] && !getenv("GT5P_TOP_MENU_WORD")) _putenv_s("GT5P_TOP_MENU_WORD", GT5P_TOP_MENU_WORD);
-      } }
-
-    /* The mListBox vtable, for the settings page's race-pause check
-     * (gt5p_settings_ui.cpp, Phase 117). */
-    if (GT5P_LISTBOX_VT[0] && !getenv("GT5P_LISTBOX_VTABLE")) _putenv_s("GT5P_LISTBOX_VTABLE", GT5P_LISTBOX_VT);
-    if (GT5P_LISTBOX_RANGE[0] && !getenv("GT5P_LISTBOX_RANGE")) _putenv_s("GT5P_LISTBOX_RANGE", GT5P_LISTBOX_RANGE);
-
-    /* Run a SPURS workload only while its ready count is nonzero, on as many
-     * virtual SPUs as the count asks for. This title fills a job list first
-     * and raises the count afterwards; run before that, the dealership's
-     * render jobs read output rings not yet set up (docs/progress.md, Phase
-     * 39). SPURS_READY_GATE=0 for the old every-pass dispatch. */
-    if (!getenv("SPURS_READY_GATE")) _putenv_s("SPURS_READY_GATE", "1");
-
-    /* GT5 waits once on an lwcond for a worker to finish a request held on
-     * the waiter's stack; the runtime's 1 ms poll let it return early
-     * (docs/progress-gt5.md, Phase 3). PS3_LWCOND_REAL=0 for the poll. */
-    if (!strcmp(GT5P_TITLE_ID, "BCUS98114") && !getenv("PS3_LWCOND_REAL"))
-        _putenv_s("PS3_LWCOND_REAL", "1");
-    /* GT5's pager sizes and balances its physical pages from the free user
-     * memory lv2 reports; a fixed answer left its heap unable to grow and the
-     * install spinning in its compaction loop (docs/progress-gt5.md, Phase
-     * 9). PS3_USER_MEM_ACCOUNT=0 for the fixed answer. */
-    if (!strcmp(GT5P_TITLE_ID, "BCUS98114") && !getenv("PS3_USER_MEM_ACCOUNT"))
-        _putenv_s("PS3_USER_MEM_ACCOUNT", "1");
-    /* GT5's timer threads arm lv2 one-shots (period 0, absolute base time),
-     * which the runtime's old timer refused. PS3_TIMER_ONESHOT=0 for it. */
-    if (!strcmp(GT5P_TITLE_ID, "BCUS98114") && !getenv("PS3_TIMER_ONESHOT"))
-        _putenv_s("PS3_TIMER_ONESHOT", "1");
-    /* GT5's pager trades its 1 MB reservations for 64 KB pages as page faults
-     * arrive; with faults never reported it held them all, free memory sat
-     * at 0 and its heap refused to grow. PS3_PAGE_FAULT=2 reports faults on
-     * its areas with flat (legacy) blocks, in RPCS3's layout
-     * (PS3_MMAPPER_LV2_AREA=1): the install then runs to its end, as in
-     * RPCS3 (docs/progress-gt5.md, Phase 9). Set either to 0 for the old
-     * behaviour. PS3_MMAPPER_SHM=1 (real shared-memory blocks) still
-     * corrupts the heap and stays off. */
-    if (!strcmp(GT5P_TITLE_ID, "BCUS98114") && !getenv("PS3_PAGE_FAULT"))
-        _putenv_s("PS3_PAGE_FAULT", "2");
-    if (!strcmp(GT5P_TITLE_ID, "BCUS98114") && !getenv("PS3_MMAPPER_LV2_AREA"))
-        _putenv_s("PS3_MMAPPER_LV2_AREA", "1");
-    /* GT5's libgcm binds the NV0039 copy engine to FIFO subchannel 1, and its
-     * texture heap compaction moves textures with it. The walker took
-     * subchannel 1 for 3D (Gran Turismo 5 Prologue's SPU lists), so the
-     * copies were dropped and the moved textures' materials sampled stale
-     * VRAM: the purple road (docs/progress-gt5.md, Phase 21).
-     * GCM_SUBCH1_M2MF=0 for the old routing. */
-    if (!strcmp(GT5P_TITLE_ID, "BCUS98114") && !getenv("GCM_SUBCH1_M2MF"))
-        _putenv_s("GCM_SUBCH1_M2MF", "1");
-    /* A walker parked at an SPU list's write head gives up after
-     * GCM_PARK_TIMEOUT_MS and drops the rest of the list, with the frame's
-     * user command: the game then waits out a 5 s timeout. GT5's job passes
-     * can take over 500 ms (the runtime's default; workload 6 reached 665 ms,
-     * and longer while shaders compile), so it waits 3 s
-     * (docs/progress-gt5.md, Phase 23). */
-    if (!strcmp(GT5P_TITLE_ID, "BCUS98114") && !getenv("GCM_PARK_TIMEOUT_MS"))
-        _putenv_s("GCM_PARK_TIMEOUT_MS", "3000");
-
-    /* SPU render lanes on cores of their own (strict pinning): 1.14 times
-     * faster lanes, Ferrari at a median 28.2 fps against 24.8 free, and no
-     * freeze in 20 visits since Phase 64. The settings page's choice, set just
-     * above when settings are loaded, wins; this is for runs without them.
-     * SPURS_LANE_PIN=0 for the scheduler's placement. */
-    if (!getenv("SPURS_LANE_PIN")) _putenv_s("SPURS_LANE_PIN", "2");
-
-    /* Shaders not in the disk cache compile on background threads, all of a
-     * frame's at once, instead of one by one on the frame thread (Phase 65:
-     * an empty cache kept the first dealer page away for over a minute). The
-     * settings page's "Precompile shaders" wins; RSX_SHADER_ASYNC=0 for the
-     * old way. */
-    if (!getenv("RSX_SHADER_ASYNC")) _putenv_s("RSX_SHADER_ASYNC", "1");
 
     /* Ask for 1 ms timer resolution. Without it Sleep(1) lasts about 15.6 ms
      * on Windows, and the runtime paces the SPU job poll, the present thread
