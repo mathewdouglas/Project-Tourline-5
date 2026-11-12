@@ -10,6 +10,16 @@ versions follow [SemVer](https://semver.org/).
   storage and log buttons) and relocated-storage following; see
   [docs/recomplauncher.md](docs/recomplauncher.md). RecompLauncher's own UI is
   not yet checked.
+- Preload known shaders > **Before start** (GT5 Phase 44; F1, launcher,
+  `shader_warmup_before_start`, `RSX_SHADER_WARMUP_STARTUP=1`): the learned
+  menu and race pipelines are prepared before the game starts, on every CPU
+  core but one (`RSX_SHADER_WARMUP_THREADS`), with a "Preparing shaders
+  N / M" badge. In background stays the default.
+- GPU driver stamp (GT5 Phase 44): `gpu-stamp.txt` in the shader cache
+  records the GPU and driver. After a driver update, saved driver pipelines
+  and the race pack from the old driver are rebuilt without being read, and
+  the learned sets are prepared before start once
+  (`RSX_PSO_GPU_STAMP=0`, `RSX_PSO_GPU_STAMP_PRELOAD=0` turn these off).
 
 ### Fixed
 - Crash after loading Eiger Nordwand with weather change (GT5 Phase 43): job-body

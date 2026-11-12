@@ -263,23 +263,33 @@
       "label": "Preload Known Shaders",
       "group": "Video",
       "advanced": true,
-      "help": "Prepares recorded shaders in the background at startup to reduce stutter.",
+      "help": "Prepares recorded shaders to reduce stutter: in the background at startup, or all of them before the game starts on every CPU core but one (startup waits, with a progress badge).",
       "choices": [
         {
-          "label": "On",
+          "label": "In background",
           "set": {
-            "video/shader_warmup": "true"
+            "video/shader_warmup": "true",
+            "video/shader_warmup_before_start": "false"
+          }
+        },
+        {
+          "label": "Before start",
+          "set": {
+            "video/shader_warmup": "true",
+            "video/shader_warmup_before_start": "true"
           }
         },
         {
           "label": "Off",
           "set": {
-            "video/shader_warmup": "false"
+            "video/shader_warmup": "false",
+            "video/shader_warmup_before_start": "false"
           }
         }
       ],
       "defaults": {
-        "video/shader_warmup": "true"
+        "video/shader_warmup": "true",
+        "video/shader_warmup_before_start": "false"
       }
     },
     {

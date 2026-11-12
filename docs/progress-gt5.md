@@ -4,6 +4,64 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Phase 44 - Shader preparation before start and a GPU driver stamp (2026-11-12)
+
+Two ideas taken from the Resistance: Fall of Man port's renderer (MIT; read
+for the idea, no code copied; its `shaderscan` tool is GPL-2.0 and was not
+read). Runtime change: `patches/incremental/gpu-stamp-before-start.patch`,
+also folded into the main patch.
+
+**Preload known shaders > Before start** (`RSX_SHADER_WARMUP_STARTUP=1`;
+F1, launcher manifest, `shader_warmup_before_start`; default off). The
+learned menu set, then the learned race set (from `race-pack-v1.bin` when it
+matches) are prepared on `RSX_SHADER_WARMUP_THREADS` helpers (default:
+logical CPUs - 1, max 32) while the guest is held, with a "Preparing
+shaders N / M" badge (`g_rsx_startup_prep_done/total`,
+`src/gt5p_shaderbusy.cpp`). It is Prologue Phase 88's blocking preload
+(still `RSX_SHADER_WARMUP_BACKGROUND=0`) made parallel and ordered by the
+learned sets instead of one thread walking every recipe in hash order. The
+same recipe path as the race prewarm helpers (`pso_race_recipe`); recipe
+maintenance runs first, once (the worker then skips it). The background
+startup pass is not queued after it; nothing learned is left for it.
+
+**GPU/driver stamp** (`RSX_PSO_GPU_STAMP=0` off). `<cache>/gpu-stamp.txt`
+holds vendor, device, subsystem, revision, the user-mode driver version
+(`CheckInterfaceSupport(IDXGIDevice)`) and name, plus `since=`, when that
+stamp was first seen. A first stamp is written with `since=0` (older blobs
+are of unknown origin; the driver still judges them). When the stamp
+changes, blob files (`pso_*.bin`) and `race-pack-v1.bin` last written before
+`since=` are not read: the pipeline is rebuilt and the file replaced, and
+the first race load rewrites the pack. One attribute query per blob open,
+and only after a recorded change. The changed run also does the before-start
+preparation once (`RSX_PSO_GPU_STAMP_PRELOAD=0` leaves it to the
+background). F8 reports carry a `GPU stamp:` line.
+
+**Measured** (RTX 4060, driver 32.0.16.1088, this worktree's cache: 2015
+menu + 826 race recipes; HSR route, `gt5boot.ps1 -Route race`):
+
+| Run | Mode | Preparation | Notes |
+| --- | --- | --- | --- |
+| `ss-bg` | background (default) | 2839 in 10.4 s, beside boot | race gate: pack, 0 ms |
+| `ss-bs` | before start, 11 threads | 2838 in 0.375 s, guest held | warm blobs; race index had grown by 2, so files, not pack |
+| `ss-drv1` | stamp edited to an older driver (scratch copy of the cache) | forced: 2841 in 4.5 s, 11 threads | 48.3 s of driver time; 0 blobs read; old pack skipped, rewritten after the race load; badge shown 4.0 s |
+| `ss-drv2` | next run, same copy | background, no forced pass | new pack hits; driver time 2.0 s (blobs read again) |
+
+All four reached `RaceStart` with the same milestone spacing. **Limit:**
+`ss-drv1` faked the change, so NVIDIA's own disk cache still knew these
+pipelines; after a real driver update each one compiles cold and the pass
+takes longer. Not measured: a real driver update, CPUs with few cores (the
+thread count is cores - 1, at least 1), FXC's cache folder.
+
+**Tests:** `scripts/test/gpu_stamp.py` (new; WARP, six processes over one
+scratch cache: learn, same driver, changed driver, the run after, off switch,
+empty cache), `race_prewarm.py`, `pso_async.py` (stamp stubs added),
+`recomplauncher_manifest.py`, `settings_test.ps1` (three-way choice),
+`debug_export.ps1`: all pass. `shader_warmup.py` targets Prologue's
+`gt5p.exe` and was not run.
+
+**Not done:** the replay's redundant-state filter (the other idea from the
+same review) is separate work.
+
 ## Bitdefender "Gen:Variant.Lazy" on gt5.exe: located and changed (2026-11-12)
 
 Release 0.1.2's ZIP had 7/64 VirusTotal detections: Bitdefender

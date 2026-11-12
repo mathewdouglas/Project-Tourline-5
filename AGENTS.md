@@ -76,6 +76,15 @@ still owed are in the review document's "Follow-up" section.
 `patches/incremental/` holds single-change copies of runtime edits that are
 already inside the main patch; `setup_runtime.py` does not read them.
 
+**Shaders before start, GPU driver stamp (GT5 Phase 44).** Preload known
+shaders has a third choice, Before start (`RSX_SHADER_WARMUP_STARTUP=1`,
+`shader_warmup_before_start`): learned menu then race sets on cores - 1
+(`RSX_SHADER_WARMUP_THREADS`) while the guest waits, with a "Preparing
+shaders N / M" badge. `<cache>/gpu-stamp.txt` records GPU and driver; after
+a change, older `pso_*.bin` and the race pack are rebuilt unread and the
+before-start pass runs once (`RSX_PSO_GPU_STAMP=0`,
+`RSX_PSO_GPU_STAMP_PRELOAD=0`). Test: `scripts/test/gpu_stamp.py` (WARP).
+
 **Release 0.1.1** (tag `v0.1.1`) adds the launcher, ultrawide and Phase 40 CPU
 work; built and packaged the same way as 0.1.0.
 

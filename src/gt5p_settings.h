@@ -30,6 +30,7 @@ struct Gt5pSettings {
     bool shader_indicator = true;   /* "Compiling shaders" over the game while a draw waits on a shader */
     bool preload_indicator = false; /* the quieter "Loading shaders" badge for background preload work */
     bool shader_warmup = true;      /* prepare recorded pipelines during startup in the background */
+    bool shader_warmup_startup = false; /* ...or before the game starts, on all cores (Phase 44) */
     bool pipeline_async = true;    /* build driver pipelines on one background worker */
     bool race_preload = true;      /* prepare learned race pipelines during loading */
     bool shader_precompile = true;  /* compile new shaders on background threads, all at once */

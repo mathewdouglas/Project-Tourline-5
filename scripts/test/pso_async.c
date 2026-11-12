@@ -94,6 +94,9 @@ static HRESULT create_guest_pso_with_blob(const D3D12_GRAPHICS_PIPELINE_STATE_DE
     ID3D12PipelineState** out,int retain,int* refused){
     (void)blob;(void)n;(void)retain;if(refused)*refused=0;return create_guest_pso_cached(pd,out);
 }
+/* GPU/driver stamp (GT5 Phase 44): exercised by gpu_stamp.py, absent here. */
+static char s_gpu_stamp[400],s_gpu_stamp_old[400];static int s_gpu_changed;static u64 s_blob_since;static volatile LONG s_blob_stale;
+static int pso_file_predates_driver(const char* path){(void)path;return 0;}
 #include "queue.inc"
 static ID3DBlob* compile(const char* text,const char* target){
     ID3DBlob *blob=NULL,*err=NULL;

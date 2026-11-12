@@ -150,13 +150,12 @@ const std::vector<Item>& items()
           [](const Gt5pSettings& s) { return s.shader_precompile ? 1 : 0; },
           [](Gt5pSettings& s, int v) { s.shader_precompile = v != 0; }, nullptr },
         { L"SHADERS", L"Preload known shaders",
-          L"Prepare learned menu, then race pipelines in the background while the game starts "
-          L"and the movie plays (on by default). Live draws take priority. First visits still "
-          L"learn. Needs shader cache and background pipelines; uses more memory. Takes effect "
-          L"after a restart.",
-          "RSX_SHADER_WARMUP", kOnOff,
-          [](const Gt5pSettings& s) { return s.shader_warmup ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.shader_warmup = v != 0; }, nullptr },
+          L"In background (default): prepare learned menu, then race pipelines while the game "
+          L"starts. Before start: prepare them all first, on every CPU core but one; startup "
+          L"waits, with a progress badge. Needs shader cache; uses more memory; after a restart.",
+          "RSX_SHADER_WARMUP", { {1, L"In background"}, {2, L"Before start"}, {0, L"Off"} },
+          [](const Gt5pSettings& s) { return !s.shader_warmup ? 0 : s.shader_warmup_startup ? 2 : 1; },
+          [](Gt5pSettings& s, int v) { s.shader_warmup = v != 0; s.shader_warmup_startup = v == 2; }, nullptr },
         { L"SHADERS", L"Background pipeline creation",
           L"Build driver pipelines on a background worker to reduce render stalls. "
           L"First-seen details can appear a moment later while preparation finishes.",

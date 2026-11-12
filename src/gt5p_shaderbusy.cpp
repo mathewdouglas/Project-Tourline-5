@@ -17,6 +17,12 @@
  * g_rsx_shader_preload_busy / g_rsx_shader_preload_total, rsx_d3d12_backend.c).
  * If both would show, only "Compiling shaders" does.
  *
+ * A third, wider badge, "Preparing shaders N / M", shows while the guest is
+ * held for the preparation before start (Preload known shaders > Before
+ * start, or once after a GPU driver change; g_rsx_startup_prep_done/total,
+ * GT5 Phase 44). The player is waiting on it, so it follows the
+ * "Compiling shaders" setting and shows without delay.
+ *
  * A badge appears once its work has gone on for a moment, so a single quick
  * pipeline does not flash it, and stays until 0.7 s after the last item, so a
  * burst reads as one. It counts the shaders and pipelines of the burst.
@@ -40,6 +46,8 @@ extern volatile LONG g_rsx_shader_busy;            /* rsx_d3d12_backend.c */
 extern volatile LONG g_rsx_shader_demand_total;
 extern volatile LONG g_rsx_shader_preload_busy;
 extern volatile LONG g_rsx_shader_preload_total;
+extern volatile LONG g_rsx_startup_prep_done;      /* preparation before start */
+extern volatile LONG g_rsx_startup_prep_total;
 }
 
 namespace {
@@ -76,6 +84,9 @@ Badge s_main = { L"gt5p_shaderbusy", L"Compiling shaders", "shader-badge", 236, 
 Badge s_pre  = { L"gt5p_shaderpreload", L"Loading shaders", "preload-badge", 196, 30, -13, 2, 7,
                  RGB(24, 26, 30), RGB(70, 78, 92), RGB(168, 174, 186), RGB(150, 175, 215), 170, 400,
                  &s_preload_enabled };
+Badge s_boot = { L"gt5p_shaderprep", L"Preparing shaders", "prep-badge", 300, 38, -15, 2, 8,
+                 RGB(20, 23, 30), RGB(52, 120, 220), RGB(230, 233, 240), RGB(52, 140, 255), 235, 0,
+                 &s_enabled };
 
 BOOL CALLBACK find_game(HWND h, LPARAM)
 {
@@ -124,7 +135,10 @@ void paint(Badge& b, HDC dc)
     HGDIOBJ of = SelectObject(dc, b.hfont);
     SetTextColor(dc, b.text);
     std::wstring s = b.label;
-    if (b.burst > 1) s += L"  (" + std::to_wstring(b.burst) + L")";
+    if (&b == &s_boot) {
+        const LONG total = g_rsx_startup_prep_total, done = g_rsx_startup_prep_done;
+        if (total > 0) s += L"  " + std::to_wstring(done < total ? done : total) + L" / " + std::to_wstring(total);
+    } else if (b.burst > 1) s += L"  (" + std::to_wstring(b.burst) + L")";
     TextOutW(dc, b.h + 4, (b.h - (-b.font + 3)) / 2, s.c_str(), (int)s.size());
     SelectObject(dc, of);
 }
@@ -132,7 +146,8 @@ void paint(Badge& b, HDC dc)
 LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_PAINT) {
-        Badge& b = GetWindowLongPtrW(h, GWLP_USERDATA) == (LONG_PTR)&s_pre ? s_pre : s_main;
+        const LONG_PTR which = GetWindowLongPtrW(h, GWLP_USERDATA);
+        Badge& b = which == (LONG_PTR)&s_pre ? s_pre : which == (LONG_PTR)&s_boot ? s_boot : s_main;
         PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps);
         HDC mem = CreateCompatibleDC(dc);
         HBITMAP bm = CreateCompatibleBitmap(dc, b.w, b.h);
@@ -212,6 +227,7 @@ DWORD WINAPI badge_thread(LPVOID)
     HINSTANCE inst = GetModuleHandleW(NULL);
     create(s_main, inst);
     create(s_pre, inst);
+    create(s_boot, inst);
 
     s_main.last_total = s_main.burst_base = g_rsx_shader_demand_total;
     s_pre.last_total = s_pre.burst_base = g_rsx_shader_preload_total;
@@ -224,8 +240,11 @@ DWORD WINAPI badge_thread(LPVOID)
         const bool want_main = track(s_main, now, g_rsx_shader_busy, g_rsx_shader_demand_total, true);
         /* "Compiling shaders" wins when both would show. */
         const bool want_pre = track(s_pre, now, g_rsx_shader_preload_busy, g_rsx_shader_preload_total, !want_main);
-        update(s_main, want_main, now);
-        update(s_pre, want_pre, now);
+        /* Before start: the guest is held, nothing else shows meanwhile. */
+        const bool want_boot = s_enabled && g_rsx_startup_prep_total > 0;
+        update(s_boot, want_boot, now);
+        update(s_main, want_main && !want_boot, now);
+        update(s_pre, want_pre && !want_boot, now);
         Sleep(30);
     }
 }

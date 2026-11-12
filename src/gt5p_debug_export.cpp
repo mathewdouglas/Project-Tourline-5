@@ -237,14 +237,14 @@ std::string report(HWND game) {
             (mem.ullTotalPageFile - mem.ullAvailPageFile) >> 20, mem.ullTotalPageFile >> 20);
     const auto& s = gt5p_settings();
     fprintf(f, "Loaded settings: resolution=%d ultrawide=%d msaa=%d vsync=%d shader_cache=%d async=%d "
-        "sdl=%d keyboard=%d vblank=%d lane_cores=%d warmup=%d\nSettings file: %s\n",
+        "sdl=%d keyboard=%d vblank=%d lane_cores=%d warmup=%d warmup_before_start=%d\nSettings file: %s\n",
         s.resolution, s.ultrawide, s.msaa, s.vsync, s.shader_cache, s.shader_precompile,
-        s.sdl_controllers, s.keyboard, s.vblank_hz100, s.lane_cores, s.shader_warmup, gt5p_settings_path().c_str());
+        s.sdl_controllers, s.keyboard, s.vblank_hz100, s.lane_cores, s.shader_warmup, s.shader_warmup_startup, gt5p_settings_path().c_str());
     fprintf(f, "Button prompts: setting %d, in effect %d (1 PlayStation, 2 Xbox, 3 Nintendo, 4 keyboard); "
         "port 0 device family %d\n", s.button_prompts, gt5p_glyphs_effective(), (int)g_pad_device_family);
     /* Explicit allowlist: never dump the process environment, keys or game files. */
     static const char* names[] = {"GT5P_RESOLUTION", "RSX_MSAA", "RSX_SSAA", "RSX_PRESENT_SYNC",
-        "RSX_SHADER_COMPILER", "RSX_SHADER_CACHE", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_BACKGROUND", "GT5P_PRELOAD_INDICATOR", "RSX_SHADER_INDICATOR_LEGACY", "RSX_PSO_RECIPES", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "RSX_RACE_PREWARM_WAIT_MS",
+        "RSX_SHADER_COMPILER", "RSX_SHADER_CACHE", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_BACKGROUND", "RSX_SHADER_WARMUP_STARTUP", "RSX_SHADER_WARMUP_THREADS", "RSX_PSO_GPU_STAMP", "RSX_PSO_GPU_STAMP_PRELOAD", "GT5P_PRELOAD_INDICATOR", "RSX_SHADER_INDICATOR_LEGACY", "RSX_PSO_RECIPES", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "RSX_RACE_PREWARM_WAIT_MS",
         "RSX_FP_REG_SIZE", "RSX_VFETCH_LOOP", "RSX_FP_SAMPLE_SHARE", "RSX_FP_GAMMA_LAZY", "RSX_FP_MASK_ENCODE", "RSX_TEX_LRU", "PAD_PRESS_FORCE_FULL", "PS3_PPU_JOIN_WAIT_HOST",
         "PAD_CONTROLS_POLISH", "PAD_TRIGGER_DEADZONE", "PAD_TRIGGER_CURVE", "PAD_ADAPTIVE_TRIGGERS", "PAD_TRIGGER_RUMBLE", "PAD_SDL_RUMBLE", "PAD_CAPABILITY_INFO_FIX", "RSX_DXBC_BUNDLE", "RSX_DXBC_BUNDLE_IMPORT", "GT5P_PRIORITY_CLASS",
         "RSX_SHADER_LIBRARY", "RSX_SHADER_LIBRARY_LIMIT", "RSX_SHADER_LIBRARY_PROFILES", "RSX_SHADER_PROFILES",

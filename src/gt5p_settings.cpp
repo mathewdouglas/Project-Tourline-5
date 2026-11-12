@@ -41,7 +41,7 @@ const char* const kEnvNames[] = {
     "GT5P_RESOLUTION", "RSX_MSAA", "RSX_PRESENT_SYNC", "RSX_SHADER_CACHE", "GT5P_SHADER_INDICATOR", "GT5P_PRELOAD_INDICATOR",
     "PAD_TRIGGER_DEADZONE", "PAD_TRIGGER_CURVE", "PAD_ADAPTIVE_TRIGGERS", "PAD_TRIGGER_RUMBLE", "PAD_SDL_RUMBLE",
     "PAD_NO_SDL", "PAD_NO_KEYBOARD", "PS3_VERBOSE",
-    "GT5P_VBLANK_HZ", "SPURS_LANE_PIN", "SPURS_JL_SPU3", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "PAD_SKIP_MOVIE",
+    "GT5P_VBLANK_HZ", "SPURS_LANE_PIN", "SPURS_JL_SPU3", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_STARTUP", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "PAD_SKIP_MOVIE",
 };
 bool g_env_set[sizeof kEnvNames / sizeof kEnvNames[0]];
 
@@ -192,7 +192,7 @@ bool known_key(std::string_view section, std::string_view key)
         {"video", "resolution"},     {"video", "msaa"},           {"video", "aspect"},
         {"video", "window"}, {"video", "shader_compiler"},
         {"video", "vsync"},          {"video", "shader_cache"},
-        {"video", "shader_indicator"}, {"video", "preload_indicator"}, {"video", "shader_precompile"}, {"video", "shader_warmup"}, {"video", "pipeline_async"}, {"video", "race_preload"},
+        {"video", "shader_indicator"}, {"video", "preload_indicator"}, {"video", "shader_precompile"}, {"video", "shader_warmup"}, {"video", "shader_warmup_before_start"}, {"video", "pipeline_async"}, {"video", "race_preload"},
         {"input", "sdl_controllers"}, {"input", "keyboard"}, {"input", "button_prompts"},
         {"input", "trigger_deadzone"},
         {"input", "trigger_curve"},
@@ -274,6 +274,7 @@ void parse_into(const toml::table& tbl, Gt5pSettings& s)
     read_bool(tbl["video"]["shader_indicator"], "video.shader_indicator", s.shader_indicator);
     read_bool(tbl["video"]["preload_indicator"], "video.preload_indicator", s.preload_indicator);
     read_bool(tbl["video"]["shader_warmup"], "video.shader_warmup", s.shader_warmup);
+    read_bool(tbl["video"]["shader_warmup_before_start"], "video.shader_warmup_before_start", s.shader_warmup_startup);
     read_bool(tbl["video"]["pipeline_async"], "video.pipeline_async", s.pipeline_async);
     read_bool(tbl["video"]["race_preload"], "video.race_preload", s.race_preload);
     read_bool(tbl["video"]["shader_precompile"], "video.shader_precompile", s.shader_precompile);
@@ -332,6 +333,7 @@ void apply_env(const Gt5pSettings& s)
     if (!s.shader_indicator) set_default_env("GT5P_SHADER_INDICATOR", "0");
     if (s.preload_indicator) set_default_env("GT5P_PRELOAD_INDICATOR", "1");
     set_default_env("RSX_SHADER_WARMUP", s.shader_warmup ? "1" : "0");
+    set_default_env("RSX_SHADER_WARMUP_STARTUP", s.shader_warmup_startup ? "1" : "0");
     set_default_env("RSX_SHADER_ASYNC", s.shader_precompile ? "1" : "0");
     set_default_env("RSX_PSO_ASYNC", s.pipeline_async ? "1" : "0");
     set_default_env("RSX_RACE_PREWARM", s.race_preload ? "1" : "0");
@@ -379,6 +381,7 @@ void reflect_env(Gt5pSettings& s)
     if (const char* e = getenv("GT5P_SHADER_INDICATOR")) s.shader_indicator = e[0] != '0';
     if (const char* e = getenv("GT5P_PRELOAD_INDICATOR")) s.preload_indicator = e[0] == '1';
     if (const char* e = getenv("RSX_SHADER_WARMUP")) s.shader_warmup = e[0] == '1';
+    if (const char* e = getenv("RSX_SHADER_WARMUP_STARTUP")) s.shader_warmup_startup = e[0] == '1';
     if (const char* e = getenv("RSX_PSO_ASYNC")) s.pipeline_async = e[0] != '0';
     if (const char* e = getenv("RSX_RACE_PREWARM")) s.race_preload = e[0] != '0';
     if (const char* e = getenv("RSX_SHADER_ASYNC")) s.shader_precompile = e[0] == '1';
@@ -501,6 +504,11 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "# starts (on by default). New tracks/cars/effects may still compile later;\n"
          "# the first run learns records. Needs shader cache. [RSX_SHADER_WARMUP]\n"
          "shader_warmup = " << (s.shader_warmup ? "true" : "false") << "\n"
+         "# With shader_warmup on: prepare the learned sets before the game starts,\n"
+         "# on every CPU core but one, with a \"Preparing shaders\" progress badge,\n"
+         "# instead of in the background. Startup waits; races and menus then have\n"
+         "# everything learned ready. Off by default. [RSX_SHADER_WARMUP_STARTUP]\n"
+         "shader_warmup_before_start = " << (s.shader_warmup_startup ? "true" : "false") << "\n"
          "# Build unexpected driver pipelines in the background. [RSX_PSO_ASYNC]\n"
          "pipeline_async = " << (s.pipeline_async ? "true" : "false") << "\n"
          "# Prepare learned race pipelines during loading; needs background pipelines\n"

@@ -208,3 +208,20 @@ Disabling **Background pipeline creation** also selects the blocking path.
 The offline precompile-only command keeps its existing blocking completion
 semantics. Explicit offline library compilation is still separate from this
 normal-play startup preparation. No cache files are removed or invalidated.
+
+## Before start, and after a GPU driver update (GT5 Phase 44)
+
+**Preload known shaders > Before start** (`shader_warmup_before_start = true`,
+`RSX_SHADER_WARMUP_STARTUP=1`) prepares the learned menu set, then the learned
+race set, before the game starts, on every logical CPU but one
+(`RSX_SHADER_WARMUP_THREADS=<n>`, 1..32), with a "Preparing shaders N / M"
+badge. With a warm cache that took 0.4 s for 2838 pipelines on an RTX 4060.
+In background remains the default.
+
+`gpu-stamp.txt` in the shader cache folder records the GPU and its driver
+version. After a driver update the saved driver pipelines (`pso_*.bin`) and
+`race-pack-v1.bin` no longer serve, so files older than the change are rebuilt
+without being read, and the learned sets are prepared before start once.
+`RSX_PSO_GPU_STAMP=0` disables the stamp; `RSX_PSO_GPU_STAMP_PRELOAD=0` keeps
+the stamp but leaves the rebuild to the background pass. Nothing is deleted:
+each old file is replaced when its pipeline is rebuilt.
