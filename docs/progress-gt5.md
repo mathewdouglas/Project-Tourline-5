@@ -4,6 +4,59 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Building driver pipelines from the disc: measured, not worth it (2026-11-13)
+
+Follow-up to the section below. That one showed that compiled shaders alone
+do not shorten the wait, because the cost is driver pipeline creation. This
+section asks whether the disc predicts the *pipelines*. A pipeline is a
+vertex shader, a pixel shader and a render state, so the disc must supply
+the (vertex program, fragment program) pairs.
+
+**Render states are predictable.** In a cold High Speed Ring run
+(`pc-pairs`), 932 pipelines use 162 vertex shaders, 391 pixel shaders and
+90 render states (input layout included). Four states cover about 75% of
+the pipelines. Most pixel shaders are used in exactly two states that
+always appear together.
+
+**The disc stores pairs, but not the ones the race uses.**
+
+- SHDS has a second program table (header +0x18 count, +0x20 table, 0x28-byte
+  records). These are vertex programs: a header whose word at +0x10 is the
+  microcode offset (0x30), then microcode ending in the VP END bit.
+- Shader definitions (+0x16 count, +0x1C table, 0x0C each) name a
+  vertex-program index (+0x08) and a fragment-program index (+0x0A).
+- The executable and `GT.VOL` hold 16,848 tables, 5,012 vertex programs,
+  30,639 fragment structures and 88,596 defined pairs.
+
+Live pairs come from `RSX_FP_CATALOG` (diagnostic; it now also writes
+`vp_<hash>.bin` and `pairs-v1.txt`). They were compared with
+`scripts/diag/pair_coverage.py`:
+
+| Of 304 live (VP, FP) pairs | Covered | Pipelines to build (before states) |
+| --- | ---: | ---: |
+| Vertex programs on disc | 162 of 162 (100%) | |
+| Fragment programs on disc | 181 of 241 (75%) | |
+| Both programs on disc | 204 (67%) | |
+| Same SHDS table, any combination | 183 (60%) | 7.6 million |
+| Defined together by a shader definition | 73 (24%) | 88,596 |
+
+The engine combines vertex and fragment programs at run time, beyond what
+the definitions say. Reading the two definition fields the other way round
+gives 50, not more.
+
+Building the 88,596 defined pairs in the four common states would be
+about 350,000 driver pipelines. At about 17 KB a blob that is roughly 6 GB,
+and at the ~20 ms per creation seen in cold runs it is hours of building.
+It would cover at most about 18% of a first visit's pipelines (24% of pairs
+× 75% of states), which is at most about 3-4 s of the 19 s that pipeline
+creation adds (31.9 s cold against 13.1 s warm). The exact pixel-shader
+variant also depends on learned state profiles, so the real figure is
+lower. Not built.
+
+Unchanged: first visits learn their pipelines, and the race pack and
+Before start serve them from then on. The unpacked volume was deleted; the
+disc hashes (no program bytes) remain in ignored `scratch/pc-pairs/`.
+
 ## Offline disc shader pass for GT5: measured, not needed (2026-11-13)
 
 Question: does GT5 need Prologue's offline precompiler run over the whole disc

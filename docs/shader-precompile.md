@@ -16,7 +16,11 @@ Speed Ring route uses, but a route with every shader already compiled waited
 just as long as a cold one: the first-run cost is driver pipeline creation.
 See "Offline disc shader pass for GT5" in [progress-gt5.md](progress-gt5.md).
 GTToolsSharp 5.3.5 needs the .NET 10 runtime. Measure coverage of a run with
-`scripts/diag/fp_coverage.py`.
+`scripts/diag/fp_coverage.py`. Building driver pipelines from the disc's
+shader definitions was measured too: they name only 24% of a race's live
+(vertex, fragment) pairs, so it was not built
+(`scripts/diag/pair_coverage.py`; see "Building driver pipelines from the
+disc" in the progress log).
 
 ## Full asset pass
 
@@ -131,7 +135,8 @@ does not run during normal play unless explicitly requested.
 to the CLI controls. `RSX_SHADER_PROFILES=0` disables profile learning and
 `RSX_SHADER_ERRORS=0` silences new bounded async compiler diagnostics.
 `RSX_FP_CATALOG=<existing parent/dir>` is an optional raw-program diagnostic;
-it is not needed for normal preparation.
+it is not needed for normal preparation. It also writes each vertex program
+(`vp_<hash>.bin`) and the pairs used (`pairs-v1.txt`).
 
 Volume textures (Phase 96): learned profiles also record volume-unit bindings
 in the upper half of the existing `ghi` field. Offline warmup uses those
