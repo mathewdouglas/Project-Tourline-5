@@ -360,6 +360,9 @@ if(WIN32)
         file(READ "${CMAKE_SOURCE_DIR}/config/pt5-player.json" PT5_PLAYER)
         string(JSON PT5_ELF_SHA256 GET "${PT5_PLAYER}" elf_sha256)
         string(JSON PT5_ELF_BYTES GET "${PT5_PLAYER}" elf_bytes)
+        # Where the launcher's crash report opens a new issue (launcher/crash_report.h).
+        set(PT5_ISSUES_URL "https://github.com/mathewdouglas/Project-Tourline-5/issues/new"
+            CACHE STRING "New-issue page the crash report opens")
         configure_file(launcher/pt5_launcher_config.h.in pt5_launcher_config.h @ONLY)
         configure_file(launcher/launcher.rc.in pt5_launcher.rc @ONLY)
         set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/pt5_launcher.rc" PROPERTIES
