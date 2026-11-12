@@ -10,6 +10,14 @@ Keep the shader cache enabled. Close the game before compiling. All extracted
 programs, bytecode, source indexes and logs remain local and must not be
 committed or distributed with the port.
 
+**GT5 (2026-11-13): not recommended.** The full pass works on GT5's `GT.VOL`
+(48,946 distinct programs) and covers 70% of the fragment programs a High
+Speed Ring route uses, but a route with every shader already compiled waited
+just as long as a cold one: the first-run cost is driver pipeline creation.
+See "Offline disc shader pass for GT5" in [progress-gt5.md](progress-gt5.md).
+GTToolsSharp 5.3.5 needs the .NET 10 runtime. Measure coverage of a run with
+`scripts/diag/fp_coverage.py`.
+
 ## Full asset pass
 
 Use [GTToolsSharp](https://github.com/Nenkai/GTToolsSharp/releases) to unpack

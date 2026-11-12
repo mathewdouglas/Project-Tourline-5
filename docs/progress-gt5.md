@@ -4,6 +4,68 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Offline disc shader pass for GT5: measured, not needed (2026-11-13)
+
+Question: does GT5 need Prologue's offline precompiler run over the whole disc
+(`scripts/precompile_shaders.py` with its asset enumeration), or Prologue's
+later pipeline templates (Prologue Phases 140-197)? Measured on the High Speed
+Ring race route (`gt5boot.ps1 -Route race`, DXC, 1080p defaults).
+
+**Enumeration works on GT5.** GTToolsSharp 5.3.5 (external, needs the .NET 10
+runtime; the portable runtime zip with `DOTNET_ROOT` is enough) unpacks the
+12 GB `GT.VOL` (41,036 files, 25 GB, about 4 minutes) and the 1.04 installed
+`PDIPFS` (19,026 files, 17 GB). The extractor's SHDS reader works unchanged:
+
+| Source | Records | Distinct payloads |
+| --- | ---: | ---: |
+| Executable (`input/EMAIN.ELF`) | 212 | 203 |
+| `GT.VOL` | 270,038 | 48,946 |
+| Installed 1.04 data | 159,169 | 43,696 |
+| All, by structure (constants ignored) | | 30,658 |
+
+That is about six times Prologue's 8,142 payloads.
+
+**Coverage of what the game actually used.** A cold-cache route
+(`RSX_SHADER_CACHE=<empty>`, `RSX_FP_CATALOG`) used 198 distinct fragment
+programs. `scripts/diag/fp_coverage.py` matches them by the renderer's
+structural identity:
+
+| Catalogue | Route programs found |
+| --- | ---: |
+| Executable only | 25 / 198 (12.6%) |
+| Executable + `GT.VOL` | 138 / 198 (69.7%) |
+| + installed 1.04 data | 138 / 198 (no gain) |
+
+The other 60 are built or modified at run time, as in Prologue (55 of 58
+there).
+
+**What the precompiler could save at best.** The cold route compiled 946
+shaders (689 pixel, 257 vertex) and created 834 driver pipelines. The offline
+pass prepares fragment (pixel) shaders only. Its upper bound was measured
+directly: the same route with every shader of the cold run already compiled,
+but no pipeline files or recipes.
+
+| Run | "Compiling shaders" badge, total | Race start after menu |
+| --- | ---: | ---: |
+| Cold, nothing cached | 31.9 s (30 showings) | 61.7 s |
+| Every shader compiled, no pipelines | 32.0 s (26) | 58.5 s |
+| Already played: shaders, pipelines, recipes | 13.1 s (15) | 61.5 s |
+
+Even perfect shader coverage, vertex shaders included, leaves the badge time
+unchanged: first-run waiting is driver pipeline creation (and learning the
+recipes), not shader compilation. NVIDIA's own driver cache was warm for the
+second and third runs, so a real first run is, if anything, more
+pipeline-bound. Single runs; AI and car choice vary between them.
+
+**Conclusion.** A disc-wide fragment pass is not worth adding to GT5: it covers
+70% of programs but would not shorten the measured wait. Prologue's pipeline
+templates aim at the real cost (driver pipelines before the first draw), but
+Prologue's own record after ~60 phases still shows no consistent stutter
+reduction (its `docs/shader-precompile.md`, item 1); the learned recipes, race
+pack and Phase 44's before-start pass already cover replayed content here.
+Kept: `scripts/diag/fp_coverage.py`. The unpacked trees were deleted; the
+catalogues (game-derived) stay in ignored `scratch/`.
+
 ## Phase 44 - Shader preparation before start and a GPU driver stamp (2026-11-12)
 
 Two ideas taken from the Resistance: Fall of Man port's renderer (MIT; read
