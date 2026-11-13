@@ -92,12 +92,43 @@ decides the shader. Two cold runs per side, interleaved:
 - "Off 1" rebuilt finished keys 15,429 times, so in some runs a key falls
   through every frame.
 
-**Next.**
-- What remains is the first build of each new key's HLSL: about 0.6-0.8 s
-  a cold run, in bursts of up to about 300 ms per 5 s while the race
-  loads. Moving that decompile into the compile workers (the draw stays
-  pending meanwhile) is the next step.
-- Offscreen waits still total about 1 s in renderer long frames.
+**The rest of the first build was a file write (`RSX_SHADER_PROFILES_ASYNC`,
+default on; `=0` old).** `RSX_PSO_TIMING` now splits the fragment HLSL
+time. In one cold run with 898 full builds the split was:
+
+| Part of the build | Time |
+| --- | ---: |
+| Decompile | 88 ms |
+| Text rewrites | 61 ms |
+| Sampler map | 2 ms |
+| Before the decompile | 464 ms |
+
+The time before the decompile was `fp_profile_record`. For each new
+source profile (the offline preparation's input), it created directories,
+wrote a temporary file and renamed it, all on the frame thread. Its
+"seen" list is per run, so warm runs paid this too. A background thread
+writes them now; all 256 profile files are still written.
+
+Finished pending vertex programs also take their bytecode from memory now
+(`RSX_VP_MEMO`, default on; `=0` old), and their pending table holds 1024
+instead of 256 entries. Vertex decompiles turned out cheap: 3-20 ms in a
+cold run, not the 1.3 ms each that an old comment says.
+
+Two cold runs per side, interleaved; "off" sets both switches to 0:
+
+| Run | Frame-thread fragment HLSL | Renderer long frames | Excess | Worst batch | Offscreen wait in them |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| on 1 | 0.18 s | 11 | 1.24 s | 298 ms | 0.77 s |
+| off 1 | 0.61 s | 15 | 3.43 s | 682 ms | 2.71 s |
+| on 2 | 0.19 s | 14 | 1.59 s | 306 ms | 1.22 s |
+| off 2 | 0.54 s | 12 | 1.58 s | 392 ms | 1.00 s |
+
+Moving the decompile itself to the workers would save at most about
+150 ms a cold run, so it is not worth the refactor.
+
+**Next.** Offscreen pipeline waits are now most of the remaining
+renderer stutter. Those targets are small (labels, probes, reductions), so
+the interpreter is cheap there even at its present per-pixel cost.
 - The interpreter speed-ups come from the research note
   (`scratch/ubershader-research.md`, untracked). In order:
   - clear only the registers a program uses, and add size-class variants;
