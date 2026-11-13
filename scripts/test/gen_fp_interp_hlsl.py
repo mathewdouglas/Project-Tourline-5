@@ -481,7 +481,11 @@ float4 main(RSXInterpIn input) : SV_TARGET {
         {
             uint spack[3] = { s0, s1, s2 };
             float4 got[3];
+            // Bit 30 of words 2/3: the opcode does not read source 1/2 (set by the encoder).
+            uint skipsrc = ((iw.z >> 30) & 1u) << 1 | ((iw.w >> 30) & 1u) << 2;
             [unroll] for (int si = 0; si < 3; si++) {
+                got[si] = 0;
+                [branch] if (((skipsrc >> si) & 1u) != 0u) continue;
                 uint pk = spack[si];
                 uint ty = pk & 3u;
                 uint ix = (pk >> 2) & 63u;
