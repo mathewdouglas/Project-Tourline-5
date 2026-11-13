@@ -47,6 +47,9 @@ static __declspec(thread) int t_pso_urgent;
 static int pso_wait_priority_on(void){return 1;}
 DWORD_PTR ppu_sched_mask(void){return 0;}   /* no PPU CPU set: helpers keep the default placement */
 static void rsx_bg_prio_sync(void){}   /* race-scope builder priority: no scheduling change in the harness */
+static volatile int g_tl_on;   /* PS3_TIMELINE off in the harness */
+static unsigned long long ps3_tl_us(void){return 0;}
+static void ps3_tl_rec(char k,unsigned a,unsigned b){(void)k;(void)a;(void)b;}
 volatile long g_spurs_race_scope;   /* the SPURS lane scope the race notification sets (Phase 46) */
 static int pso_warm_dir(char* p,size_t n){snprintf(p,n,"%s",folder);return 1;}
 static int pso_warm_get(u64 hash,ID3D12PipelineState** out){

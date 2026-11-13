@@ -4,6 +4,65 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## The worst frames profiled: the render thread runs at Windows IDLE (2026-11-14)
+
+**Method.** One cold race on an unraced track (`-Track 3`, empty cache,
+21:9, 2x MSAA) with three records on one clock:
+
+- `PS3_TIMELINE=45,90`: guest syscalls and HLE waits, SPU lanes, FIFO
+  walks, presents and, new, renderer builder jobs (`J`: 1 shader compile,
+  2 pso-worker, 3 helper). The dump's first line `#qpc_zero_ms` places it
+  on the QueryPerformanceCounter clock.
+- `RSX_HITCH_LOG`: replay batches and GPU time.
+- A WPR CPU profile (`wpr -start CPU -filemode`, elevated): every
+  context switch and ready-thread event, dumped with xperf for the
+  kernel thread provider only (`-provider {3d6fa8d1-fe05-11d0-9dda-00c04fd7ba7c}`).
+
+`scripts/diag/worst_frames.py` breaks the worst render-thread frames down
+from the timeline. `scripts/diag/etw_frames.py` aligns ETW with the timeline
+by matching the render thread's long waits (104 of 143 agreed) and splits
+each frame into running, ready and waiting time. WPR's stack collection cost
+about a quarter of the frame rate (34.5 FPS FrameTest), so absolute numbers
+are worse than an untraced run, but every thread is seen.
+
+**Result.** In every one of the 8 worst race frames (182-397 ms) the
+title's render thread (`gFKsE`, host tid 4632) was:
+
+| Frame | Running | Ready (runnable, no CPU) | Waiting |
+| ---: | ---: | ---: | ---: |
+| 397 ms | 15.3 ms | 360.1 ms | 21.7 ms |
+| 296 ms | 14.6 ms | 281.7 ms | 0 |
+| 231 ms | 18.0 ms | 213.0 ms | 0 |
+| 198 ms | 16.3 ms | 181.5 ms | 0 |
+| 188 ms | 16.0 ms | 172.3 ms | 0 |
+| 187 ms | 15.5 ms | 171.1 ms | 0.1 ms |
+| 186 ms | 17.4 ms | 147.7 ms | 20.8 ms |
+| 182 ms | 14.9 ms | 167.3 ms | 0 |
+
+Its own work is a normal frame; the rest is waiting for a CPU. The
+timeline's long `cellSpursReadyCountStore` calls (35-177 ms) and its
+unaccounted "rest" are the same starvation: a lock-line waiter that sleeps
+must be scheduled again.
+
+**Why.** The render thread is created at PS3 priority 2240, like many of
+GT5's core threads (2232-2624). `PS3_PPU_PRIO_SCHED` maps every guest
+priority above 1001 to `THREAD_PRIORITY_IDLE`, Windows priority 1: the
+trace shows it running at 1 in 92% of its switch-ins. It is confined to
+CPUs 2-5, where everything outranks it: our shader-compile workers (7),
+Chrome (8-11), Defender and Windows Search (8-9), our SPU job threads
+(13-14), SignalRGB (13-15). On a PS3 only the title's threads share the PPU,
+so a low guest priority still runs whenever higher ones wait; on a PC IDLE
+means "when nothing else on the machine wants the CPU". While the render
+thread was ready, its CPUs ran our compile workers (112-266 ms in the
+compile-burst frames) and, in every frame, other programs (Chrome processes
+up to 105 ms each, SearchIndexer, MsMpEng, SignalRGB).
+
+This explains why idle-priority builders helped only a little (they tie the
+render thread instead of beating it) and why about half of the stalls had
+no renderer work pending (other programs). Next: keep the guest's relative
+order but stop mapping its low band to IDLE. That touches the scheduling
+behind Phases 22, 42 and 102, so it needs its own A/B.
+
 ## 0.1.5: builders at idle priority during races (2026-11-14)
 
 **Player result after the parallel builders** (debug export, process 12008,

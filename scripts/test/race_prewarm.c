@@ -36,6 +36,9 @@ static __declspec(thread) int t_pso_urgent;
 static int pso_wait_priority_on(void){return 1;}
 DWORD_PTR ppu_sched_mask(void){return 0;}   /* no PPU CPU set: helpers keep the default placement */
 static void rsx_bg_prio_sync(void){}   /* race-scope builder priority: no scheduling change in the harness */
+static volatile int g_tl_on;   /* PS3_TIMELINE off in the harness */
+static unsigned long long ps3_tl_us(void){return 0;}
+static void ps3_tl_rec(char k,unsigned a,unsigned b){(void)k;(void)a;(void)b;}
 static __declspec(thread) int t_frame_thread;
 static volatile LONG64 s_hitch_rt_driver_us, s_hitch_rt_driver_calls;
 static u64 interp_rs_hash(const void* rs){(void)rs;return 0;}
