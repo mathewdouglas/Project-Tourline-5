@@ -33,6 +33,7 @@ struct Gt5pSettings {
     bool shader_warmup_startup = false; /* ...or before the game starts, on all cores (Phase 44) */
     bool pipeline_async = true;    /* build driver pipelines on one background worker */
     bool race_preload = true;      /* prepare learned race pipelines during loading */
+    bool shader_interp = true;     /* interpreter shaders draw while a shader compiles (RSX_SHADER_INTERP) */
     bool shader_precompile = true;  /* compile new shaders on background threads, all at once */
 
     /* [input] */

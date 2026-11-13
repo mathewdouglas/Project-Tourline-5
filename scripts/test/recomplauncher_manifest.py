@@ -52,6 +52,7 @@ shader_warmup = true
 shader_warmup_before_start = false
 pipeline_async = true
 race_preload = true
+shader_interp = true
 
 [input]
 sdl_controllers = true

@@ -169,6 +169,13 @@ const std::vector<Item>& items()
           "RSX_RACE_PREWARM", kOnOff,
           [](const Gt5pSettings& s) { return s.race_preload ? 1 : 0; },
           [](Gt5pSettings& s, int v) { s.race_preload = v != 0; }, nullptr },
+        { L"SHADERS", L"Draw while compiling",
+          L"While a shader compiles, draw with a general interpreter shader instead of leaving "
+          L"the detail out or stopping the picture. Fewer missing details and hitches on first "
+          L"visits; the stand-in costs some GPU time. Takes effect after a restart.",
+          "RSX_SHADER_INTERP", kOnOff,
+          [](const Gt5pSettings& s) { return s.shader_interp ? 1 : 0; },
+          [](Gt5pSettings& s, int v) { s.shader_interp = v != 0; }, nullptr },
         { L"SHADERS", L"Shader compiler",
           L"DXC builds guest shaders for modern graphics cards. FXC restores the older compiler. "
           L"Each keeps its own cache; switching requires a restart and new shaders must be prepared.",

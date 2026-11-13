@@ -41,7 +41,7 @@ const char* const kEnvNames[] = {
     "GT5P_RESOLUTION", "RSX_MSAA", "RSX_PRESENT_SYNC", "RSX_SHADER_CACHE", "GT5P_SHADER_INDICATOR", "GT5P_PRELOAD_INDICATOR",
     "PAD_TRIGGER_DEADZONE", "PAD_TRIGGER_CURVE", "PAD_ADAPTIVE_TRIGGERS", "PAD_TRIGGER_RUMBLE", "PAD_SDL_RUMBLE",
     "PAD_NO_SDL", "PAD_NO_KEYBOARD", "PS3_VERBOSE",
-    "GT5P_VBLANK_HZ", "SPURS_LANE_PIN", "SPURS_JL_SPU3", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_STARTUP", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "PAD_SKIP_MOVIE",
+    "GT5P_VBLANK_HZ", "SPURS_LANE_PIN", "SPURS_JL_SPU3", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_STARTUP", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "PAD_SKIP_MOVIE", "RSX_SHADER_INTERP",
 };
 bool g_env_set[sizeof kEnvNames / sizeof kEnvNames[0]];
 
@@ -192,7 +192,7 @@ bool known_key(std::string_view section, std::string_view key)
         {"video", "resolution"},     {"video", "msaa"},           {"video", "aspect"},
         {"video", "window"}, {"video", "shader_compiler"},
         {"video", "vsync"},          {"video", "shader_cache"},
-        {"video", "shader_indicator"}, {"video", "preload_indicator"}, {"video", "shader_precompile"}, {"video", "shader_warmup"}, {"video", "shader_warmup_before_start"}, {"video", "pipeline_async"}, {"video", "race_preload"},
+        {"video", "shader_indicator"}, {"video", "preload_indicator"}, {"video", "shader_precompile"}, {"video", "shader_warmup"}, {"video", "shader_warmup_before_start"}, {"video", "pipeline_async"}, {"video", "race_preload"}, {"video", "shader_interp"},
         {"input", "sdl_controllers"}, {"input", "keyboard"}, {"input", "button_prompts"},
         {"input", "trigger_deadzone"},
         {"input", "trigger_curve"},
@@ -277,6 +277,7 @@ void parse_into(const toml::table& tbl, Gt5pSettings& s)
     read_bool(tbl["video"]["shader_warmup_before_start"], "video.shader_warmup_before_start", s.shader_warmup_startup);
     read_bool(tbl["video"]["pipeline_async"], "video.pipeline_async", s.pipeline_async);
     read_bool(tbl["video"]["race_preload"], "video.race_preload", s.race_preload);
+    read_bool(tbl["video"]["shader_interp"], "video.shader_interp", s.shader_interp);
     read_bool(tbl["video"]["shader_precompile"], "video.shader_precompile", s.shader_precompile);
     read_bool(tbl["input"]["sdl_controllers"], "input.sdl_controllers", s.sdl_controllers);
     read_bool(tbl["input"]["keyboard"], "input.keyboard", s.keyboard);
@@ -337,6 +338,9 @@ void apply_env(const Gt5pSettings& s)
     set_default_env("RSX_SHADER_ASYNC", s.shader_precompile ? "1" : "0");
     set_default_env("RSX_PSO_ASYNC", s.pipeline_async ? "1" : "0");
     set_default_env("RSX_RACE_PREWARM", s.race_preload ? "1" : "0");
+    /* The vertex interpreter follows the fragment one unless set on its own. */
+    set_default_env("RSX_SHADER_INTERP", s.shader_interp ? "1" : "0");
+    set_default_env("RSX_SHADER_INTERP_VP", s.shader_interp ? "1" : "0");
     /* The pad switches test for presence, so only the "off" case sets one. */
     if (!s.sdl_controllers) set_default_env("PAD_NO_SDL", "1");
     if (!s.keyboard)        set_default_env("PAD_NO_KEYBOARD", "1");
@@ -384,6 +388,7 @@ void reflect_env(Gt5pSettings& s)
     if (const char* e = getenv("RSX_SHADER_WARMUP_STARTUP")) s.shader_warmup_startup = e[0] == '1';
     if (const char* e = getenv("RSX_PSO_ASYNC")) s.pipeline_async = e[0] != '0';
     if (const char* e = getenv("RSX_RACE_PREWARM")) s.race_preload = e[0] != '0';
+    if (const char* e = getenv("RSX_SHADER_INTERP")) s.shader_interp = e[0] && e[0] != '0';
     if (const char* e = getenv("RSX_SHADER_ASYNC")) s.shader_precompile = e[0] == '1';
     s.sdl_controllers = getenv("PAD_NO_SDL") == nullptr;
     s.keyboard        = getenv("PAD_NO_KEYBOARD") == nullptr;
@@ -514,6 +519,10 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "# Prepare learned race pipelines during loading; needs background pipelines\n"
          "# and shader cache. First visits still learn new states. [RSX_RACE_PREWARM]\n"
          "race_preload = " << (s.race_preload ? "true" : "false") << "\n"
+         "# While a shader compiles, draw with a general interpreter shader instead of\n"
+         "# leaving the draw out or stopping the picture: fewer missing details and\n"
+         "# hitches on first visits, at some GPU cost meanwhile. [RSX_SHADER_INTERP]\n"
+         "shader_interp = " << (s.shader_interp ? "true" : "false") << "\n"
          "\n"
          "[input]\n"
          "# PlayStation, Switch and other controllers through SDL2.dll beside the exe.\n"

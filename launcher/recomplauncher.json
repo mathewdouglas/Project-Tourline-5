@@ -293,6 +293,30 @@
       }
     },
     {
+      "id": "shader_interp",
+      "label": "Draw While Compiling",
+      "group": "Video",
+      "advanced": true,
+      "help": "While a shader compiles, a general interpreter shader draws in its place instead of the detail being left out. Fewer missing details and hitches on first visits. Restart to apply.",
+      "choices": [
+        {
+          "label": "On",
+          "set": {
+            "video/shader_interp": "true"
+          }
+        },
+        {
+          "label": "Off",
+          "set": {
+            "video/shader_interp": "false"
+          }
+        }
+      ],
+      "defaults": {
+        "video/shader_interp": "true"
+      }
+    },
+    {
       "id": "shader_compiler",
       "label": "Shader Compiler",
       "group": "Video",
