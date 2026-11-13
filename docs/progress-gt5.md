@@ -4,6 +4,72 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Cold frames: shader handoff, offscreen waits served first (2026-11-13)
+
+Branch `feat/shader-interp`, after merging `perf/prologue-texture-pso`
+(fast pipeline lookup, placed textures, staging ring, texture LRU).
+Measured with High Speed Ring FrameTest races at 1080p, each with a new
+empty `RSX_SHADER_CACHE`. The `RSX_HITCH_LOG` traces are read with
+`scripts/diag/frame_hitches.py`. There are two runs per side, interleaved
+on/off. Run-to-run spread is large, so read pairs, not single runs.
+
+**Correction to the section below.** Its `cache_us` and `driver_us` are
+totals over all threads, including preload and race-prewarm helpers, so
+they did not show render-thread time. The trace now has frame-thread-only
+columns: `rt_cache_us`, `rt_cache_reads`, `rt_driver_us` and
+`rt_driver_calls`.
+- `rt_driver_us` is 0 in every run: the frame thread makes no driver
+  pipeline calls. There is nothing to move there.
+
+**Shader handoff (`RSX_SHADER_HANDOFF`, default on; `=0` old).** Compile
+workers now put the finished bytecode in the memory cache before marking
+it done. They used to write only the `.dxbc` file, which the frame thread
+then read back (and appended to the bundle).
+- Frame-thread shader reads went from 361/407 reads (0.40/0.37 s) to 0/2.
+- Stutter did not change measurably: excess over 50 ms was 4.64/4.09 s on
+  against 4.30/4.11 s off.
+
+**Offscreen waits served first (`RSX_PSO_WAIT_PRIORITY`, default on; `=0`
+old).** The pipeline worker serves the lowest `serial` first. A pending
+job's serial was renewed on every lookup, so the GT5 offscreen wait loop
+(`RSX_PSO_WAIT_OFFSCREEN_MS`), which looks every 1 ms, kept sending the
+job the frame was blocked on to the back of the queue. Now:
+- pending jobs keep their place;
+- while the frame thread waits, that draw's shader compile and pipeline
+  job go to the front of their queues.
+
+The new trace columns `offwait_us` and `offwaits` count every wait. The
+`[PSO] ... waited` log line stops after 16 waits.
+
+| Run | Offscreen wait total | Long frames from the renderer (batch ≥ 50 ms) | Worst renderer batch |
+| --- | ---: | ---: | ---: |
+| on 1 | 0.15 s (7 waits) | 29, excess 6.5 s | 256 ms |
+| on 2 | 0.94 s (62) | 12, excess 1.7 s | 361 ms |
+| off 1 | 4.74 s (123) | 20, excess 5.9 s | 722 ms |
+| off 2 | 1.99 s (77) | 17, excess 2.5 s | 524 ms |
+
+- Offscreen waiting falls 2-30 fold, and the worst renderer frame falls
+  from 524-722 ms to 256-361 ms.
+- Total excess is mixed. Run "on 1" had an unusual stretch with 270 shaders
+  queued in one frame, and its long frames there are mostly `pre_ms` and
+  `pso_ms`.
+- Frames whose replay batch was short but whose interval was long, up to
+  1.35 s and seen both on and off, are loading-time gaps outside the
+  renderer. They are not counted above.
+
+**Next.**
+- In the cold long frames that remain, `pre_ms` and `pso_ms` lead (up to
+  about 110 ms each). That is the frame thread generating HLSL text and
+  pipeline keys for new programs. Generating the text in the compile worker
+  instead is the next measured step.
+- The interpreter speed-ups come from the research note
+  (`scratch/ubershader-research.md`, untracked). In order:
+  - clear only the registers a program uses, and add size-class variants;
+  - shade once per pixel, not per sample;
+  - index samplers instead of switching over them;
+  - precompile the interpreter pipelines at startup;
+  - profile first in Nsight Graphics.
+
 ## Shader interpreter ported; what a cold frame actually waits on (2026-11-13)
 
 Goal: make shader compilation and pipeline creation stop causing stutter,
