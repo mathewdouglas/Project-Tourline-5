@@ -17,6 +17,11 @@ def texture_block():
     # static samplers: a sampler array wants a descriptor table, and the
     # engine root signature binds s0-s15 as static samplers.
     lines = [
+        "// RSX_INTERP_SHORT (default 1; RSX_SHADER_INTERP_SHORT=0 off): plain samples go through the biased",
+        "// sample site with bias 0, identity swizzles and unmodified operands skip that work.",
+        "#ifndef RSX_INTERP_SHORT",
+        "#define RSX_INTERP_SHORT 1",
+        "#endif",
         "Texture2D rsx_i2d[16] : register(t0);",
         "TextureCube rsx_icu[16] : register(t32);",
         "Texture3D rsx_i3d[16] : register(t48);",
@@ -31,8 +36,12 @@ def texture_block():
         lines.append("    switch (samp) {")
         for s in range(16):
             lines.append(f"    case {s}u:")
+            lines.append("#if RSX_INTERP_SHORT")
+            lines.append(f"        if (kind != 2u) return {tex}[unit].SampleBias(rsx_is{s}, uv, kind == 1u ? lod : 0.0);")
+            lines.append("#else")
             lines.append(f"        if (kind == 0u) return {tex}[unit].Sample(rsx_is{s}, uv);")
             lines.append(f"        if (kind == 1u) return {tex}[unit].SampleBias(rsx_is{s}, uv, lod);")
+            lines.append("#endif")
             lines.append(f"        return {tex}[unit].SampleLevel(rsx_is{s}, uv, lod);")
         lines.append("    default: break; }")
         lines.append("    return (float4)0;")
@@ -318,7 +327,21 @@ float4 rsx_i_nan0(float4 v) {
 #endif
 #define RSX_INTERP_REGM ((uint)RSX_INTERP_REGS - 1u)
 
-float4 rsx_i_export(uint half, uint target, float4 r[RSX_INTERP_REGS], float4 h[RSX_INTERP_REGS]) {
+// RSX_INTERP_LEGACY (RSX_SHADER_INTERP_LEGACY=1): separate full/half register arrays, the texture
+// coordinates rebuilt into an array every step, seven control-stack arrays. Otherwise one register file
+// indexed (register * 2 + half), coordinates gathered once, and a two-array control stack.
+#ifndef RSX_INTERP_LEGACY
+#define RSX_INTERP_LEGACY 0
+#endif
+#if RSX_INTERP_LEGACY
+#define RSX_IR(s, i) ((s) != 0u ? h[i] : r[i])
+#define RSX_IW(s, i, val) { if ((s) != 0u) h[i] = (val); else r[i] = (val); }
+#else
+#define RSX_IR(s, i) rf[(i) * 2u + (s)]
+#define RSX_IW(s, i, val) { rf[(i) * 2u + (s)] = (val); }
+#endif
+
+uint rsx_i_expidx(uint half, uint target) {
     uint idx = 0;
     if (half != 0u) {
         if (target == 1u) idx = 4u;
@@ -329,8 +352,7 @@ float4 rsx_i_export(uint half, uint target, float4 r[RSX_INTERP_REGS], float4 h[
         else if (target == 2u) idx = 3u;
         else if (target == 3u) idx = 4u;
     }
-    idx = min(idx, RSX_INTERP_REGM);
-    return half != 0u ? h[idx] : r[idx];
+    return min(idx, RSX_INTERP_REGM);
 }
 
 #if RSX_INTERP_MRT
@@ -350,14 +372,22 @@ RSXInterpOut main(RSXInterpIn input) {
 #else
 float4 main(RSXInterpIn input) : SV_TARGET {
 #endif
+#if RSX_INTERP_LEGACY
     float4 r[RSX_INTERP_REGS];
     float4 h[RSX_INTERP_REGS];
+#else
+    float4 rf[RSX_INTERP_REGS * 2];
+#endif
     float4 cc0 = 0, cc1 = 0;
     uint hdr = rsx_ip_hdr;
     // Header word 11: how many registers the program can read (0 = all 48).
     uint nregs = rsx_iprog.Load(hdr + 44u);
     if (nregs == 0u || nregs > (uint)RSX_INTERP_REGS) nregs = (uint)RSX_INTERP_REGS;
+#if RSX_INTERP_LEGACY
     [loop] for (uint zi = 0u; zi < nregs; zi++) { r[zi] = 0; h[zi] = 0; }
+#else
+    [loop] for (uint zi = 0u; zi < nregs * 2u; zi++) rf[zi] = 0;
+#endif
     uint instr_off = rsx_iprog.Load(hdr + 0u);
     uint instr_count = rsx_iprog.Load(hdr + 4u);
     uint flags = rsx_iprog.Load(hdr + 8u);
@@ -375,21 +405,52 @@ float4 main(RSXInterpIn input) : SV_TARGET {
     if ((flags & 64u) != 0u)
         wpos *= float4(rsx_fogstate.w > 0.0 ? rsx_fogstate.w : 1.0,
                        rsx_alphatest.w > 0.0 ? rsx_alphatest.w : 1.0, 1, 1);
+#if RSX_INTERP_LEGACY
     uint stk_else[8], stk_end[8], stk_kind[8], stk_i[8], stk_step[8], stk_endn[8], stk_body[8];
+#define SK_ELSE(i) stk_else[i]
+#define SK_END(i) stk_end[i]
+#define SK_KIND(i) stk_kind[i]
+#define SK_BODY(i) stk_body[i]
+#define SK_I(i) stk_i[i]
+#define SK_STEP(i) stk_step[i]
+#define SK_ENDN(i) stk_endn[i]
+#else
+    uint4 ska[8], skb[8];   // (else, end, kind, body), (counter, step, end count, -)
+#define SK_ELSE(i) ska[i].x
+#define SK_END(i) ska[i].y
+#define SK_KIND(i) ska[i].z
+#define SK_BODY(i) ska[i].w
+#define SK_I(i) skb[i].x
+#define SK_STEP(i) skb[i].y
+#define SK_ENDN(i) skb[i].z
+#endif
     uint sp = 0, pc = 0, steps = 0, killed = 0;
+#if !RSX_INTERP_LEGACY
+#if RSX_INTERP_FULLIN
+    float4 tc8v = input.tc8;
+    float4 tc9v = input.tc9;
+    float4 face = input.front ? (float4)1 : (float4)(-1);
+#else
+    float4 tc8v = 0;
+    float4 tc9v = 0;
+    float4 face = 0;
+#endif
+    float4 tc[10] = { input.tc0, input.tc1, input.tc2, input.tc3, input.tc4,
+                      input.tc5, input.tc6, input.tc7, tc8v, tc9v };
+#endif
     [loop]
     while (pc < instr_count && steps < RSX_FP_INTERP_STEPS) {
         steps++;
         [loop]
         for (int g = 0; g < 16; g++) {
-            if (sp > 0u && stk_kind[sp - 1u] == 0u && stk_else[sp - 1u] == pc) {
-                pc = stk_end[sp - 1u];
+            if (sp > 0u && SK_KIND(sp - 1u) == 0u && SK_ELSE(sp - 1u) == pc) {
+                pc = SK_END(sp - 1u);
                 continue;
             }
-            if (sp > 0u && stk_end[sp - 1u] == pc) {
-                if (stk_kind[sp - 1u] == 1u) {
-                    uint ni = stk_i[sp - 1u] + stk_step[sp - 1u];
-                    if (ni < stk_endn[sp - 1u]) { stk_i[sp - 1u] = ni; pc = stk_body[sp - 1u]; continue; }
+            if (sp > 0u && SK_END(sp - 1u) == pc) {
+                if (SK_KIND(sp - 1u) == 1u) {
+                    uint ni = SK_I(sp - 1u) + SK_STEP(sp - 1u);
+                    if (ni < SK_ENDN(sp - 1u)) { SK_I(sp - 1u) = ni; pc = SK_BODY(sp - 1u); continue; }
                 }
                 sp--;
                 continue;
@@ -425,36 +486,36 @@ float4 main(RSXInterpIn input) : SV_TARGET {
             if (op == 2u) {
                 if (cond) {
                     if (sp < 8u) {
-                        stk_kind[sp] = 0u;
-                        stk_else[sp] = else_pc == 0xFFFFu ? 0xFFFFFFFFu : else_pc;
-                        stk_end[sp] = end_pc;
+                        SK_KIND(sp) = 0u;
+                        SK_ELSE(sp) = else_pc == 0xFFFFu ? 0xFFFFFFFFu : else_pc;
+                        SK_END(sp) = end_pc;
                         sp++;
                     }
                 } else if (else_pc != 0xFFFFu) {
                     next = else_pc;
                     if (sp < 8u) {
-                        stk_kind[sp] = 0u;
-                        stk_else[sp] = 0xFFFFFFFFu;
-                        stk_end[sp] = end_pc;
+                        SK_KIND(sp) = 0u;
+                        SK_ELSE(sp) = 0xFFFFFFFFu;
+                        SK_END(sp) = end_pc;
                         sp++;
                     }
                 } else next = end_pc;
             } else if (op == 3u || op == 4u) {
                 uint body = pc + 1u;
                 if (cond && init < endn && body < end_pc && sp < 8u) {
-                    stk_kind[sp] = 1u;
-                    stk_else[sp] = 0xFFFFFFFFu;
-                    stk_end[sp] = end_pc;
-                    stk_i[sp] = init;
-                    stk_step[sp] = step == 0u ? 1u : step;
-                    stk_endn[sp] = endn;
-                    stk_body[sp] = body;
+                    SK_KIND(sp) = 1u;
+                    SK_ELSE(sp) = 0xFFFFFFFFu;
+                    SK_END(sp) = end_pc;
+                    SK_I(sp) = init;
+                    SK_STEP(sp) = step == 0u ? 1u : step;
+                    SK_ENDN(sp) = endn;
+                    SK_BODY(sp) = body;
                     sp++;
                 } else next = end_pc;
             } else if (op == 0u && cond) {
                 uint look = sp;
-                while (look > 0u && stk_kind[look - 1u] != 1u) look--;
-                if (look > 0u) { next = stk_end[look - 1u]; sp = look - 1u; }
+                while (look > 0u && SK_KIND(look - 1u) != 1u) look--;
+                if (look > 0u) { next = SK_END(look - 1u); sp = look - 1u; }
             }
             pc = next;
             continue;
@@ -466,6 +527,7 @@ float4 main(RSXInterpIn input) : SV_TARGET {
         uint s1 = iw.z & 0x3FFFFFu;
         uint s2 = iw.w & 0x3FFFFFu;
         uint kslot = (iw.w >> 22) & 255u;
+#if RSX_INTERP_LEGACY
 #if RSX_INTERP_FULLIN
         float4 tc8v = input.tc8;
         float4 tc9v = input.tc9;
@@ -477,16 +539,27 @@ float4 main(RSXInterpIn input) : SV_TARGET {
 #endif
         float4 tc[10] = { input.tc0, input.tc1, input.tc2, input.tc3, input.tc4,
                           input.tc5, input.tc6, input.tc7, tc8v, tc9v };
+#endif
         float4 a, b, c;
         {
+#if RSX_INTERP_LEGACY
             uint spack[3] = { s0, s1, s2 };
             float4 got[3];
+#else
+            a = 0; b = 0; c = 0;
+#endif
             // Bit 30 of words 2/3: the opcode does not read source 1/2 (set by the encoder).
             uint skipsrc = ((iw.z >> 30) & 1u) << 1 | ((iw.w >> 30) & 1u) << 2;
             [unroll] for (int si = 0; si < 3; si++) {
+#if RSX_INTERP_LEGACY
                 got[si] = 0;
+#endif
                 [branch] if (((skipsrc >> si) & 1u) != 0u) continue;
+#if RSX_INTERP_LEGACY
                 uint pk = spack[si];
+#else
+                uint pk = si == 0 ? s0 : si == 1 ? s1 : s2;
+#endif
                 uint ty = pk & 3u;
                 uint ix = (pk >> 2) & 63u;
                 uint sh = (pk >> 8) & 1u;
@@ -495,7 +568,7 @@ float4 main(RSXInterpIn input) : SV_TARGET {
                 uint pr = (pk >> 11) & 7u;
                 uint sw = (pk >> 14) & 255u;
                 float4 vv = 0;
-                if (ty == 0u) vv = (sh != 0u ? h[min(ix, RSX_INTERP_REGM)] : r[min(ix, RSX_INTERP_REGM)]);
+                if (ty == 0u) vv = RSX_IR(sh, min(ix, RSX_INTERP_REGM));
                 else if (ty == 1u) {
                     uint id = in_src;
                     if (id == 0u) vv = wpos;
@@ -506,10 +579,25 @@ float4 main(RSXInterpIn input) : SV_TARGET {
                     else if (id == 14u) vv = face;
                     if (persp != 0u && id >= 4u && id <= 13u) vv *= (1.0 / input.position.w);
                 } else vv = fp_constants[kslot];
+#if RSX_INTERP_SHORT
+                [branch] if (sw != 228u) vv = rsx_i_swz(vv, sw);
+#else
                 vv = rsx_i_swz(vv, sw);
+#endif
+#if RSX_INTERP_LEGACY
                 got[si] = rsx_i_modify(vv, ab, pr, ng);
+#else
+#if RSX_INTERP_SHORT
+                [branch] if (((pk >> 9) & 0x1Fu) != 0u) vv = rsx_i_modify(vv, ab, pr, ng);
+#else
+                vv = rsx_i_modify(vv, ab, pr, ng);
+#endif
+                if (si == 0) a = vv; else if (si == 1) b = vv; else c = vv;
+#endif
             }
+#if RSX_INTERP_LEGACY
             a = got[0]; b = got[1]; c = got[2];
+#endif
         }
         float4 v = 0;
         uint do_alu = 1u;
@@ -617,7 +705,7 @@ float4 main(RSXInterpIn input) : SV_TARGET {
             else if (scale == 7u) v /= 8.0;
             if (osat != 0u) v = saturate(v);
             uint di = min(dest, RSX_INTERP_REGM);
-            float4 cur = dhalf != 0u ? h[di] : r[di];
+            float4 cur = RSX_IR(dhalf, di);
             float4 nxt = cur;
             float4 pm = 1;
             if (pred == 1u) pm = 0;
@@ -630,7 +718,7 @@ float4 main(RSXInterpIn input) : SV_TARGET {
                 if ((mask & 2u) != 0u) nxt.y = (pred == 0u || pm.y != 0.0) ? v.y : cur.y;
                 if ((mask & 4u) != 0u) nxt.z = (pred == 0u || pm.z != 0.0) ? v.z : cur.z;
                 if ((mask & 8u) != 0u) nxt.w = (pred == 0u || pm.w != 0.0) ? v.w : cur.w;
-                if (dhalf != 0u) h[di] = nxt; else r[di] = nxt;
+                RSX_IW(dhalf, di, nxt)
             }
             if (setcond != 0u) {
                 float4 srcv = nowrite != 0u ? v : (pred == 1u ? cur : nxt);
@@ -645,7 +733,7 @@ float4 main(RSXInterpIn input) : SV_TARGET {
         pc = next;
     }
     if (killed != 0u) discard;
-    float4 o0 = (steps >= RSX_FP_INTERP_STEPS && pc < instr_count) ? (float4)0 : rsx_i_export(half, 0u, r, h);
+    float4 o0 = (steps >= RSX_FP_INTERP_STEPS && pc < instr_count) ? (float4)0 : RSX_IR(half, rsx_i_expidx(half, 0u));
     if ((flags & 2048u) != 0u) o0 = (float4)1;   // redirected stencil-mask pass: colour forced to 1 (FP_ONE)
     if ((flags & 16u) != 0u) rsx_i_atest(o0.a);
     if ((flags & 128u) != 0u && (flags & 1024u) == 0u) {
@@ -662,9 +750,9 @@ float4 main(RSXInterpIn input) : SV_TARGET {
     o.c1 = rsx_i_nan0(o1);
     o.c2 = rsx_i_nan0(o2);
     o.c3 = rsx_i_nan0(o3);
-    float4 o1 = rsx_i_export(half, 1u, r, h);
-    float4 o2 = rsx_i_export(half, 2u, r, h);
-    float4 o3 = rsx_i_export(half, 3u, r, h);
+    float4 o1 = RSX_IR(half, rsx_i_expidx(half, 1u));
+    float4 o2 = RSX_IR(half, rsx_i_expidx(half, 2u));
+    float4 o3 = RSX_IR(half, rsx_i_expidx(half, 3u));
     // Declarations above are out of order; the real assignments follow the fixup in the generator.
     return o;
 #else
@@ -682,9 +770,9 @@ def fix_mrt(body: str) -> str:
     o.c1 = rsx_i_nan0(o1);
     o.c2 = rsx_i_nan0(o2);
     o.c3 = rsx_i_nan0(o3);
-    float4 o1 = rsx_i_export(half, 1u, r, h);
-    float4 o2 = rsx_i_export(half, 2u, r, h);
-    float4 o3 = rsx_i_export(half, 3u, r, h);
+    float4 o1 = RSX_IR(half, rsx_i_expidx(half, 1u));
+    float4 o2 = RSX_IR(half, rsx_i_expidx(half, 2u));
+    float4 o3 = RSX_IR(half, rsx_i_expidx(half, 3u));
     // Declarations above are out of order; the real assignments follow the fixup in the generator.
     return o;
 #else
@@ -694,13 +782,13 @@ def fix_mrt(body: str) -> str:
 """
     new = """#if RSX_INTERP_MRT
 #if RSX_INTERP_TARGETS > 1
-    float4 o1 = rsx_i_export(half, 1u, r, h);
+    float4 o1 = RSX_IR(half, rsx_i_expidx(half, 1u));
 #endif
 #if RSX_INTERP_TARGETS > 2
-    float4 o2 = rsx_i_export(half, 2u, r, h);
+    float4 o2 = RSX_IR(half, rsx_i_expidx(half, 2u));
 #endif
 #if RSX_INTERP_TARGETS > 3
-    float4 o3 = rsx_i_export(half, 3u, r, h);
+    float4 o3 = RSX_IR(half, rsx_i_expidx(half, 3u));
 #endif
     if ((flags & 1024u) != 0u) {
 #if RSX_INTERP_TARGETS > 1
@@ -735,6 +823,23 @@ def fix_mrt(body: str) -> str:
     return body.replace(old, new, 1)
 
 
+def tex_first(body: str) -> str:
+    """RSX_INTERP_SHORT: test the texture opcodes before the ALU chain (each failed test in the chain is a
+    compare and branch per interpreted instruction; texture fetches sat about 40 tests down)."""
+    nl = chr(10)
+    a = body.index("        if (op == 0x12u) {" + nl)
+    t = body.index("        else if (op == 0x17u || op == 0x18u || op == 0x2Fu || op == 0x31u) {" + nl, a)
+    e_mark = "        } else do_alu = 0u;" + nl
+    e = body.index(e_mark, t) + len(e_mark)
+    alu = body[a:t]
+    tex = body[t:e - len(e_mark)] + "        }" + nl
+    new = ("#if RSX_INTERP_SHORT" + nl
+           + tex.replace("        else if (op == 0x17u", "        if (op == 0x17u", 1)
+           + alu.replace("        if (op == 0x12u) {", "        else if (op == 0x12u) {", 1)
+           + "        else do_alu = 0u;" + nl + "#else" + nl + body[a:e] + "#endif" + nl)
+    return body[:a] + new + body[e:]
+
+
 def c_string(text: str) -> str:
     parts = []
     chunk = []
@@ -761,7 +866,7 @@ def c_string(text: str) -> str:
 
 
 def main():
-    body = fix_mrt(BODY)
+    body = tex_first(fix_mrt(BODY.replace(chr(13), '')))
     # Drop the unused helper that referenced a dummy dither body.
     text = texture_block() + "\n" + body
     OUT.parent.mkdir(parents=True, exist_ok=True)

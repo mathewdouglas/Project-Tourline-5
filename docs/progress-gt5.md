@@ -4,6 +4,51 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Interpreter GPU cost halved: 22.6 -> 37.9 FPS with every draw interpreted (2026-11-13)
+
+Same test as the next section (forced interpreter, both stages,
+`RSX_SHADER_INTERP_SSAA=0`, High Speed Ring FrameTest, 1080p 2x MSAA,
+warm private cache). Each pair ran in one build, one after the other.
+
+| Run | FPS | GPU | Replay |
+| --- | ---: | ---: | ---: |
+| `RSX_SHADER_INTERP_LEGACY=1` (old layout) | 22.6 | 32.6 ms | 7.3 ms |
+| New layout | 36.4 | 16.8 ms | 9.0 ms |
+| New layout, `RSX_SHADER_INTERP_SHORT=0` | 35.5 | 15.8 ms | 8.9 ms |
+| New layout with short paths (default) | 37.9 | 15.8 ms | 8.9 ms |
+
+FXC output of the old shader (offline, `scratch/gen/metrics.sh`) showed
+18 dynamically indexed arrays. On NVIDIA these live in per-thread memory,
+not registers. Three of them did avoidable work on every interpreted
+instruction.
+
+- **Layout (`RSX_SHADER_INTERP_LEGACY=1`: old).** This is the change
+  that halved GPU time. It has three parts:
+  - The full and half register files are one array, indexed
+    `register * 2 + half`. A read used to fetch from both arrays and
+    select.
+  - The ten texture-coordinate inputs are gathered into their array once
+    per pixel. Before, they were rebuilt on every interpreted
+    instruction: ten stores per step.
+  - The three operands are plain variables, not small arrays. The
+    control-flow stack is two `uint4` arrays instead of seven.
+
+  Indexed arrays went from 18 to 4, and exports read the register file
+  directly instead of copying it into function parameters.
+- **Short paths (`RSX_SHADER_INTERP_SHORT=0`: old).** These are small
+  changes:
+  - Identity swizzles and unmodified operands skip that work.
+  - Plain samples go through the biased-sample site with bias 0, cutting
+    sample sites from 176 to 128.
+  - Texture opcodes are tested before the ALU chain; they used to sit
+    about 40 compares down.
+
+  GPU medians were equal and FPS was 2.4 higher, which is within noise,
+  so this is kept as harmless rather than proven.
+
+Specialized shaders take 5.1 ms GPU; the interpreter is now about 3x that
+when it draws everything.
+
 ## Interpreter speed: 6.3 -> 22.6 FPS with every draw interpreted (2026-11-13)
 
 All runs below force the interpreter on every draw, for both stages:
