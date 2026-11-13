@@ -115,7 +115,7 @@ index 00000000..e3700ff5
 +#endif
 +#endif
 diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
-index b51fb7c4..484c4976 100644
+index b51fb7c4..69069a35 100644
 --- a/libs/audio/cellAudio.c
 +++ b/libs/audio/cellAudio.c
 @@ -15,6 +15,7 @@
@@ -143,18 +143,60 @@ index b51fb7c4..484c4976 100644
  #endif
  
  #if AUDIO_BACKEND_SDL2
-@@ -233,37 +238,31 @@ static IAudioClient*        s_wasapi_client = NULL;
+@@ -156,6 +161,41 @@ static mutex_t       s_audio_mutex;
+ /* Output mix buffer (stereo, one block worth) */
+ static float s_mix_buffer[CELL_AUDIO_BLOCK_SAMPLES * 2];
+ 
++static unsigned s_input_nan[CELL_AUDIO_PORT_MAX], s_input_inf[CELL_AUDIO_PORT_MAX];
++static unsigned s_input_port;
++static int audio_scrub_enabled(void)
++{
++    static int enabled = -1;
++    if (enabled < 0) {
++        const char* e = getenv("AUDIO_NONFINITE_SCRUB");
++        enabled = !(e && !strcmp(e, "0"));
++    }
++    return enabled;
++}
++
++/* Classify before sanitizing: invalid PCM must not masquerade as healthy
++ * non-silence in diagnostics or reach the host audio engine by default. */
++typedef struct AudioBlockStats {
++    unsigned nan, inf, nonzero;
++    float peak;
++} AudioBlockStats;
++static AudioBlockStats audio_check_block(float* samples, u32 count, int scrub)
++{
++    AudioBlockStats stats = {0};
++    for (u32 i = 0; i < count; i++) {
++        u32 bits; memcpy(&bits, &samples[i], sizeof bits);
++        if ((bits & 0x7F800000u) == 0x7F800000u) {
++            if (bits & 0x007FFFFFu) stats.nan++; else stats.inf++;
++            if (scrub) samples[i] = 0.0f;
++            continue;
++        }
++        float a = samples[i]; if (a < 0.0f) a = -a;
++        if (a > stats.peak) stats.peak = a;
++        if (a != 0.0f) stats.nonzero++;
++    }
++    return stats;
++}
++
+ /* ---------------------------------------------------------------------------
+  * Host audio output backend
+  * -----------------------------------------------------------------------*/
+@@ -233,37 +273,43 @@ static IAudioClient*        s_wasapi_client = NULL;
  static IAudioRenderClient*  s_wasapi_render = NULL;
  static HANDLE               s_wasapi_event  = NULL;
  static UINT32               s_wasapi_buf_frames = 0;
+-
+-static int audio_backend_init(void)
 +static IMMDeviceEnumerator* s_wasapi_enumerator;
 +static LPWSTR s_wasapi_device_id;
 +static int s_wasapi_com_owned;
 +static int s_audio_hotplug;
-+static ULONGLONG s_wasapi_next_check;
- 
--static int audio_backend_init(void)
-+static void audio_backend_close_stream(void)
++/* Report startup failures too, with bounded retries when no stream exists. */
++static void audio_backend_report_error(const char* stage, HRESULT hr)
  {
 -    HRESULT hr;
 -
@@ -170,8 +212,17 @@ index b51fb7c4..484c4976 100644
 -    if (FAILED(hr)) {
 -        printf("[cellAudio] Failed to create device enumerator: 0x%08lX\n", hr);
 -        return -1;
--    }
--
++    static const char* last_stage;
++    static HRESULT last_hr;
++    static ULONGLONG next_log;
++    ULONGLONG now = GetTickCount64();
++    if (!last_stage || strcmp(last_stage, stage) || last_hr != hr || now >= next_log) {
++        fprintf(stderr, "[cellAudio] %s failed: 0x%08lX; retrying output\n", stage, (unsigned long)hr);
++        last_stage = stage; last_hr = hr; next_log = now + 5000;
+     }
++}
++static ULONGLONG s_wasapi_next_check;
+ 
 -    IMMDevice* device = NULL;
 -    hr = enumerator->lpVtbl->GetDefaultAudioEndpoint(enumerator, eRender,
 -                                                      eConsole, &device);
@@ -180,6 +231,8 @@ index b51fb7c4..484c4976 100644
 -        printf("[cellAudio] Failed to get default audio endpoint: 0x%08lX\n", hr);
 -        return -1;
 -    }
++static void audio_backend_close_stream(void)
++{
 +    if (s_wasapi_client) s_wasapi_client->lpVtbl->Stop(s_wasapi_client);
 +    if (s_wasapi_render) s_wasapi_render->lpVtbl->Release(s_wasapi_render);
 +    if (s_wasapi_client) s_wasapi_client->lpVtbl->Release(s_wasapi_client);
@@ -201,7 +254,7 @@ index b51fb7c4..484c4976 100644
      if (FAILED(hr)) {
          printf("[cellAudio] Failed to activate audio client: 0x%08lX\n", hr);
          return -1;
-@@ -280,65 +279,175 @@ static int audio_backend_init(void)
+@@ -280,65 +326,180 @@ static int audio_backend_init(void)
  
      /* Request event-driven mode with a ~20ms buffer */
      REFERENCE_TIME buf_duration = 200000; /* 20ms in 100ns units */
@@ -303,7 +356,9 @@ index b51fb7c4..484c4976 100644
 +static HRESULT STDMETHODCALLTYPE audio_notify_device(IMMNotificationClient* self, LPCWSTR id)
 +{ (void)self; (void)id; InterlockedExchange(&s_wasapi_change, 1); return S_OK; }
 +static HRESULT STDMETHODCALLTYPE audio_notify_default(IMMNotificationClient* self, EDataFlow flow, ERole role, LPCWSTR id)
-+{
+ {
+-    if (s_wasapi_client) {
+-        s_wasapi_client->lpVtbl->Stop(s_wasapi_client);
 +    (void)self; (void)id;
 +    if (flow == eRender && role == eConsole) InterlockedExchange(&s_wasapi_change, 1);
 +    return S_OK;
@@ -317,9 +372,7 @@ index b51fb7c4..484c4976 100644
 +static IMMNotificationClient s_audio_notify = { &s_audio_notify_vt };
 +
 +static void audio_backend_refresh(void)
- {
--    if (s_wasapi_client) {
--        s_wasapi_client->lpVtbl->Stop(s_wasapi_client);
++{
 +    ULONGLONG now = GetTickCount64();
 +    if (s_wasapi_next_check && (!s_audio_hotplug || now < s_wasapi_next_check)) return;
 +    /* Registered and streaming: nothing to do until a change is reported. */
@@ -335,7 +388,7 @@ index b51fb7c4..484c4976 100644
 +    if (!s_wasapi_enumerator) {
 +        HRESULT hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL,
 +                                     &IID_IMMDeviceEnumerator, (void**)&s_wasapi_enumerator);
-+        if (FAILED(hr)) return;
++        if (FAILED(hr)) { audio_backend_report_error("Create device enumerator", hr); return; }
 +        const char* poll = getenv("AUDIO_HOTPLUG_POLL");
 +        if (s_audio_hotplug && !(poll && !strcmp(poll, "1")))
 +            s_wasapi_notify = SUCCEEDED(s_wasapi_enumerator->lpVtbl->RegisterEndpointNotificationCallback(
@@ -350,6 +403,7 @@ index b51fb7c4..484c4976 100644
 +    HRESULT hr = s_wasapi_enumerator->lpVtbl->GetDefaultAudioEndpoint(
 +        s_wasapi_enumerator, eRender, eConsole, &device);
 +    if (FAILED(hr)) {
++        audio_backend_report_error("Get default output", hr);
 +        if (s_wasapi_client) {
 +            printf("[cellAudio] No default output; waiting for a device\n");
 +            audio_backend_close_stream();
@@ -366,6 +420,7 @@ index b51fb7c4..484c4976 100644
 +        audio_backend_close_stream();
 +        audio_backend_open(device);
 +    }
++    if (FAILED(hr)) audio_backend_report_error("Get output ID", hr);
 +    CoTaskMemFree(id);
 +    device->lpVtbl->Release(device);
 +}
@@ -376,7 +431,10 @@ index b51fb7c4..484c4976 100644
 +    s_audio_hotplug = !e || strcmp(e, "0");
 +    HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
 +    s_wasapi_com_owned = SUCCEEDED(hr);
-+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) return -1;
++    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
++        fprintf(stderr, "[cellAudio] COM initialization failed: 0x%08lX\n", (unsigned long)hr);
++        return -1;
++    }
 +    s_wasapi_next_check = 0;
 +    audio_backend_refresh();
 +    return s_wasapi_client ? 0 : -1;
@@ -403,7 +461,7 @@ index b51fb7c4..484c4976 100644
      }
  }
  
-@@ -347,7 +456,8 @@ static void audio_backend_submit(const float* stereo_samples, u32 num_samples)
+@@ -347,7 +508,8 @@ static void audio_backend_submit(const float* stereo_samples, u32 num_samples)
      if (!s_wasapi_render) return;
  
      UINT32 padding = 0;
@@ -413,7 +471,7 @@ index b51fb7c4..484c4976 100644
  
      UINT32 available = s_wasapi_buf_frames - padding;
      if (num_samples > available) {
-@@ -357,11 +467,12 @@ static void audio_backend_submit(const float* stereo_samples, u32 num_samples)
+@@ -357,11 +519,12 @@ static void audio_backend_submit(const float* stereo_samples, u32 num_samples)
      if (num_samples == 0) return;
  
      BYTE* buf = NULL;
@@ -428,7 +486,7 @@ index b51fb7c4..484c4976 100644
  }
  
  /* Frames the device can take right now; -1 with no device open. */
-@@ -371,10 +482,7 @@ static int audio_backend_room(void)
+@@ -371,10 +534,7 @@ static int audio_backend_room(void)
      UINT32 padding = 0;
      const HRESULT hr = s_wasapi_client->lpVtbl->GetCurrentPadding(s_wasapi_client, &padding);
      if (FAILED(hr)) {
@@ -440,24 +498,48 @@ index b51fb7c4..484c4976 100644
          return -1;
      }
      return (int)(s_wasapi_buf_frames - padding);
-@@ -408,6 +516,16 @@ static inline float ld_be_f32(const float* p)
+@@ -403,20 +563,40 @@ static inline float ld_be_f32(const float* p)
+     u32 v;
+     memcpy(&v, p, 4);
+     v = (v >> 24) | ((v >> 8) & 0xFF00u) | ((v << 8) & 0xFF0000u) | (v << 24);
++    if ((v & 0x7F800000u) == 0x7F800000u) {
++        if (v & 0x007FFFFFu) s_input_nan[s_input_port]++;
++        else s_input_inf[s_input_port]++;
++        /* Sanitize before summing: one broken port/channel must not erase
++         * valid sound from another port (for example the opening movie). */
++        if (audio_scrub_enabled()) return 0.0f;
++    }
+     float f;
+     memcpy(&f, &v, 4);
      return f;
  }
  
 +/* Whether the title has put anything in a ring block since it was last
-+ * consumed (and cleared). Every 8th sample of every channel. */
++ * consumed (and cleared). Check every channel and sample. */
 +static unsigned long long g_audio_underruns;
 +static int audio_block_has_data(const float* blk, u32 nch)
 +{
 +    const u32 n = CELL_AUDIO_BLOCK_SAMPLES * nch;
-+    for (u32 i = 0; i < n; i += 8) if (blk[i] != 0.0f) return 1;
++    for (u32 i = 0; i < n; i++) if (blk[i] != 0.0f) return 1;
 +    return 0;
 +}
 +
  /* Mix one block from all active ports into s_mix_buffer (stereo float) */
  static void audio_mix_one_block(void)
  {
-@@ -444,7 +562,71 @@ static void audio_mix_one_block(void)
+     memset(s_mix_buffer, 0, sizeof(s_mix_buffer));
++    memset(s_input_nan, 0, sizeof(s_input_nan));
++    memset(s_input_inf, 0, sizeof(s_input_inf));
+ 
+     mutex_lock(&s_audio_mutex);
+ 
+     for (int p = 0; p < CELL_AUDIO_PORT_MAX; p++) {
+         AudioPortSlot* port = &s_ports[p];
++        s_input_port = (unsigned)p;
+         /* Diagnostic: a port that HOLDS PCM but was never started is inaudible
+          * by design -- flag it once so "no PortStart" vs "no data" is decidable
+          * from the log (LBP's Bink movie audio port sat exactly there). */
+@@ -444,9 +624,74 @@ static void audio_mix_one_block(void)
          if (level > 1.0f) level = 1.0f;
  
          /* Read one block at the current read_index */
@@ -529,8 +611,11 @@ index b51fb7c4..484c4976 100644
 +          } }
          u32 block_offset = block_idx * CELL_AUDIO_BLOCK_SAMPLES * nch;
          float* src = port->buffer + block_offset;
++        float port_mix[CELL_AUDIO_BLOCK_SAMPLES * 2] = {0};
  
-@@ -467,7 +649,7 @@ static void audio_mix_one_block(void)
+         /* AUDIO_PEAK diag: which blocks of this port's WHOLE ring hold data,
+          * vs which block the read cursor is on -- distinguishes "writer never
+@@ -467,7 +712,7 @@ static void audio_mix_one_block(void)
                          p, (unsigned long long)port->read_index, block_idx, map);
              } } }
  
@@ -539,7 +624,23 @@ index b51fb7c4..484c4976 100644
              float left, right;
              if (nch >= 2) {
                  left  = ld_be_f32(&src[s * nch + 0]) * level;
-@@ -496,7 +678,7 @@ static void audio_mix_one_block(void)
+@@ -489,14 +734,21 @@ static void audio_mix_one_block(void)
+                 right += center + lfe + rr + sr;
+             }
+ 
+-            s_mix_buffer[s * 2 + 0] += left;
+-            s_mix_buffer[s * 2 + 1] += right;
++            port_mix[s * 2 + 0] = left;
++            port_mix[s * 2 + 1] = right;
+         }
+ 
++        /* An invalid block can contain clipped/oscillating finite garbage too.
++         * Discard that port's entire block, while consuming it normally and
++         * retaining healthy ports such as movie audio. */
++        if (!audio_scrub_enabled() || !(s_input_nan[p] || s_input_inf[p]))
++            for (u32 s = 0; s < CELL_AUDIO_BLOCK_SAMPLES * 2; s++)
++                s_mix_buffer[s] += port_mix[s];
++
          /* Firmware clears a ring-buffer block after consuming it. Besides
           * preventing stale PCM from replaying when a producer stalls, the
           * cleared block is an observable consumption signal for producers. */
@@ -548,7 +649,7 @@ index b51fb7c4..484c4976 100644
  
          /* Keep the monotonic counter for tags/timestamps, but publish the
           * ring slot to the guest. SurMixer multiplies this value by the block
-@@ -535,10 +717,35 @@ static void audio_notify_event_queues(void)
+@@ -535,10 +787,35 @@ static void audio_notify_event_queues(void)
  }
  
  #ifdef _WIN32
@@ -584,7 +685,7 @@ index b51fb7c4..484c4976 100644
  
      /* Pace to the device clock. The PS3 consumes one block every 5.33 ms;
       * the old Sleep(2)/Sleep(5) loop keyed on a queue depth the 1056-frame
-@@ -549,7 +756,42 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -549,7 +826,42 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
      LARGE_INTEGER qf, q0; QueryPerformanceFrequency(&qf); QueryPerformanceCounter(&q0);
      unsigned long long blocks = 0;
      while (s_mix_thread_running) {
@@ -627,7 +728,7 @@ index b51fb7c4..484c4976 100644
          if (room >= 0 && room < CELL_AUDIO_BLOCK_SAMPLES) { audio_backend_wait(); continue; }
          if (room < 0) {
              LARGE_INTEGER now; QueryPerformanceCounter(&now);
-@@ -562,7 +804,13 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -562,30 +874,109 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
                  q0.QuadPart = now.QuadPart -
                      (long long)(blocks * CELL_AUDIO_BLOCK_SAMPLES * qf.QuadPart / CELL_AUDIO_SAMPLE_RATE);
          }
@@ -640,8 +741,40 @@ index b51fb7c4..484c4976 100644
 +          lt = tn; }
          /* Mix and submit one block */
          audio_mix_one_block();
++        const int scrub_invalid = audio_scrub_enabled();
++        unsigned input_nan = 0, input_inf = 0;
++        for (unsigned p = 0; p < CELL_AUDIO_PORT_MAX; p++) {
++            input_nan += s_input_nan[p]; input_inf += s_input_inf[p];
++        }
++        AudioBlockStats audio_stats = audio_check_block(s_mix_buffer,
++            CELL_AUDIO_BLOCK_SAMPLES * 2, scrub_invalid);
++        if (audio_stats.nan || audio_stats.inf || input_nan || input_inf) {
++            static ULONGLONG next_invalid_log;
++            ULONGLONG now = GetTickCount64();
++            if (!next_invalid_log || now >= next_invalid_log) {
++                fprintf(stderr, "[cellAudio] Invalid PCM: input_nan=%u input_inf=%u mixed_nan=%u mixed_inf=%u scrub=%d\n",
++                        input_nan, input_inf, audio_stats.nan, audio_stats.inf, scrub_invalid);
++                for (unsigned p = 0; p < CELL_AUDIO_PORT_MAX; p++)
++                    if (s_input_nan[p] || s_input_inf[p])
++                        fprintf(stderr, "[audio-input] port=%u nan=%u inf=%u\n", p, s_input_nan[p], s_input_inf[p]);
++                next_invalid_log = now + 5000;
++            }
++        }
          /* AUDIO_PEAK=1: report the mixed block's peak amplitude periodically so
-@@ -579,6 +827,57 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+          * "is any port producing sound" is answerable (LBP Bink movie audio). */
+         { static int _ap = -1; if (_ap < 0) _ap = getenv("AUDIO_PEAK") ? 1 : 0;
+-          if (_ap) { static unsigned _n = 0; float pk = 0.0f;
+-            for (u32 i = 0; i < CELL_AUDIO_BLOCK_SAMPLES * 2; i++) {
+-                float a = s_mix_buffer[i]; if (a < 0) a = -a; if (a > pk) pk = a; }
+-            if ((++_n % 200) == 0 || (pk > 0.001f && _n < 40))
+-                fprintf(stderr, "[audio-peak] block#%u peak=%.4f\n", _n, pk); } }
++          if (_ap) { static unsigned _n = 0;
++            if ((++_n % 200) == 0 || (audio_stats.peak > 0.001f && _n < 40))
++                fprintf(stderr, "[audio-peak] block#%u peak=%.4f nan=%u inf=%u finite_nonzero=%u input_nan=%u input_inf=%u scrub=%d\n",
++                        _n, audio_stats.peak, audio_stats.nan, audio_stats.inf, audio_stats.nonzero, input_nan, input_inf, scrub_invalid); } }
+         /* AUDIO_WAV=<file>: append the final mix as raw f32le stereo 48 kHz
+          * (ffmpeg -f f32le -ar 48000 -ac 2 -i <file>). */
+         { static FILE* _wf = (FILE*)-1;
            if (_wf == (FILE*)-1) { const char* e = getenv("AUDIO_WAV"); _wf = e ? fopen(e, "wb") : NULL; }
            if (_wf) fwrite(s_mix_buffer, sizeof(float), CELL_AUDIO_BLOCK_SAMPLES * 2, _wf); }
          audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
@@ -676,7 +809,7 @@ index b51fb7c4..484c4976 100644
 +          if (on) { static unsigned run, heard; static double t_run; static char map0[40];
 +            LARGE_INTEGER tn; QueryPerformanceCounter(&tn);
 +            double ms = 1000.0 * (double)(tn.QuadPart - q0.QuadPart) / (double)qf.QuadPart;
-+            int nz = 0; for (u32 i = 0; i < CELL_AUDIO_BLOCK_SAMPLES * 2; i++) if (s_mix_buffer[i] != 0.0f) { nz = 1; break; }
++            int nz = audio_stats.nonzero != 0;
 +            if (!nz) {
 +                if (!run++) { t_run = ms;
 +                    AudioPortSlot* pt = &s_ports[0]; u32 nb = (u32)pt->param.nBlock, nc = (u32)pt->param.nChannel, b2 = 0;
@@ -698,16 +831,32 @@ index b51fb7c4..484c4976 100644
 +                run = 0; heard = 1; } } }
          /* AUDIO_RATE=1: blocks mixed vs real time, and frames dropped. */
          { static int on = -1; if (on < 0) on = getenv("AUDIO_RATE") ? 1 : 0;
-           if (on) { static ULONGLONG t0; static unsigned n, z; static unsigned long long d0;
-@@ -586,6 +885,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
-             { int nz = 0; for (u32 i = 0; i < CELL_AUDIO_BLOCK_SAMPLES * 2; i++) if (s_mix_buffer[i] != 0.0f) { nz = 1; break; }
-               if (!nz) z++; }
+-          if (on) { static ULONGLONG t0; static unsigned n, z; static unsigned long long d0;
++          if (on) { static ULONGLONG t0; static unsigned n, z, invalid;
++            static unsigned long long d0, nan_samples, inf_samples, source_nan, source_inf;
+             ULONGLONG now = GetTickCount64(); if (!t0) t0 = now; n++;
+-            { int nz = 0; for (u32 i = 0; i < CELL_AUDIO_BLOCK_SAMPLES * 2; i++) if (s_mix_buffer[i] != 0.0f) { nz = 1; break; }
+-              if (!nz) z++; }
++            if (!audio_stats.nonzero) z++;
++            if (audio_stats.nan || audio_stats.inf || input_nan || input_inf) invalid++;
++            nan_samples += audio_stats.nan; inf_samples += audio_stats.inf;
++            source_nan += input_nan; source_inf += input_inf;
              if (now - t0 >= 5000) {
 +                fprintf(stderr, "[audio-rate] underruns so far %llu; mixer ticks: longest gap %.1f ms, %u over 10 ms%c", g_audio_underruns, g_mix_tick_max, g_mix_tick_late, 10); g_mix_tick_max = 0; g_mix_tick_late = 0;
                  fprintf(stderr, "[audio-rate] %.1f blocks/s (real time 187.5), silent %.1f%%, dropped %.0f frames/s, device buf %u%c",
                          n * 1000.0 / (now - t0), n ? 100.0 * z / n : 0.0, (g_audio_dropped - d0) * 1000.0 / (now - t0),
                  #if AUDIO_BACKEND_WASAPI
-@@ -599,6 +899,9 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -593,12 +984,18 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+ #else
+                         0u, 10);
+ #endif
+-                n = z = 0; d0 = g_audio_dropped; t0 = now; } } }
++                fprintf(stderr, "[audio-rate] invalid %.1f%% blocks, nan %llu samples, inf %llu samples, input_nan %llu input_inf %llu, scrub=%d\n",
++                        n ? 100.0 * invalid / n : 0.0, nan_samples, inf_samples, source_nan, source_inf, scrub_invalid);
++                n = z = invalid = 0; nan_samples = inf_samples = source_nan = source_inf = 0;
++                d0 = g_audio_dropped; t0 = now; } } }
+ 
+         /* Notify event queues */
          audio_notify_event_queues();
      }
  
@@ -717,7 +866,7 @@ index b51fb7c4..484c4976 100644
      printf("[cellAudio] Mixing thread stopped\n");
      return 0;
  }
-@@ -693,10 +996,12 @@ s32 cellAudioInit(void)
+@@ -693,10 +1090,12 @@ s32 cellAudioInit(void)
      memset(s_notify_queues, 0, sizeof(s_notify_queues));
      mutex_init(&s_audio_mutex);
  
@@ -730,7 +879,7 @@ index b51fb7c4..484c4976 100644
  
  
  #ifdef _WIN32
-@@ -724,7 +1029,9 @@ s32 cellAudioQuit(void)
+@@ -724,7 +1123,9 @@ s32 cellAudioQuit(void)
          return CELL_AUDIO_ERROR_NOT_INIT;
  
      audio_stop_mix_thread();
@@ -740,7 +889,7 @@ index b51fb7c4..484c4976 100644
  
      /* Port buffers live in the guest vm_base arena (bump-allocated, not host
       * malloc) -- just drop the references; never free() them. */
-@@ -888,6 +1195,26 @@ s32 cellAudioPortStop(u32 portNum)
+@@ -888,6 +1289,26 @@ s32 cellAudioPortStop(u32 portNum)
      return CELL_OK;
  }
  

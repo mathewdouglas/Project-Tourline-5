@@ -32,6 +32,74 @@ reproduction and limits: [dma-fastpaths.md](dma-fastpaths.md).
 writes precise sample-window JSON. Evidence is ignored under `scratch/pv/dma-*`
 and `scratch/dma-live/`. Pending audio changes are separate.
 
+## Audio live validation: corrupt game PCM contained, movie output restored (2026-11-13)
+
+The reported silence is reproduced. With `PS3_VERBOSE=0`, menu, opening
+movie and High Speed Ring routes all produce NaNs in port 0's guest PCM
+and in mixed output when containment is disabled. The ring advances;
+Windows opens the Razer Barracuda X output, unmuted at 77%, with the GT5
+session unmuted at 100%. Its session meter reads zero with invalid PCM.
+A menu comparison with `GT5P_AUDIO_NATIVE=0` produces the same invalid
+pattern as native audio: this is **not isolated to native FMA**.
+
+The old diagnostics called this 0% silent because `NaN != 0`; peak
+comparisons also ignored NaNs. `AUDIO_RATE` / `AUDIO_PEAK` now report finite
+signal separately from input/mixed NaN and infinity counts, including port
+numbers in bounded error logs. COM, enumerator, default-device and device-ID
+startup failures now include operation/HRESULT, with bounded retries.
+Debug exports include the peak, containment and no-audio switches.
+
+**Containment, not the upstream repair.** Merely replacing individual NaNs
+left a clipped 6 kHz pattern; that version was tested privately and rejected.
+The shipped default excludes a corrupt port's entire block from the sum,
+while still clearing/consuming its ring and notifying the game. Healthy
+ports remain intact. A final output check clears any remaining nonfinite
+results. `AUDIO_NONFINITE_SCRUB=0` restores propagation for diagnosis.
+
+- Menu and race rollback recordings contain NaNs in half the output samples
+  in their final 20 s; the movie rollback does too. RaceStart was reached
+  at 81.2 s in the raw race run, followed by 30 s of capture.
+- Contained menu output is finite silence: 0 NaNs/infinities, peak/RMS 0.
+  **Menu music and race sound are not repaired**; port 0 still produces bad
+  data. Containment prevents that bad data from corrupting other audio.
+- Contained opening-movie output has 0 NaNs/infinities, final-20-s peak 0.732,
+  RMS 0.0773 and near-zero channel means. The live Windows session meter is
+  nonzero (e.g. 0.364). This verifies a healthy movie signal reaching Windows,
+  not a subjective listening assessment or picture-playback acceptance.
+
+All launches waited for the DMA owner's handoff and checked for existing
+`gt5.exe` processes. The runner only stops its own child. Functional runs
+used `PS3_HEADLESS=1`; no shaderstamp tree was modified, and no cache was
+moved or deleted. The private candidate reuses the DMA-validated build
+objects with only its audio object replaced. Final containment candidate
+SHA256: `57AD6D5E7D54396FE4EF76E3D00877F1A37EC0DA6D54A51D7F938E1245B3CAE5`.
+The normal Release executable was then rebuilt from the same audio source
+and updated debug exporter: SHA256
+`90307D9FF504B0164540D24935DA9F16BB32BA2DFAD4B18AE4C3B1BD7CEF8F8E`.
+Its final movie smoke test left `AUDIO_NONFINITE_SCRUB` unset (default on):
+0 output NaNs/infinities, final-20-s peak 0.683 and RMS 0.0764. The contained
+race reached RaceStart at 80.7 s and captured about 30 s thereafter; it too has
+0 output NaNs/infinities, but remains silent because port 0 is corrupt.
+Raw recordings, per-run flags/hashes, logs and meter readings are ignored
+under `scratch/audio-live/` and `scratch/pv/audio-*`.
+
+**Regression checks.** The jitter predicate now inspects every channel and
+sample; its old stride skipped stereo's right channel and seven surround
+channels. `audio_silence.py` passes 5,120 single-sample cases. The real mixer
+in `audio_health.py` preserves healthy ports, drops a corrupt port containing
+both NaNs and finite garbage, checks infinity handling and rollback, and
+verifies startup HRESULTs/rate limiting with fake COM (no device changes).
+The full compatibility patch applies to a private pinned baseline and
+`setup_runtime.py --check` verifies the installed runtime. Debug-export
+integration checks include the new environment fields.
+
+A private arithmetic trace saw reciprocal estimates of zero and invalid
+filter state in image 14 (`jFDFFAAC1`); these observations do not establish
+which operation first corrupts the audible PCM. Some exponent-255 register
+patterns are SPU extended-range intermediates. The next investigation is
+state capture/replay through the output/DSP chain, rather than assuming
+hardware FMA or the Windows device caused it. Details: [audio.md](audio.md).
+
 ## Profile-guided release builds (2026-11-13)
 
 `scripts/release/clean_build.py --profile <profdata>` makes the player ZIP
