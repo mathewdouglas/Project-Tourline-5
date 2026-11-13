@@ -4,7 +4,7 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
-## Interpreter GPU cost: 22.6 -> 42 FPS with every draw interpreted; per-draw GPU timing (2026-11-13)
+## Interpreter GPU cost: 22.6 -> 43 FPS with every draw interpreted; per-draw GPU timing (2026-11-13)
 
 Same test as the next section (forced interpreter, both stages,
 `RSX_SHADER_INTERP_SSAA=0`, High Speed Ring FrameTest, 1080p 2x MSAA,
@@ -85,9 +85,10 @@ smaller targets).
 | Change, measured against its rollback | Draw time | GPU frame | FPS |
 | --- | ---: | ---: | ---: |
 | Flat register array + masked writes (`FLAT=1 WMASK=1`, opt-in) | 11.5 ms (11.7) | 13.4 ms | 41.6 |
-| No register clear: a 96-bit written mask (`NOCLEAR=0` old) | 11.4 ms (11.5) | 13.5 ms (13.9) | 41.7 (40.6) |
+| No register clear: a 96-bit written mask (`NOCLEAR=0` old) | 11.7 ms (11.9) | 13.5 ms (13.9) | 41.7 (40.6) |
 | Probe 3: no `discard` anywhere (renders wrong) | 9.0 ms | 11.5 ms | 44.1 |
-| No-discard variant where legal (`NODISC=0` old) | 11.1 ms (11.4) | 13.1 ms (13.5) | 42.1 (41.8) |
+| No-discard variant where legal (`NODISC=0` old) | 11.3 ms (11.7) | 13.1 ms (13.5) | 42.1 (41.8) |
+| Opcode dispatch as a switch (`SWITCH=0` old) | 10.5 ms (11.3) | 12.4 ms (13.1) | 43.2 (41.1) |
 
 - **No-discard variant (`RSX_SHADER_INTERP_NODISC=0`: old).** A shader that
   can discard is depth-tested after it runs, so hidden pixels ran the
@@ -97,6 +98,10 @@ smaller targets).
   variants were used and the gain is 0.4 ms. Specialized shaders also
   always contain the alpha-test `discard`, but they are cheap enough that
   it costs little there.
+- **Switch dispatch (`RSX_SHADER_INTERP_SWITCH=0`: old).** DXC kept the
+  opcode `if` chain as compares: an ALU opcode near the end paid about 40
+  of them per interpreted instruction. The generator now also emits the
+  chain as one `switch` (44 cases in the DXIL).
 - **No register clear (`RSX_SHADER_INTERP_NOCLEAR=0`: old).** The clear
   was not the cost the probes suggested; probe 2 still had `discard`.
   Kept, as it is no slower.

@@ -346,6 +346,11 @@ float4 rsx_i_nan0(float4 v) {
 #ifndef RSX_INTERP_WMASK
 #define RSX_INTERP_WMASK 0
 #endif
+// RSX_INTERP_SWITCH (default 1; RSX_SHADER_INTERP_SWITCH=0 off): the opcode chain as a switch. DXC kept the
+// chain as compares; as a switch, forced interpreter: GPU 13.1 -> 12.4 ms, 41.1 -> 43.2 FPS.
+#ifndef RSX_INTERP_SWITCH
+#define RSX_INTERP_SWITCH 1
+#endif
 // RSX_INTERP_FLAT (default 0; RSX_SHADER_INTERP_FLAT=1 on): the register file as one float array.
 #ifndef RSX_INTERP_FLAT
 #define RSX_INTERP_FLAT 0
@@ -974,11 +979,52 @@ def tex_first(body: str) -> str:
     e = body.index(e_mark, t) + len(e_mark)
     alu = body[a:t]
     tex = body[t:e - len(e_mark)] + "        }" + nl
+    chain = (tex.replace("        else if (op == 0x17u", "        if (op == 0x17u", 1)
+             + alu.replace("        if (op == 0x12u) {", "        else if (op == 0x12u) {", 1)
+             + "        else do_alu = 0u;" + nl)
     new = ("#if RSX_INTERP_SHORT" + nl
-           + tex.replace("        else if (op == 0x17u", "        if (op == 0x17u", 1)
-           + alu.replace("        if (op == 0x12u) {", "        else if (op == 0x12u) {", 1)
-           + "        else do_alu = 0u;" + nl + "#else" + nl + body[a:e] + "#endif" + nl)
+           + "#if RSX_INTERP_SWITCH" + nl + op_switch(chain) + "#else" + nl + chain + "#endif" + nl
+           + "#else" + nl + body[a:e] + "#endif" + nl)
     return body[:a] + new + body[e:]
+
+
+def op_switch(chain: str) -> str:
+    """RSX_INTERP_SWITCH: the same opcode chain as one switch, which the compiler can make a jump table."""
+    import re
+    nl = chr(10)
+    out = []
+    first = True
+    cond = re.compile(r"op == (0x[0-9A-F]+u)")
+
+    def cases(line):
+        return " ".join("case %s:" % c for c in cond.findall(line))
+
+    for line in chain.split(nl):
+        if first and line.startswith("        if (op == "):
+            out.append("        switch (op) {")
+            out.append("        " + cases(line) + " {")
+            first = False
+        elif line == "        }":
+            out.append("        } break;")
+        elif line.startswith("        else if (op == ") and line.endswith("{"):
+            out.append("        " + cases(line) + " {")
+        elif line.startswith("        } else if (op == "):
+            stmt = line[line.index(")", line.index("op ==")) + 1:].strip()
+            out.append("        } break;")
+            out.append("        " + cases(line) + " " + stmt + " break;")
+        elif line.startswith("        else if (op == "):
+            head = line[:line.index(")", line.index("op ==")) + 1]
+            stmt = line[len(head):].strip()
+            out.append("        " + cases(line) + " " + stmt + " break;")
+        elif line == "        else do_alu = 0u;":
+            out.append("        default: do_alu = 0u; break;")
+            out.append("        }")
+        else:
+            out.append(line)
+    text = nl.join(out)
+    if "switch (op)" not in text or "default:" not in text:
+        raise SystemExit("op_switch: chain shape changed")
+    return text if text.endswith(nl) else text + nl
 
 
 PROBE7 = """
