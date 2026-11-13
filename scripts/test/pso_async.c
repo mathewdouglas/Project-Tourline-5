@@ -40,6 +40,13 @@ static u32 s_pso_warm_n;
 static ID3D12PipelineState* warm;
 static int shc_async_on(void){return 1;}
 static void ps3_name_thread(const wchar_t* s){(void)s;}
+/* Renderer helpers the queue block calls (background priority, CPU set, frame-wait priority). */
+static int rsx_bg_build_prio(void){return THREAD_PRIORITY_BELOW_NORMAL;}
+static void rsx_bg_affinity(HANDLE t){(void)t;}
+static __declspec(thread) int t_pso_urgent;
+static int pso_wait_priority_on(void){return 1;}
+DWORD_PTR ppu_sched_mask(void){return 0;}   /* no PPU CPU set: helpers keep the default placement */
+volatile long g_spurs_race_scope;   /* the SPURS lane scope the race notification sets (Phase 46) */
 static int pso_warm_dir(char* p,size_t n){snprintf(p,n,"%s",folder);return 1;}
 static int pso_warm_get(u64 hash,ID3D12PipelineState** out){
     int hit=0;AcquireSRWLockShared(&warm_lock);
@@ -158,6 +165,30 @@ int main(int argc,char** argv){
     CHECK(s_pso_queued==1);SetEvent(allow_driver);
     CHECK(SUCCEEDED(poll(1,&pso)));CHECK(pso!=NULL && calls==1);pso->lpVtbl->Release(pso);
     puts("PASS: delayed driver stays off caller; requests coalesce; bytecode and semantic lifetimes are owned");
+    /* 0.1.5: helpers build in parallel; the busiest queued job goes first, a waiting frame before it. */
+    {
+        CHECK(s_pso_demand_n==pso_demand_threads() && s_pso_demand_n>=1);
+        const int builders=1+s_pso_demand_n;
+        ResetEvent(allow_driver);const DWORD old_delay=delay_ms;delay_ms=0;
+        const LONG entered=trace_count;
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d=template;
+        for(int i=0;i<builders;i++){d.SampleMask=0x40+i;CHECK(pso_queue_get(300+i,&d,&pso)==E_PENDING);}
+        began=GetTickCount64();
+        while(trace_count-entered<builders){CHECK(GetTickCount64()-began<3000);Sleep(1);}   /* all inside the driver at once */
+        d.SampleMask=0x51;CHECK(pso_queue_get(400,&d,&pso)==E_PENDING);                    /* older, asked once */
+        d.SampleMask=0x52;for(int i=0;i<11;i++)CHECK(pso_queue_get(401,&d,&pso)==E_PENDING); /* newer, asked 11 times */
+        AcquireSRWLockExclusive(&s_pso_queue_lock);
+        PsoAsyncJob* first=pso_pick_job_locked();PsoAsyncJob* second=pso_pick_job_locked();
+        CHECK(first && second && first->hash==401 && first->uses==11 && second->hash==400);
+        first->state=second->state=1;second->serial=0;                                       /* a frame now waits on 400 */
+        PsoAsyncJob* urgent=pso_pick_job_locked();CHECK(urgent && urgent->hash==400);urgent->state=1;
+        for(u32 i=0;i<PSO_ASYNC_MAX;i++) if(s_pso_jobs[i].state) CHECK(pso_index_find_locked(s_pso_jobs[i].hash)==(int)i);
+        ReleaseSRWLockExclusive(&s_pso_queue_lock);
+        SetEvent(allow_driver);
+        while(g_rsx_shaders_pending){CHECK(GetTickCount64()-began<15000);Sleep(1);}
+        CHECK(s_pso_by_helpers>0);delay_ms=old_delay;
+    }
+    puts("PASS: helper threads build in parallel; busiest first, a waiting frame before it; index matches every slot");
     /* Native validation failure is retained, rather than retried each frame. */
     D3D12_GRAPHICS_PIPELINE_STATE_DESC invalid=template;invalid.SampleDesc.Count=0;
     CHECK(pso_queue_get(2,&invalid,&pso)==E_PENDING);CHECK(FAILED(poll(2,&pso)));LONG failed_calls=calls;
@@ -252,6 +283,11 @@ int main(int argc,char** argv){
     CHECK(s_pso_full>0);SetEvent(allow_driver);began=GetTickCount64();
     while(g_rsx_shaders_pending) {CHECK(GetTickCount64()-began<15000);Sleep(1);}
     CHECK(s_pso_source_bytes==0);
+    /* Slot reuse kept the index exact, and every slot is free or finished again. */
+    AcquireSRWLockExclusive(&s_pso_queue_lock);
+    for(u32 i=0;i<PSO_ASYNC_MAX;i++) if(s_pso_jobs[i].state) CHECK(s_pso_jobs[i].state==3 && pso_index_find_locked(s_pso_jobs[i].hash)==(int)i);
+    CHECK(s_pso_open==PSO_ASYNC_MAX);
+    ReleaseSRWLockExclusive(&s_pso_queue_lock);
     ResetEvent(allow_driver);
     AcquireSRWLockExclusive(&warm_lock);if(warm)warm->lpVtbl->Release(warm);warm=NULL;ReleaseSRWLockExclusive(&warm_lock);
     start_trace=trace_count;began=GetTickCount64();pso_startup_begin();
@@ -263,8 +299,10 @@ int main(int argc,char** argv){
     big.VS.pShaderBytecode=bigvs;big.PS.pShaderBytecode=bigps;
     big.VS.BytecodeLength=big.PS.BytecodeLength=PSO_WARM_CODE_MAX;
     LONG queued=s_pso_queued;
-    for(u64 i=5000;i<5009;i++)CHECK(pso_queue_get(i,&big,&pso)==E_PENDING);
-    CHECK(s_pso_source_bytes<=PSO_ASYNC_SOURCE_MAX && s_pso_queued-queued==8);
+    /* As many maximum-size jobs as the source budget holds, plus one that must be refused. */
+    const u64 fit=PSO_ASYNC_SOURCE_MAX/(2ull*PSO_WARM_CODE_MAX);
+    for(u64 i=5000;i<5000+fit+1;i++)CHECK(pso_queue_get(i,&big,&pso)==E_PENDING);
+    CHECK(s_pso_source_bytes<=PSO_ASYNC_SOURCE_MAX && (u64)(s_pso_queued-queued)==fit);
     free(bigvs);free(bigps);
     _putenv_s("RSX_RACE_PREWARM_WAIT_MS","30000");pso_race_notify("PitSceneRoot.gpb");
     HANDLE loaders[2]={CreateThread(NULL,0,load_script,NULL,0,NULL),CreateThread(NULL,0,load_script,NULL,0,NULL)};

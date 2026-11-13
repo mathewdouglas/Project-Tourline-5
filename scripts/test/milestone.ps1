@@ -59,11 +59,14 @@ function Read-LogTail($t) {
 
 # Polls until the milestone line appears, the process exits or $TimeoutSec
 # passes. Returns the seconds it took, or -1.
-function Wait-Milestone($Proc, $Tail, [string]$Name, [int]$TimeoutSec = 150) {
+# -FailOn: a milestone that means the route went wrong; returns -2 at once
+# (GT5: "GTLife", when a race route's Right press was missed on the top menu).
+function Wait-Milestone($Proc, $Tail, [string]$Name, [int]$TimeoutSec = 150, [string]$FailOn = "") {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
         Read-LogTail $Tail | Out-Null
         if ($Tail.Text -match "\[milestone\] $Name at") { return [Math]::Round($sw.Elapsed.TotalSeconds, 1) }
+        if ($FailOn -and $Tail.Text -match "\[milestone\] $FailOn at") { return -2 }
         $Proc.Refresh(); if ($Proc.HasExited) { return -1 }
         Start-Sleep -Milliseconds 500
     }
@@ -146,7 +149,7 @@ $GT5BootHold = Get-GT5Boot
 # of the full path, since PDIPFS base names are two characters). The
 # difficulty and colour screens read no new file. gt5boot.ps1 always sets these.
 $GT5MilestoneFiles = "installed00.dat,OpeningMovie=MOVIE/tv_451_120285132.pam,Arcade=9/HV/GE,TrackList=9/7B/M3,CarList=9/9U/4I," +
-    "Transmission=5B/PF,RaceLoad=5K/E1,RaceAssets=9/OC/B7,RaceGrid=9/RA/HH,RaceStart=55/04,Options=9/7T/AN"
+    "Transmission=5B/PF,RaceLoad=5K/E1,RaceAssets=9/OC/B7,RaceGrid=9/RA/HH,RaceStart=55/04,Options=9/7T/AN,GTLife=9/UC/F0"
 
 # Arcade > Single Race > Beginner > High Speed Ring > car list > colour >
 # transmission > race. The menu's icon bar shows for about 8 s after

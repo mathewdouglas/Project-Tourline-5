@@ -28,6 +28,17 @@ static void shader_work_done(int preload){InterlockedIncrement(preload?&preload_
 static int shc_async_on(void){return 1;}
 static const char* shader_cache_dir(void){return getenv("RSX_SHADER_CACHE");}
 static void ps3_name_thread(const wchar_t* s){(void)s;}
+/* Renderer pieces the extracted block now calls (background priority and CPU set,
+ * frame-wait priority, frame-thread driver timing, interpreter root signatures). */
+static int rsx_bg_build_prio(void){return THREAD_PRIORITY_BELOW_NORMAL;}
+static void rsx_bg_affinity(HANDLE t){(void)t;}
+static __declspec(thread) int t_pso_urgent;
+static int pso_wait_priority_on(void){return 1;}
+DWORD_PTR ppu_sched_mask(void){return 0;}   /* no PPU CPU set: helpers keep the default placement */
+static __declspec(thread) int t_frame_thread;
+static volatile LONG64 s_hitch_rt_driver_us, s_hitch_rt_driver_calls;
+static u64 interp_rs_hash(const void* rs){(void)rs;return 0;}
+volatile long g_spurs_race_scope;
 static void spack_race_begin(void){}
 static void spack_race_end(void){}
 static volatile LONG s_spack_active=1;

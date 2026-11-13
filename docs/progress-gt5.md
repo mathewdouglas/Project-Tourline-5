@@ -4,6 +4,61 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.5: draw-miss pipelines built in parallel, busiest first (2026-11-14)
+
+**Report.** A player's first race on a new track (0.1.4, debug export from
+process 8756) ran at about 16 FPS while it caught up. The interpreter was
+working (445,235 interpreted draws, 367 left out), but every specialized
+pipeline came from one `pso-worker` thread: 4,854 driver creations, 33.3 s in
+total (156 ms worst). The 256-job queue sat full (`pending=256`,
+`queue_full=204,364`), and 3,621 learning entries were dropped. Frames then
+cost about 40 ms of replay plus 22 ms of GPU.
+
+**Changes** (runtime `rsx_d3d12_backend.c`, inside `PSO_ASYNC_BEGIN/END`):
+
+| Change | Switch (old behaviour) |
+| --- | --- |
+| `pso-demand` helper threads build draw-miss jobs beside the worker: 3 on 8+ logical CPUs, 2 on 6-7, 1 below | `RSX_PSO_DEMAND_THREADS=0` |
+| Helpers never run on the guest PPU threads' CPUs (`ppu_sched_mask`) | `RSX_PSO_DEMAND_AFFINITY=0` |
+| The most-requested queued job is built first; a frame waiting on one still goes before it | `RSX_PSO_PRIORITY_USES=0` |
+| Queue 256 -> 1024 jobs with a hash index; a full queue refuses at once instead of scanning | none |
+| Learning ring 1024 -> 8192, drained up to 512 entries per worker turn | `RSX_PSO_LEARN_BATCH=1` |
+| `[pso-queue]` line every 5 s while building; "Pipeline builders" line in F8 reports | none |
+
+**The affinity line was found by a regression.** Without it, 4 of 6 runs with
+the new code opened GT Life instead of Arcade (0 of 3 old): three more
+below-normal builders shared the guest's CPUs during a cold menu, so the menu
+took the scripted Right press late. The renderer already records the same
+starvation for shader compilers (`rsx_bg_affinity`, opt-in). With helpers
+kept off the PPU CPUs: 0 misses in 4, menu to Arcade 9.1-9.3 s either way.
+
+**Measured.** `gt5boot.ps1 -Route race -Track 3 -FrameTest -SampleDelay 0`
+(a track never raced in this checkout), empty `RSX_SHADER_CACHE` per run,
+the player's settings (21:9, 2x MSAA, 16x aniso), old/new/new/old. "old" is
+0.1.4's builder behaviour through the switches; the larger queue is in both.
+
+| Run | FPS | p99 | Max | Interpreted draws | Built (helpers) | Peak queue |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| old1 | 45.4 | 70.5 ms | 495 ms | 108,791 | 1,906 (0) | 541 |
+| new1 | 44.7 | 71.3 ms | 238 ms | 26,745 | 1,369 (1,050) | 219 |
+| new2 | 46.6 | 68.0 ms | 572 ms | 20,393 | 1,385 (1,071) | 190 |
+| old2 | 46.7 | 53.8 ms | 563 ms | 30,290 | 1,385 (0) | 223 |
+
+Helpers build about 77% of the pipelines and the queue stays shallower;
+interpreted draws fall by a third to three quarters. FPS, p99 and late
+frames do not move beyond run-to-run spread. In these runs the queue never
+filled (`full=0`), unlike the player's, so the saturated case is not yet
+reproduced: the player's own cache and track are the next test.
+
+**Tests.** `scripts/test/pso_async.py` (new section: parallel helpers,
+busiest first, a waiting frame first, index matches every slot; source
+budget check follows `PSO_ASYNC_SOURCE_MAX`) and `scripts/test/race_prewarm.py`
+pass. Both harnesses had stopped compiling after the interpreter and frame-wait
+work; their stubs are updated. Test routes: `GTLife=9/UC/F0` is a milestone,
+and a race route that opens GT Life now stops at once ("route missed Arcade").
+Holding Right longer was tried and rejected: 220 ms still missed, 350 ms
+auto-repeated into the Course Maker.
+
 ## Launcher: setup from the disc folder alone (2026-11-14)
 
 The player now supplies only the extracted disc folder; RPCS3 is no longer a

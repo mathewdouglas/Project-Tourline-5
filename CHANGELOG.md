@@ -3,6 +3,21 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **Pipelines for a new place are built on several threads.** Draws waiting
+  for a pipeline were served by one thread; up to three helper threads now
+  share the work (kept off the game's own CPUs), the pipelines the most draws
+  wait on go first, and the queue holds 1024 instead of 256. In cold-cache
+  tests the interpreter stands in for far fewer draws. Switches:
+  `RSX_PSO_DEMAND_THREADS=0`, `RSX_PSO_PRIORITY_USES=0`,
+  `RSX_PSO_DEMAND_AFFINITY=0`.
+
+### Fixed
+- Learned pipelines are no longer dropped on a busy first visit, so the next
+  visit prepares all of them (`RSX_PSO_LEARN_BATCH=1` restores the old pace).
+
 ## [0.1.4] - 2026-11-14
 
 Sound is back, setup needs only your game folder, and the first visit to a

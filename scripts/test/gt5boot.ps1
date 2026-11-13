@@ -77,8 +77,11 @@ $tl = New-LogTail "$dir\$Tag.out"
 $limit = if ($Fresh -or $FreshSave) { 600 } else { 240 }
 $ms = if ($Movie) { "installed00.dat" } else { "MusicDecode" }
 $tm = Wait-Milestone $p $tl $ms $limit
+$failOn = if ($Route -ne "menu") { "GTLife" } else { "" }   # a race route that opened GT Life missed Arcade
 if ($tm -lt 0) { "$ms not reached (log: $dir\$Tag.out)" }
-elseif ($ShotsFrom -and ($t2 = Wait-Milestone $p $tl $ShotsFrom $limit) -lt 0) { "$ShotsFrom not reached (log: $dir\$Tag.out)" }
+elseif ($ShotsFrom -and ($t2 = Wait-Milestone $p $tl $ShotsFrom $limit -FailOn $failOn) -lt 0) {
+    if ($t2 -eq -2) { "route missed Arcade: GT Life opened (log: $dir\$Tag.out)" } else { "$ShotsFrom not reached (log: $dir\$Tag.out)" }
+}
 else {
     "$ms at $tm s"; if ($ShotsFrom) { "$ShotsFrom $t2 s after that" }
     if ($FrameTest) { Start-Sleep -Seconds $SampleDelay }

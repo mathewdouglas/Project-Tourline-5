@@ -222,6 +222,13 @@ live: see Phase 36. `PAD_FILE_LOG=2` logs every file stat/open, for finding a
 screen's marker file. A private test build can be linked from another
 checkout's objects without rebuilding the lifted code: Phase 36 notes.
 
+**Parallel draw-miss pipelines (0.1.5, in progress).** `pso-demand` helpers
+build queued pipelines beside the `pso-worker`, busiest first, off the PPU
+CPUs; queue 1024 with a hash index; learning ring drained in batches.
+Switches `RSX_PSO_DEMAND_THREADS`, `_PRIORITY_USES`, `_DEMAND_AFFINITY`,
+`_LEARN_BATCH`. Never let a new builder thread share the guest PPU CPUs:
+it delays menus. See progress-gt5.md.
+
 **Disc-only setup (2026-11-14).** With only the disc folder, the launcher
 downloads the pinned official RPCS3 (`rpcs3_*` in `config/pt5-player.json`)
 to `<storage>/tools`, installs `INSDIR/DATA000.PKG` by pressing Install through
