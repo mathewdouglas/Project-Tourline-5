@@ -988,6 +988,16 @@ favours FMA (+2.2 FPS mean), but main's Phase 44 pairs went the other way
 (50.9 vs 52.1) and the run-to-run spread is ~5 FPS: no default change. The
 per-frame GPU drain at replay start is 0.0-0.9 ms a frame in these races;
 not worth the risk of overlapping frames yet.
+
+## Unused SPU registration names (2026-11-12)
+
+The public CAPE `vmdetect` YARA rule matches MAC-address fragments inside
+ordinary generated SPU function names in the v0.1.2 EXE. The local lift now
+removes the unused name column from SPU registration tables, retaining all
+function symbols, code and address/pointer pairs. No runtime patch changes.
+Evidence, validation and the distinction from unresolved vendor antivirus
+labels: [release-av.md](release-av.md). Existing builds need an SPU re-lift.
+
 ## Phase 45 - Eiger Nordwand in rain: the changes combined, and what its frame waits on (2026-11-12)
 
 Request: measure on Eiger Nordwand with weather change, a heavier track
