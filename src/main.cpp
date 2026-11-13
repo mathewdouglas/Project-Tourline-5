@@ -801,6 +801,12 @@ static int locate_project_root(void)
  *   4's lanes (the car list's render pass) instead of 0 and 1 (GT5 Phase 46);
  *   =0 the fixed SPURS_LANE_CPU_WIDS set.
  * - RSX_SHADER_ASYNC=1: shaders compile on background threads (Phase 65).
+ * - GT5 only: RSX_SHADER_INTERP=1 and RSX_SHADER_INTERP_VP=1, the shader
+ *   interpreters stand in for draws whose pipeline is still being built,
+ *   with their pipelines created off the frame and kept on disk
+ *   (RSX_SHADER_INTERP_PSO_ASYNC=1, RSX_SHADER_INTERP_PSO_DISK=1). Cold
+ *   cache: 90% fewer draws left out, offscreen waits 1.2 s -> 0.2 s
+ *   (docs/progress-gt5.md, "C"). RSX_SHADER_INTERP=0 turns them off.
  * The settings file, loaded earlier, has already set any it covers. */
 static void apply_env_defaults()
 {
@@ -832,6 +838,10 @@ static void apply_env_defaults()
         {"SPURS_LANE_STAGGER_MS", "0",               stagger},
         {"SPURS_LANE_PIN_SCOPE", "1",                gt5 && race_scope},
         {"RSX_SHADER_ASYNC",     "1",                true},
+        {"RSX_SHADER_INTERP",    "1",                gt5},
+        {"RSX_SHADER_INTERP_VP", "1",                gt5},
+        {"RSX_SHADER_INTERP_PSO_ASYNC", "1",         gt5},
+        {"RSX_SHADER_INTERP_PSO_DISK",  "1",         gt5},
     };
     for (const auto& d : defaults)
         if (d.when && d.value[0] && !getenv(d.name)) _putenv_s(d.name, d.value);

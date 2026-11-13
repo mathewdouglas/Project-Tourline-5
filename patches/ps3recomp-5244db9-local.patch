@@ -33272,10 +33272,10 @@ index 00000000..67dff33a
 +#endif
 diff --git a/libs/video/rsx_fp_interp_backend.inc b/libs/video/rsx_fp_interp_backend.inc
 new file mode 100644
-index 00000000..8fee43b2
+index 00000000..7d3b7a29
 --- /dev/null
 +++ b/libs/video/rsx_fp_interp_backend.inc
-@@ -0,0 +1,1715 @@
+@@ -0,0 +1,1716 @@
 +/* Fragment-interpreter replay. Included at the bottom of rsx_d3d12_backend.c
 + * so it can call that file's static helpers. RSX_SHADER_INTERP unset or 0
 + * returns before any allocation, signature, or binding. This file also owns
@@ -33433,8 +33433,9 @@ index 00000000..8fee43b2
 +
 +/* Per-frame interpreter budget. Interpreted draws cost several times a specialized shader on the GPU
 + * (Phase 216 gap 5), so a burst of pending shaders (an empty cache) can push the frame past the vblank.
-+ * RSX_SHADER_INTERP_BUDGET is a GPU frame-time target in ms (default 14; 0 = unlimited, the earlier
-+ * behaviour). The number of pending draws the interpreter may take per frame adapts to the last frame's
++ * RSX_SHADER_INTERP_BUDGET is a GPU frame-time target in ms (unset or 0 = unlimited, the default since
++ * the interpreter got about 3x cheaper: on a cold cache the 14 ms target left out 11,000-12,000 draws a run,
++ * unlimited 1,700-1,900, with no more hitches; RSX_SHADER_INTERP_BUDGET=14 restores the earlier default). The number of pending draws the interpreter may take per frame adapts to the last frame's
 + * measured GPU time (RSX_GPU_TIME): halved, from what was used, when the frame is over the target;
 + * raised by an eighth (at least 8) when it is under 80% of it. Draws past the allowance are left out
 + * exactly as without the interpreter and appear once their shader is ready. Without GPU timestamps
@@ -33449,8 +33450,8 @@ index 00000000..8fee43b2
 +{
 +    if (s_ib_mode < 0) {
 +        const char* e = getenv("RSX_SHADER_INTERP_BUDGET");
-+        double t = e && *e ? atof(e) : 14.0;
-+        s_ib_mode = (e && e[0] == '0' && (!e[1] || e[1] == '.') && t == 0.0) ? 0 : 1;
++        double t = e && *e ? atof(e) : 0.0;
++        s_ib_mode = t > 0.0;
 +        if (!(t > 0.5 && t < 1000.0)) t = 14.0;
 +        s_ib_target = t;
 +        const char* st = getenv("RSX_SHADER_INTERP_BUDGET_START");

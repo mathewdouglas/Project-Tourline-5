@@ -4,7 +4,7 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
-## C: the interpreter as the stand-in for pending draws, cold cache (2026-11-14)
+## C: the interpreter stands in for pending draws by default; cold cache, 90% fewer draws left out (2026-11-14)
 
 The aim is for mode 1 (`RSX_SHADER_INTERP=1 RSX_SHADER_INTERP_VP=1`: interpret
 only the draws whose specialized pipeline is still pending) to be the
@@ -52,6 +52,23 @@ loading and race start.
   leaves out 8,086-8,995 and 3,086-3,262, about 30% fewer. Most of the
   rest are window-sized draws that the GPU budget denies during loading
   bursts.
+- **GPU budget off by default (`RSX_SHADER_INTERP_BUDGET=14`: old).** The
+  budget was sized when the interpreter cost three times what it does
+  now. Unlimited, a cold run left out 1,700-1,900 draws instead of
+  11,000-12,000 (90% fewer than with the interpreter off), with no more
+  hitches: 8-9 renderer-long frames, 1.06-1.10 s excess, worst 384-400 ms.
+- **Mode 1 is GT5's default.** `src/main.cpp` sets `RSX_SHADER_INTERP=1`,
+  `RSX_SHADER_INTERP_VP=1`, `RSX_SHADER_INTERP_PSO_ASYNC=1` and
+  `RSX_SHADER_INTERP_PSO_DISK=1` unless they are already set;
+  `RSX_SHADER_INTERP=0` turns the interpreters off. Validated with no
+  interpreter variables set:
+  - warm cache, High Speed Ring FrameTest: 56.0 FPS, p99 27.7 ms (no
+    regression; 7,122 draws were interpreted while their pipelines
+    loaded);
+  - cold cache, car list: 788 draws left out; the menu, list and car are
+    correct in the shots;
+  - cold cache, race: about 2,200 draws left out; the grid and the
+    introduction are correct.
 - **The hitch log's `pending` column is `g_rsx_shader_busy`** (compiles in
   flight, interpreter jobs included), not draws left out. Left-out draws
   are `[interp-pending] replay_fp/replay_vp` with
