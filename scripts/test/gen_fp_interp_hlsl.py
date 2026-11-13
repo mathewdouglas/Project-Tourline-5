@@ -312,7 +312,13 @@ float4 rsx_i_nan0(float4 v) {
     return (u > 0x7F800000u) ? (float4)0 : v;
 }
 
-float4 rsx_i_export(uint half, uint target, float4 r[48], float4 h[48]) {
+// Register-file size class (the host picks the smallest that covers the program's registers and exports).
+#ifndef RSX_INTERP_REGS
+#define RSX_INTERP_REGS 48
+#endif
+#define RSX_INTERP_REGM ((uint)RSX_INTERP_REGS - 1u)
+
+float4 rsx_i_export(uint half, uint target, float4 r[RSX_INTERP_REGS], float4 h[RSX_INTERP_REGS]) {
     uint idx = 0;
     if (half != 0u) {
         if (target == 1u) idx = 4u;
@@ -323,6 +329,7 @@ float4 rsx_i_export(uint half, uint target, float4 r[48], float4 h[48]) {
         else if (target == 2u) idx = 3u;
         else if (target == 3u) idx = 4u;
     }
+    idx = min(idx, RSX_INTERP_REGM);
     return half != 0u ? h[idx] : r[idx];
 }
 
@@ -343,13 +350,13 @@ RSXInterpOut main(RSXInterpIn input) {
 #else
 float4 main(RSXInterpIn input) : SV_TARGET {
 #endif
-    float4 r[48];
-    float4 h[48];
+    float4 r[RSX_INTERP_REGS];
+    float4 h[RSX_INTERP_REGS];
     float4 cc0 = 0, cc1 = 0;
     uint hdr = rsx_ip_hdr;
     // Header word 11: how many registers the program can read (0 = all 48).
     uint nregs = rsx_iprog.Load(hdr + 44u);
-    if (nregs == 0u || nregs > 48u) nregs = 48u;
+    if (nregs == 0u || nregs > (uint)RSX_INTERP_REGS) nregs = (uint)RSX_INTERP_REGS;
     [loop] for (uint zi = 0u; zi < nregs; zi++) { r[zi] = 0; h[zi] = 0; }
     uint instr_off = rsx_iprog.Load(hdr + 0u);
     uint instr_count = rsx_iprog.Load(hdr + 4u);
@@ -484,7 +491,7 @@ float4 main(RSXInterpIn input) : SV_TARGET {
                 uint pr = (pk >> 11) & 7u;
                 uint sw = (pk >> 14) & 255u;
                 float4 vv = 0;
-                if (ty == 0u) vv = (sh != 0u ? h[min(ix, 47u)] : r[min(ix, 47u)]);
+                if (ty == 0u) vv = (sh != 0u ? h[min(ix, RSX_INTERP_REGM)] : r[min(ix, RSX_INTERP_REGM)]);
                 else if (ty == 1u) {
                     uint id = in_src;
                     if (id == 0u) vv = wpos;
@@ -605,7 +612,7 @@ float4 main(RSXInterpIn input) : SV_TARGET {
             else if (scale == 6u) v /= 4.0;
             else if (scale == 7u) v /= 8.0;
             if (osat != 0u) v = saturate(v);
-            uint di = min(dest, 47u);
+            uint di = min(dest, RSX_INTERP_REGM);
             float4 cur = dhalf != 0u ? h[di] : r[di];
             float4 nxt = cur;
             float4 pm = 1;
