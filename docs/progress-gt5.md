@@ -1027,6 +1027,85 @@ function symbols, code and address/pointer pairs. No runtime patch changes.
 Evidence, validation and the distinction from unresolved vendor antivirus
 labels: [release-av.md](release-av.md). Existing builds need an SPU re-lift.
 
+## Phase 46 - Car list: workload 4's lanes pinned outside races (2026-11-12)
+
+Goal: a faster Arcade car list. Built in full from `main` (6066fe8) against a
+private runtime (5244db9 + the tracked patch); the root checkout now holds
+another branch, so its objects were not reused.
+
+**Render-body loops merged (measured, not kept).** The car list's frame waits
+on workload 4 (body `0x0196FF40`). Its hot functions are each one lifted
+function looping on itself (`0xB240`, `0xAD30`, `0xA408`, `0xC5E0`; `0x9500`
+with `0x9458`/`0x94E0`), so `scripts/spu_region.py` can take them one at a
+time. States were captured at five routine entries at the car list (`clcap`:
+`0xB210`, `0xC5A0`, `0xAB00`, `0x9400`, `0xA3C0`, 8 each;
+`spu_capture_patch.py` now takes several addresses, each with its own
+schedule). `spu_loop_bench.py` now stops a routine that leaves through an
+indirect branch (`--ranges entry:lo:hi`), builds the real
+`src/gt5p_spu_native.c` in, and reports per routine. All variants were exact.
+Three alternating rounds:
+
+| Routine | Region speed |
+| --- | --- |
+| `0xAB00` (`0xAD30`) | 1.14x |
+| `0xA3C0` (`0xA408`) | 1.11x |
+| `0xB210` (`0xB240`) | 1.08x |
+| `0xC5A0` (`0xC5E0`) | 1.01x |
+| `0x9400` (`0x9500` loop) | 0.86x |
+
+In the game, the three helping regions within one boot (`GT5P_SPU_REGION=3`,
+`crab1`/`crab2`): workload 4 lane CPU per run 1.02x and 0.97x, frames -5.5%
+and +0.8%. Not measurable: removed from `spu_regions`.
+
+**Where workload 4's lanes spend their time** (`cprof1`, this build): body
+64% (`0xB240` 23%, `0xAD30` 8.7%, `0xF970` 7.1%, `0xC5E0` 5%, `0xA408` 4%),
+runtime 35% (DLL samples 7.9%, `spu_indirect_branch` 7.2%,
+`spu_drain_call_impl` 5.1%, `spu_lookup_fast` 4.1%, `mfc_do_transfer` 3.9%).
+
+**Combinations at the car list** (interleaved, 3 rounds, mean of the last
+three 5 s windows; 300 = 60 FPS): default 215, FMA copy
+(`GT5P_SPU_FMA=b0196FF40`) 247 (+15%), workload 4 pinned
+(`SPURS_LANE_CPU_WIDS=4`) 254 (+18%), both 267 (+24%).
+
+**Pinning within one boot.** `SPURS_LANE_PIN_AB=3` (runtime) alternates two
+pinning sets each lane-timing window: `SPURS_LANE_PIN_AB_A` (default `4`)
+and `_B` (default `0,1`, the normal set); `[lane-cyc] ... pin=` names the
+active one. Lane i of workload w goes to core i, hardware thread w mod 2, so
+workloads 0 and 4 would share CPUs: set A leaves 0 and 1 free.
+
+| Where | Boot 1 | Boot 2 |
+| --- | --- | --- |
+| Car list (`pabc`) | -8.2% frame time | -9.1% |
+| High Speed Ring (`pabh`) | -5.3% median, +1.6% mean | +7.0% median, +2.3% mean |
+| Eiger Nordwand (`pabe`) | +0.9% / mean +1.9% | -0.8% / mean +1.7% |
+
+**Change: pinning follows the race scope** (default for GT5). With
+`SPURS_LANE_PIN_SCOPE=1` (runtime) and `SPURS_LANE_PIN=2`, each lane run picks
+its set from `g_spurs_race_scope`, which the renderer sets from the scope
+labels it already reads (`RaceLoad`/`RaceAssets` on, `Arcade`/`TrackList`/
+`CarList` off; `[spurs-lane] race scope on|off`): `SPURS_LANE_PIN_RACE`
+(default `0,1`) in races, `SPURS_LANE_PIN_MENU` (default `4`) elsewhere.
+`src/main.cpp` sets it for GT5 with race scope (`apply_env_defaults` table);
+`SPURS_LANE_PIN_SCOPE=0` restores the fixed set. A lane only calls
+`SetThreadAffinityMask` when its set changes. Interleaved checks:
+
+| Run | Scope pinning | Fixed set |
+| --- | --- | --- |
+| Car list 1 / 2 / 3 (frames / 5 s) | 226 / 239 / 195 | 208 / 202 / 181 |
+| High Speed Ring 1 / 2 (FPS) | 49.0 / 52.1 | 52.1 / 47.9 |
+
+Car list +8 to +18%; High Speed Ring within its spread. Runtime changes are in
+the main patch (applied to a fresh 5244db9: identical tree, reverse check
+passes) and in `patches/incremental/lane-pin-scope.patch`.
+
+**Not changed:** the FMA copy stays opt-in (hardware `fmaf` may round
+differently); with it the car list reached 267 frames / 5 s. Scope labels are
+measured for Arcade only: other modes count as outside a race, so their races
+would pin workload 4 (in Arcade races that measured within noise).
+
+**Next:** the runtime's indirect-branch dispatch (~16% of workload 4's lane
+time: `spu_indirect_branch`, `spu_drain_call_impl`, `spu_lookup_fast`).
+
 ## Phase 45 - Eiger Nordwand in rain: the changes combined, and what its frame waits on (2026-11-12)
 
 Request: measure on Eiger Nordwand with weather change, a heavier track
