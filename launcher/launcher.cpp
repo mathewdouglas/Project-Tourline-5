@@ -23,6 +23,7 @@
 #include "pt5_launcher_config.h"
 #include "storage_link.h"
 #include "../src/pt5_restart.h"
+#include "crash_report.h"
 
 namespace fs = std::filesystem;
 struct Failure { std::wstring message; };
@@ -251,6 +252,50 @@ static DWORD run(const fs::path& exe, const std::wstring& args, const fs::path& 
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
     }
     DWORD code = 1; GetExitCodeProcess(process.h, &code); return code;
+}
+// After a crash, freeze or error exit: offer a report (crash_report.h). False
+// when there is nothing to report or reporting is off, so the caller keeps
+// its old message. Silent setups (PT5_SETUP_UI=0) save the ZIP without asking.
+static bool offer_report(DWORD code) {
+    if (!crash_report::enabled()) return false;
+    const auto a = crash_report::analyze(code, crash_report::read_tail(data/L"logs/play.err", 32ull << 20));
+    if (a.kind == crash_report::Kind::none) return false;
+    if (silent_errors) {
+        try {
+            const auto r = crash_report::write(data, a);
+            fwprintf(stderr, L"The game %ls. Report saved: %ls\n", crash_report::widen(a.what).c_str(), r.zip.c_str());
+            if (const auto url_file = env(L"PT5_CRASH_REPORT_URL_FILE"); !url_file.empty())
+                std::ofstream(fs::path(url_file), std::ios::binary) << r.url;
+        } catch (const std::exception&) { fwprintf(stderr, L"The game stopped; the report could not be saved.\n"); }
+        return true;
+    }
+    const std::wstring heading = a.kind == crash_report::Kind::crash ? L"Gran Turismo 5 crashed"
+                               : a.kind == crash_report::Kind::freeze ? L"Gran Turismo 5 froze"
+                               : L"Gran Turismo 5 stopped with an error";
+    const std::wstring body = L"The game " + crash_report::widen(a.what) + L".\n\n"
+        L"A report helps get this fixed. It holds the game's logs from this run, your settings and basic PC "
+        L"details (Windows version, processor, graphics card, memory). Your Windows user name, profile folder "
+        L"and PC name are removed, and no game files, saves or screenshots are included.\n\n"
+        L"Nothing is sent automatically: GitHub opens in your browser with a summary filled in, and you "
+        L"attach the report file and submit it yourself.";
+    TASKDIALOG_BUTTON buttons[] = {
+        {100, L"Report this on GitHub\nSaves the report, shows it in Explorer and opens a new GitHub issue (needs a GitHub account)."},
+        {101, L"Save the report only\nSaves it and shows it in Explorer, to share another way."}};
+    TASKDIALOGCONFIG td{}; td.cbSize = sizeof td;
+    td.dwFlags = static_cast<TASKDIALOG_FLAGS>(TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION);
+    td.pszWindowTitle = L"Project Tourline 5 - problem report";
+    td.pszMainInstruction = heading.c_str(); td.pszContent = body.c_str();
+    td.cButtons = 2; td.pButtons = buttons; td.dwCommonButtons = TDCBF_CLOSE_BUTTON; brand(td);
+    int choice = IDCLOSE;
+    if (FAILED(TaskDialogIndirect(&td, &choice, nullptr, nullptr)) || (choice != 100 && choice != 101)) return true;
+    crash_report::Report r;
+    try { r = crash_report::write(data, a); }
+    catch (const std::exception&) { fail(L"The report could not be saved. The game's logs are in:\n\n" + (data/L"logs").wstring()); }
+    const std::wstring select = L"/select," + quote(r.zip);
+    ShellExecuteW(nullptr, L"open", L"explorer.exe", select.c_str(), nullptr, SW_SHOWNORMAL);
+    if (choice == 100)
+        ShellExecuteW(nullptr, L"open", crash_report::widen(r.url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    return true;
 }
 static fs::path decrypt_executable(const fs::path& installed, const fs::path& temporary, const fs::path& rpcs3) {
     const auto original = installed / L"USRDIR/EBOOT.BIN";
@@ -510,6 +555,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         for (;;) {
             const auto code = run(engine, quote(data/L"input/EMAIN.ELF"), data, L"play");
             if (code == pt5_restart::exit_code) continue;
+            if (offer_report(code)) { if (code) return 1; break; }
             if (code) fail(L"The game exited with code " + std::to_wstring(code) + L". Logs are in:\n\n" + (data/L"logs").wstring());
             break;
         }

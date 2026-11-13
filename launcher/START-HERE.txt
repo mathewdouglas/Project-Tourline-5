@@ -42,6 +42,13 @@ the engine and its DLLs. The player folder itself can also live on your SSD.
 The internal gt5.exe is the engine; tourline5.exe is the normal entry point.
 Logs: selected-storage\logs\play.out and play.err. Setup failures: setup.err.
 
+If the game crashes, freezes or stops with an error, tourline5.exe offers a
+problem report: a ZIP of the logs, settings and basic PC details, saved under
+selected-storage\logs\reports. Your Windows user name, profile folder and PC
+name are removed; no game files, saves or screenshots are included. "Report
+this on GitHub" opens a new issue with a summary filled in; attach the ZIP and
+submit it yourself. Nothing is sent automatically.
+
 tourline5.exe --check validates the saved setup and engine without launching
 the game or opening dialogs. --setup, --choose-storage and --open-data are
 the command-line equivalents of the shortcuts above.

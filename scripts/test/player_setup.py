@@ -49,6 +49,20 @@ int main(int argc, char** argv) {
         if(!std::filesystem::exists(p)) {std::ofstream(p)<<"restarted";return pt5_restart::exit_code;}
     }
     if(const char* p=getenv("PT5_TEST_COUNT")) {std::ofstream(p,std::ios::app)<<"run\n";}
+    // Crash-report fixtures: the lines the real game writes, then its exit.
+    char profile[512]="", user[128]="";
+    GetEnvironmentVariableA("USERPROFILE",profile,sizeof profile); GetEnvironmentVariableA("USERNAME",user,sizeof user);
+    if(getenv("PT5_TEST_CRASH")) {
+        fprintf(stderr,"[milestone] RaceStart\nloading %s\\shadercache for %s\n",profile,user);
+        fprintf(stderr,"\n[GT5P] ACCESS VIOLATION: read at host 0x10 (thread 5)\n[GT5P]   fault chain: func_00123456 func_00ABCDEF\n");
+        fflush(stderr); ExitProcess(0xC0000005);
+    }
+    if(getenv("PT5_TEST_FREEZE")) {
+        fprintf(stderr,"[milestone] RaceStart\n[stall] no present for 3001 ms after 900 presents\n[stall] no present for 11007 ms after 900 presents\n[stall] lockline holder tid=0 held 0 ms\n");
+        return 0;
+    }
+    if(getenv("PT5_TEST_HITCH")) { fprintf(stderr,"[stall] no present for 3001 ms after 900 presents\n"); return 0; }
+    if(const char* c=getenv("PT5_TEST_EXIT")) { fprintf(stderr,"fatal: something went wrong\n"); return atoi(c); }
     return 0;
 }
 ''')
@@ -377,4 +391,64 @@ elf = new_storage / 'input/EMAIN.ELF'; elf.write_bytes(b'changed'); run('--check
 run('--check')
 assert snapshot(disc) == original_disc and snapshot(installed) == original_data
 print('PASS: engine/executable tampering rejected; sources remain unchanged')
+
+# Crash reports (launcher/crash_report.h). PT5_SETUP_UI=0 saves without a dialog.
+import urllib.parse
+import zipfile
+reports = new_storage / 'logs/reports'
+url_file = WORK / 'issue-url.txt'
+
+
+def report_run(extra, success, kind):
+    before = set(reports.glob('*.zip')) if reports.exists() else set()
+    url_file.unlink(missing_ok=True)
+    run(success=success, extra={'PT5_CRASH_REPORT_URL_FILE': str(url_file), **extra})
+    made = sorted(set(reports.glob('*.zip')) - before) if reports.exists() else []
+    if kind is None:
+        assert not made and not url_file.exists(), made
+        return None
+    assert len(made) == 1 and made[0].name.startswith(kind + '-'), made
+    return made[0]
+
+
+def secrets():
+    return [s for s in (os.environ.get('USERPROFILE'), os.environ.get('USERNAME'), os.environ.get('COMPUTERNAME')) if s]
+
+
+crash = report_run({'PT5_TEST_CRASH': '1'}, False, 'crash')
+with zipfile.ZipFile(crash) as z:
+    assert z.testzip() is None
+    names = set(z.namelist())
+    assert {'README.txt', 'summary.md', 'system.txt', 'play.err', 'play.out', 'gt5p_settings.toml', 'setup.ini'} <= names, names
+    raw = b''.join(z.read(n) for n in names)
+    err = z.read('play.err').decode()
+    assert '%USERPROFILE%' in z.read('setup.ini').decode('utf-8'), 'setup.ini must be UTF-8 and scrubbed'
+for s in secrets():
+    for enc in ('utf-8', 'utf-16-le'):
+        assert s.lower().encode(enc) not in raw.lower(), f'personal name left in report ({enc}): ' + s
+assert '%USERPROFILE%\\shadercache for <user>' in err, err
+url = url_file.read_text()
+assert url.startswith('https://github.com/mathewdouglas/Project-Tourline-5/issues/new?title=') and len(url) <= 7000
+query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+assert query['title'] == ['Crash: crashed (access violation, 0xC0000005)'], query['title']
+body = query['body'][0]
+assert 'func_00123456' in body and '[milestone] RaceStart' in body and crash.name in body
+for s in secrets():
+    assert s.lower() not in url.lower()
+print('PASS: crash: report saved, names scrubbed, issue link carries the fault chain')
+
+freeze = report_run({'PT5_TEST_FREEZE': '1'}, True, 'freeze')
+query = urllib.parse.parse_qs(urllib.parse.urlsplit(url_file.read_text()).query)
+assert query['title'] == ['Freeze: froze (no new picture for 11 s)'], query['title']
+report_run({'PT5_TEST_HITCH': '1'}, True, None)
+report_run({'PT5_TEST_FREEZE': '1', 'PT5_CRASH_FREEZE_MS': '20000'}, True, None)
+print('PASS: freeze of 11 s reported; a 3 s hitch and a raised threshold are not')
+
+report_run({'PT5_TEST_EXIT': '3'}, False, 'error')
+query = urllib.parse.parse_qs(urllib.parse.urlsplit(url_file.read_text()).query)
+assert query['title'] == ['Error exit: exited with code 3 (abort) (0x00000003)'], query['title']
+assert 'fatal: something went wrong' in query['body'][0]
+report_run({'PT5_TEST_CRASH': '1', 'PT5_CRASH_REPORT': '0'}, False, None)
+report_run({}, True, None)
+print('PASS: error exit reported; PT5_CRASH_REPORT=0 and a clean exit make no report')
 print('Evidence:', WORK)

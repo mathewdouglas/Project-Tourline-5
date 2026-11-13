@@ -871,6 +871,61 @@ The picture and race state match. The car list, out of sample, is about +2.5%
 (both PGO runs above both normal ones). Release builds: see the 2026-11-13 entry and
 pgo.md, "Releases".
 
+## Crash reports from the launcher (2026-11-12)
+
+After each run that is not an F1 restart, `tourline5.exe` reads the end of
+`logs/play.err` and the exit code (`launcher/crash_report.h`):
+
+- **crash**: an exception exit code (`0xC0000005` and the rest of the
+  `0xC...` range, C++ exception, breakpoint) or the game's own
+  `[GT5P] ACCESS VIOLATION` / `[GT5P] EXCEPTION` lines from `report_crash`;
+- **freeze**: a `[stall] no present for N ms` line with N of at least
+  10 s (`PT5_CRASH_FREEZE_MS`), even after a clean exit. The first 3 s
+  stall dump alone is not one;
+- **error exit**: any other non-zero code.
+
+A task dialog says which, what a report holds, and offers "Report this on
+GitHub" or "Save the report only" (Close does nothing).
+
+- **The ZIP**: `logs/reports/<kind>-<time>.zip` holds `README.txt`,
+  `summary.md`, `system.txt` (Windows build, CPU, RAM, each GPU with its
+  driver), `play.err`/`play.out` (first 256 KB and last 3 MB), the settings
+  and `setup.ini`.
+- **Scrubbing**: every file has the profile path (either slash) replaced by
+  `%USERPROFILE%`, and the user and PC names, as whole words, by
+  `<user>`/`<pc>`. UTF-16 files (`setup.ini`) are converted to UTF-8 first,
+  or they would pass unscrubbed: the first test run caught that.
+- **GitHub**: the report is shown in Explorer, and
+  `PT5_ISSUES_URL` (CMake cache; default this repo's `issues/new`, or
+  `PT5_CRASH_REPORT_URL` at run time) opens with the title and a summary:
+  what happened, a "what were you doing?" prompt, the last `[milestone]`,
+  version and revision, the PC lines and up to 24 log lines. Shortened until
+  the link is at most 7000 characters. The player attaches the ZIP and
+  submits; nothing is uploaded by us. The repository must be public with
+  issues enabled.
+- **Switches**: `PT5_CRASH_REPORT=0` restores the old "exited with code N"
+  message. With `PT5_SETUP_UI=0` the ZIP is saved without a dialog and its
+  path printed (`PT5_CRASH_REPORT_URL_FILE` writes the link, for tests).
+  `GT5P_CRASH_TEST=<ms>` (game) raises an access violation after that delay.
+- `src/pt5_zip.h` is the ZIP writer the F8 debug export already used, now
+  shared.
+
+Checked:
+
+- `scripts/test/player_setup.py`, with fixture engine cases:
+  - a crash: ZIP contents; no user, profile or PC name in it as UTF-8 or
+    UTF-16; the issue title, fault chain and milestone in the link;
+  - an 11 s freeze (reported), a 3 s hitch and a raised threshold (not);
+  - exit code 3 ("abort");
+  - `PT5_CRASH_REPORT=0`, and a clean exit (no report).
+- The real launcher and game: `GT5P_CRASH_TEST=25000` gave a 1.5 KB link
+  titled "Crash: crashed (access violation, 0xC0000005)", carrying the real
+  fault chain and host chain, with nothing personal in the ZIP. The player's
+  logs were restored after.
+- A capture of the dialog, closed with Close: no ZIP written.
+
+Not checked: clicking the GitHub button, which opens a browser.
+
 ## Bitdefender "Gen:Variant.Lazy" on gt5.exe: located and changed (2026-11-12)
 
 Release 0.1.2's ZIP had 7/64 VirusTotal detections: Bitdefender

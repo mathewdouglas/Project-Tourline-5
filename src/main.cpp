@@ -930,6 +930,21 @@ int main(int argc, char* argv[])
     if (!getenv("GT5P_NO_FAULT_COMMIT"))
         AddVectoredExceptionHandler(1, fault_commit);
     SetUnhandledExceptionFilter(report_crash);
+    /* GT5P_CRASH_TEST=<ms>: after that delay a host thread raises a write
+     * access violation at a host address outside guest memory (a real write
+     * to a low address could be taken by the guest-pointer trap), to try the
+     * crash path end to end: report_crash, then the launcher's crash report.
+     * Off unless set. */
+    if (const char* ct = getenv("GT5P_CRASH_TEST")) {
+        static DWORD delay_ms = (DWORD)strtoul(ct, nullptr, 10);
+        CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
+            Sleep(delay_ms);
+            fprintf(stderr, "[GT5P] GT5P_CRASH_TEST: crashing on purpose\n");
+            const ULONG_PTR info[2] = {1, (ULONG_PTR)0xDEAD0000DEAD0000ull};
+            RaiseException(EXCEPTION_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 2, info);
+            return 0;
+        }, nullptr, 0, nullptr);
+    }
 #endif
 
     /* Move the HLE-visible GCM window (labels, control register, and the 16 KB

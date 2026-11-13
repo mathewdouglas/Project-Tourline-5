@@ -105,6 +105,13 @@ another build. Player builds become PGO with `clean_build.py --profile`
 the build fails if hot functions lost their counts). `pgo.py gen`/`use`
 refuse a `generated/` missing a post-lift step. See [docs/pgo.md](docs/pgo.md).
 
+**Crash reports (launcher).** After a crash, a freeze of 10 s or more, or an
+error exit, `tourline5.exe` offers a scrubbed ZIP under
+`<storage>/logs/reports` and a pre-filled GitHub issue
+(`launcher/crash_report.h`; `PT5_CRASH_REPORT=0` off). `GT5P_CRASH_TEST=<ms>`
+crashes the game on purpose. Test: `scripts/test/player_setup.py` (end).
+See progress-gt5.md, 2026-11-12.
+
 **Release 0.1.3** (tag `v0.1.3`) is 0.1.2 plus the antivirus fix
 (runtime env defaults from one table; Bitdefender `Gen:Variant.Lazy`), built
 from the 0.1.2 tag, not from main.
