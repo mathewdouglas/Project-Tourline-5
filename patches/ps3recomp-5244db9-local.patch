@@ -32841,10 +32841,10 @@ index 00000000..67dff33a
 +#endif
 diff --git a/libs/video/rsx_fp_interp_backend.inc b/libs/video/rsx_fp_interp_backend.inc
 new file mode 100644
-index 00000000..293d896b
+index 00000000..519cb976
 --- /dev/null
 +++ b/libs/video/rsx_fp_interp_backend.inc
-@@ -0,0 +1,1480 @@
+@@ -0,0 +1,1501 @@
 +/* Fragment-interpreter replay. Included at the bottom of rsx_d3d12_backend.c
 + * so it can call that file's static helpers. RSX_SHADER_INTERP unset or 0
 + * returns before any allocation, signature, or binding. This file also owns
@@ -32922,6 +32922,11 @@ index 00000000..293d896b
 +    /* Phase 220: class preparation (never counted in pso_new/pso_ms, which stay demand-only). */
 +    u32 prep_pair, prep_promoted;
 +} s_interp_stat;
++/* RSX_SHADER_INTERP_STATS: frame-thread CPU time per interpreted draw, by part
++ * (QueryPerformanceCounter ticks): encode, program upload/lookup, pipeline
++ * lookup, the whole prepare, and the descriptor binding. */
++static LONG64 s_ip_enc, s_ip_prog, s_ip_pso, s_ip_all, s_ip_bind; static u32 s_ip_n, s_ip_bn;
++static LONG64 ip_now(void) { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart; }
 +
 +/* Configured mode: 0 off, 1 only while the specialized stage is pending,
 + * 2 force. Fixed for the process; init and shutdown key off it. */
@@ -33355,6 +33360,15 @@ index 00000000..293d896b
 +            s_interp_stat.arena, s_interp_stat.pso_fail, s_interp_pso_n,
 +            s_interp_stat.pso_ms, s_interp_stat.pso_max_ms,
 +            s_interp_stat.arena_peak >> 10, s_interp_stat.compile_ms);
++    {
++        LARGE_INTEGER f; QueryPerformanceFrequency(&f);
++        const double us = 1e6 / (double)f.QuadPart;
++        if (s_ip_n)
++            fprintf(stderr, "[interp-cpu] per draw us: prepare %.2f (encode %.2f, program %.2f, pipeline %.2f) bind %.2f; draws %u%c",
++                    s_ip_all * us / s_ip_n, s_ip_enc * us / s_ip_n, s_ip_prog * us / s_ip_n, s_ip_pso * us / s_ip_n,
++                    s_ip_bn ? s_ip_bind * us / s_ip_bn : 0.0, s_ip_n, 10);
++        s_ip_enc = s_ip_prog = s_ip_pso = s_ip_all = s_ip_bind = 0; s_ip_n = s_ip_bn = 0;
++    }
 +    fprintf(stderr, "[interp-pso] block_ms %u block_max_ms %u queued %u queue_full %u wait_draws %u disk_hit %u disk_save %u disk_reject %u (disk %d async %d)\n",
 +            s_interp_stat.block_ms, s_interp_stat.block_max_ms, s_interp_stat.pso_queued, s_interp_stat.pso_queue_full,
 +            s_interp_stat.pso_wait, s_interp_stat.pso_disk_hit, s_interp_stat.pso_disk_save, s_interp_stat.pso_disk_reject,
@@ -34173,11 +34187,13 @@ index 00000000..293d896b
 +    u32 ctrl = ctl_auto ? RSX_FP_CTRL_AUTO : (dr->fp_exp32 ? 0x40u : 0u);
 +    rsx_fp_interp_info info;
 +    memset(&info, 0, sizeof info);
++    const LONG64 ip_t0 = ip_now();
 +    if (rsx_fp_interp_encode(code, FP_UCODE_MAX, ctrl, s_interp_img,
 +                             RSX_FP_INTERP_MAX_INSNS * 4u, &info)) {
 +        s_interp_stat.reject++;
 +        return NULL;
 +    }
++    const LONG64 ip_t1 = ip_now(); s_ip_enc += ip_t1 - ip_t0;
 +    /* RSX_SHADER_INTERP_LAZY=0: decode all three sources of every instruction
 +     * (clears the encoder's "source not read" bits). */
 +    {
@@ -34217,6 +34233,7 @@ index 00000000..293d896b
 +            slot->hash = hash; slot->off = ioff; slot->nbytes = nbytes;
 +        }
 +    }
++    s_ip_prog += ip_now() - ip_t1;
 +    u32 hoff = fp_interp_alloc(par, 64u);
 +    if (hoff == 0xFFFFFFFFu) { s_interp_stat.arena++; return NULL; }
 +    u32 dim[16][2];
@@ -34286,11 +34303,13 @@ index 00000000..293d896b
 +        }
 +        if (!vsb) { vsb = s_d3d.vp_vs_blob; gpu = 0; }
 +    }
++    const LONG64 ip_t2 = ip_now();
 +    ID3D12PipelineState* pso = interp_get_pso(1, vsb, ps, gpu, s_pso_vmask, targets, rtfmt, blend,
 +                                              cmask, cull, cube_mask, stencil);
 +    if (!pso) return NULL;
 +    *hdr_off = hoff;
 +    s_interp_stat.draws++;
++    { const LONG64 ip_t3 = ip_now(); s_ip_pso += ip_t3 - ip_t2; s_ip_all += ip_t3 - ip_t0; s_ip_n++; }
 +    return pso;
 +}
 +
@@ -34299,6 +34318,7 @@ index 00000000..293d896b
 +    if (!dr || draw_i >= MAX_DRAWS || !s_d3d.srv_heap || !s_d3d.cmd_list) return;
 +    int par = FR->parity & 1;
 +    if (!s_interp_arena[par]) return;
++    const LONG64 ib0 = ip_now();
 +    u32 base = SRV_HEAP_ALLOC + 48u + draw_i * 48u;
 +    u32 tmpl = SRV_HEAP_ALLOC;
 +    s_d3d.device->lpVtbl->CopyDescriptorsSimple(s_d3d.device, 16,
@@ -34324,6 +34344,7 @@ index 00000000..293d896b
 +        s_interp_arena[par]->lpVtbl->GetGPUVirtualAddress(s_interp_arena[par]));
 +    UINT c[4] = { hdr_off, 0, 0, 0 };
 +    s_d3d.cmd_list->lpVtbl->SetGraphicsRoot32BitConstants(s_d3d.cmd_list, 6, 4, c, 0);
++    s_ip_bind += ip_now() - ib0; s_ip_bn++;
 +}
 diff --git a/libs/video/rsx_fp_interp_hlsl.inc b/libs/video/rsx_fp_interp_hlsl.inc
 new file mode 100644
