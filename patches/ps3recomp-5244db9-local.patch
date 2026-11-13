@@ -11841,7 +11841,7 @@ index 4a791bb1..f7ec038c 100644
      /* Texture */
      void (*bind_texture)(void* userdata, u32 unit, const rsx_texture_state* tex);
 diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
-index 68929ed2..066dad0c 100644
+index 68929ed2..17b2731c 100644
 --- a/libs/video/rsx_d3d12_backend.c
 +++ b/libs/video/rsx_d3d12_backend.c
 @@ -16,6 +16,7 @@
@@ -12128,7 +12128,7 @@ index 68929ed2..066dad0c 100644
      u32 csum;           /* sparse checksum of the source bytes last uploaded */
      int cube;           /* resource is a 6-face cube, sampled as TextureCube */
      u32 key;            /* the ORIGINAL bound offset -- the cache lookup key.
-@@ -167,13 +310,46 @@ typedef struct {
+@@ -167,13 +310,47 @@ typedef struct {
                           * shift it, so keying on off never matches the raw offset
                           * a later draw arrives with, and every draw re-uploads. */
      int used;           /* referenced this frame */
@@ -12161,13 +12161,14 @@ index 68929ed2..066dad0c 100644
 +              if (n < 4) n = 4; if (n > VP_TEX_SLOTS) n = VP_TEX_SLOTS; }
 +    return n;
 +}
-+/* Developer experiment: prefer the least recently used unreferenced slot.
-+ * Existing empty-slot preference and same-frame protection remain authoritative.
-+ * RSX_TEX_LRU=0/unset restores first-unused eviction and the same slot cap. */
++/* Prefer the least recently used unreferenced slot. Existing empty-slot
++ * preference and same-frame protection remain authoritative. Default on since
++ * GT5 Phase 47 (High Speed Ring: 80% fewer texture creations, p99 ~1 ms lower,
++ * same FPS and working set). RSX_TEX_LRU=0 restores first-unused eviction. */
 +static int tex_lru_on(void)
 +{
 +    static int on = -1;
-+    if (on < 0) { const char* e=getenv("RSX_TEX_LRU"); on=e && !strcmp(e,"1"); }
++    if (on < 0) { const char* e=getenv("RSX_TEX_LRU"); on=!(e && e[0]=='0'); }
 +    return on;
 +}
 +/* Slot last found for a bound offset (hashed): checked before the scan. */
@@ -12176,7 +12177,7 @@ index 68929ed2..066dad0c 100644
  
  /* Decompiled-VS cache: one entry per distinct vertex-program ucode seen at
   * draw time (hashed). Apps switch VPs between draws (gcm/cube: its MVP cube VP
-@@ -183,8 +359,10 @@ typedef struct {
+@@ -183,8 +360,10 @@ typedef struct {
      u32 hash;               /* FNV-1a of the ucode */
      ID3DBlob* vs;
      int uses_c03;
@@ -12188,7 +12189,7 @@ index 68929ed2..066dad0c 100644
                           * thrashed every frame and eviction shifted slots
                           * under recorded vs_idx values -- the display mesh
                           * drew with the WRONG vertex program (sub-rect +
-@@ -201,24 +379,43 @@ typedef struct {
+@@ -201,24 +380,43 @@ typedef struct {
      int nrt;                /* bound colour target count (PSO key)       */
      u32 rtfmt;              /* DXGI format of the colour targets (PSO key) */
      int exp32;              /* 32-bit-exports control bit (PSO key)       */
@@ -12234,7 +12235,7 @@ index 68929ed2..066dad0c 100644
  
  /* ---------------------------------------------------------------------------
   * Internal state
-@@ -311,7 +508,7 @@ typedef struct {
+@@ -311,7 +509,7 @@ typedef struct {
      int                   vp_fp_n;
      u32                   srv_inc;              /* CBV_SRV_UAV descriptor size   */
      /* VP path: latest texture bound per unit (t0-t3). */
@@ -12243,7 +12244,7 @@ index 68929ed2..066dad0c 100644
  
      /* Render-to-texture: offscreen RT pool + their RTV heap. */
      OffRT                 off_rt[MAX_OFF_RTS];
-@@ -325,19 +522,17 @@ typedef struct {
+@@ -325,19 +523,17 @@ typedef struct {
      /* Frame-parity double buffering for the per-draw upload streams (vp_vb
       * vertices, vp_cb constants, vp_fpcb texscales): records for frame N+1
       * are written while frame N's GPU work may still be reading -- writes go
@@ -12267,7 +12268,7 @@ index 68929ed2..066dad0c 100644
  
      /* Stats */
      u64 frame_count;
-@@ -348,6 +543,46 @@ typedef struct {
+@@ -348,6 +544,46 @@ typedef struct {
  } D3D12State;
  
  static D3D12State s_d3d;
@@ -12314,7 +12315,7 @@ index 68929ed2..066dad0c 100644
  char g_rsx_title_base[128] = "ps3recomp";
  static u32 s_dbg_last_draws = 0;
  static u64 s_req_verts = 0, s_req_draws = 0, s_drop_draws = 0;
-@@ -363,6 +598,8 @@ static u64 s_req_verts = 0, s_req_draws = 0, s_drop_draws = 0;
+@@ -363,6 +599,8 @@ static u64 s_req_verts = 0, s_req_draws = 0, s_drop_draws = 0;
   * Feeding it the previous frame costs one frame of latency, which for a water
   * reflection is not visible. */
  static ID3D12Resource* s_screen_copy = NULL;
@@ -12323,7 +12324,7 @@ index 68929ed2..066dad0c 100644
  /* Sub-viewport render-to-texture. This title renders its reflection/refraction
   * pre-pass into a REGION of the same surface (vp 0,208 512x512 and 0,208
   * 1024x512, cmask=F) and then samples a texture of exactly that size. On
-@@ -376,14 +613,89 @@ static ID3D12Resource* s_screen_copy = NULL;
+@@ -376,14 +614,89 @@ static ID3D12Resource* s_screen_copy = NULL;
   * (see below), so binding them changes nothing observable. The capture and
   * binding themselves are confirmed working -- SUBVP_DBG shows the 512x512 and
   * 256x256 regions captured and handed to fp 0x5DB81/0x5EA81/0x5EF81/0x5E381. */
@@ -12415,7 +12416,7 @@ index 68929ed2..066dad0c 100644
      for (int i = 0; i < s_subvp_n; i++)
          if (s_subvp[i].w == w && s_subvp[i].h == h) { s_subvp[i].x = x; s_subvp[i].y = y; return; }
      if (s_subvp_n >= SUBVP_SLOTS) return;
-@@ -438,6 +750,7 @@ static void subvp_capture(u32 fi)
+@@ -438,6 +751,7 @@ static void subvp_capture(u32 fi)
          box.bottom = s_subvp[i].y + s_subvp[i].h; box.back = 1;
          if (box.right > s_d3d.width)  box.right  = s_d3d.width;
          if (box.bottom > s_d3d.height) box.bottom = s_d3d.height;
@@ -12423,7 +12424,7 @@ index 68929ed2..066dad0c 100644
          s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dstl, 0, 0, 0, &srcl, &box);
  
          bb[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-@@ -458,22 +771,406 @@ static u32 s_duck_off = 0;   /* as RESOLVED (what the uploader sees)   */
+@@ -458,22 +772,406 @@ static u32 s_duck_off = 0;   /* as RESOLVED (what the uploader sees)   */
   * spend an afternoon optimising the wrong loop. */
  static double s_perf_tex = 0.0, s_perf_frame = 0.0, s_perf_vtx = 0.0, s_perf_rf = 0.0;
  static double s_perf_gpu = 0.0, s_perf_pre = 0.0, s_perf_srv = 0.0, s_perf_pso = 0.0;
@@ -12830,7 +12831,7 @@ index 68929ed2..066dad0c 100644
  /* DBG_LOCK: running clip-space centroid of the tracked mesh (RSX_DBG_VTX's
   * texture), so the debug camera can follow it. The ducks are driven by the
   * physics sim and drift every frame, so a fixed DBG_CENTER loses them as soon
-@@ -490,18 +1187,62 @@ static u32    s_lock_n  = 0;
+@@ -490,18 +1188,62 @@ static u32    s_lock_n  = 0;
   * Win32 window
   * -----------------------------------------------------------------------*/
  
@@ -12894,7 +12895,7 @@ index 68929ed2..066dad0c 100644
              s_d3d.window_closed = 1;
              DestroyWindow(hwnd);
          }
-@@ -510,7 +1251,26 @@ static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+@@ -510,7 +1252,26 @@ static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
      return DefWindowProcA(hwnd, msg, wp, lp);
  }
  
@@ -12922,7 +12923,7 @@ index 68929ed2..066dad0c 100644
  {
      WNDCLASSEXA wc = {0};
      wc.cbSize = sizeof(wc);
-@@ -523,9 +1283,28 @@ static HWND create_window(u32 width, u32 height, const char* title)
+@@ -523,9 +1284,28 @@ static HWND create_window(u32 width, u32 height, const char* title)
  
      RECT wr = {0, 0, (LONG)width, (LONG)height};
      AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
@@ -12951,7 +12952,7 @@ index 68929ed2..066dad0c 100644
      return CreateWindowExA(
          0, "ps3recomp_d3d12",
          title ? title : "ps3recomp (D3D12)",
-@@ -535,10 +1314,153 @@ static HWND create_window(u32 width, u32 height, const char* title)
+@@ -535,10 +1315,153 @@ static HWND create_window(u32 width, u32 height, const char* title)
          NULL, NULL, GetModuleHandle(NULL), NULL);
  }
  
@@ -13105,7 +13106,7 @@ index 68929ed2..066dad0c 100644
  static int init_d3d12(u32 width, u32 height)
  {
      HRESULT hr;
-@@ -565,6 +1487,28 @@ static int init_d3d12(u32 width, u32 height)
+@@ -565,6 +1488,28 @@ static int init_d3d12(u32 width, u32 height)
          }
      }
  
@@ -13134,7 +13135,7 @@ index 68929ed2..066dad0c 100644
      /* Create DXGI factory */
      IDXGIFactory4* factory = NULL;
      hr = CreateDXGIFactory1(&IID_IDXGIFactory4, (void**)&factory);
-@@ -594,6 +1538,8 @@ static int init_d3d12(u32 width, u32 height)
+@@ -594,6 +1539,8 @@ static int init_d3d12(u32 width, u32 height)
                      SUCCEEDED(D3D12CreateDevice((IUnknown*)adapter,
                          D3D_FEATURE_LEVEL_11_0, &IID_ID3D12Device,
                          (void**)&s_d3d.device))) {
@@ -13143,7 +13144,7 @@ index 68929ed2..066dad0c 100644
                      printf("[D3D12] adapter: %ls (VRAM %llu MB)\n", ad.Description,
                             (unsigned long long)(ad.DedicatedVideoMemory >> 20));
                      adapter->lpVtbl->Release(adapter);
-@@ -629,8 +1575,8 @@ static int init_d3d12(u32 width, u32 height)
+@@ -629,8 +1576,8 @@ static int init_d3d12(u32 width, u32 height)
  
      /* Create swap chain */
      DXGI_SWAP_CHAIN_DESC1 sc_desc = {0};
@@ -13154,7 +13155,7 @@ index 68929ed2..066dad0c 100644
      sc_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
      sc_desc.SampleDesc.Count = 1;
      sc_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-@@ -679,13 +1625,39 @@ static int init_d3d12(u32 width, u32 height)
+@@ -679,13 +1626,39 @@ static int init_d3d12(u32 width, u32 height)
  
      for (u32 i = 0; i < FRAME_COUNT; i++) {
          hr = s_d3d.swap_chain->lpVtbl->GetBuffer(
@@ -13195,7 +13196,7 @@ index 68929ed2..066dad0c 100644
  
      /* ---------------------------------------------------------------
       * Depth/stencil buffer
-@@ -695,7 +1667,7 @@ static int init_d3d12(u32 width, u32 height)
+@@ -695,7 +1668,7 @@ static int init_d3d12(u32 width, u32 height)
       * ---------------------------------------------------------------*/
      {
          D3D12_DESCRIPTOR_HEAP_DESC dsv_heap_desc = {0};
@@ -13204,7 +13205,7 @@ index 68929ed2..066dad0c 100644
          dsv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
          hr = s_d3d.device->lpVtbl->CreateDescriptorHeap(
              s_d3d.device, &dsv_heap_desc, &IID_ID3D12DescriptorHeap,
-@@ -715,8 +1687,8 @@ static int init_d3d12(u32 width, u32 height)
+@@ -715,8 +1688,8 @@ static int init_d3d12(u32 width, u32 height)
           * this DSV is shared by every pass -- with a window-sized depth
           * buffer, draws into larger offscreen RTs (wave's 1920x1080 input
           * image) were silently cropped to the window rect. */
@@ -13215,7 +13216,7 @@ index 68929ed2..066dad0c 100644
          depth_desc.DepthOrArraySize   = 1;
          depth_desc.MipLevels          = 1;
          depth_desc.Format             = DXGI_FORMAT_D24_UNORM_S8_UINT;
-@@ -837,6 +1809,8 @@ static int init_d3d12(u32 width, u32 height)
+@@ -837,6 +1810,8 @@ static int init_d3d12(u32 width, u32 height)
              signature_blob->lpVtbl->GetBufferPointer(signature_blob),
              signature_blob->lpVtbl->GetBufferSize(signature_blob),
              &IID_ID3D12RootSignature, (void**)&s_d3d.root_signature);
@@ -13224,7 +13225,7 @@ index 68929ed2..066dad0c 100644
          signature_blob->lpVtbl->Release(signature_blob);
          if (FAILED(hr)) {
              printf("[D3D12] Root signature creation failed\n");
-@@ -1040,7 +2014,7 @@ static int init_d3d12(u32 width, u32 height)
+@@ -1040,7 +2015,7 @@ static int init_d3d12(u32 width, u32 height)
          {
              D3D12_DESCRIPTOR_HEAP_DESC hd = {0};
              hd.Type  = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -13233,7 +13234,7 @@ index 68929ed2..066dad0c 100644
              hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
              hr = s_d3d.device->lpVtbl->CreateDescriptorHeap(
                  s_d3d.device, &hd, &IID_ID3D12DescriptorHeap, (void**)&s_d3d.srv_heap);
-@@ -1055,7 +2029,7 @@ static int init_d3d12(u32 width, u32 height)
+@@ -1055,7 +2030,7 @@ static int init_d3d12(u32 width, u32 height)
                  nv.Texture2D.MipLevels = 1;
                  D3D12_CPU_DESCRIPTOR_HANDLE hh;
                  s_d3d.srv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.srv_heap, &hh);
@@ -13242,7 +13243,7 @@ index 68929ed2..066dad0c 100644
                      s_d3d.device->lpVtbl->CreateShaderResourceView(s_d3d.device, NULL, &nv, hh);
                      hh.ptr += s_d3d.srv_inc;
                  }
-@@ -1066,7 +2040,7 @@ static int init_d3d12(u32 width, u32 height)
+@@ -1066,7 +2041,7 @@ static int init_d3d12(u32 width, u32 height)
          {
              D3D12_DESCRIPTOR_HEAP_DESC hd = {0};
              hd.Type  = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -13251,7 +13252,7 @@ index 68929ed2..066dad0c 100644
              hr = s_d3d.device->lpVtbl->CreateDescriptorHeap(
                  s_d3d.device, &hd, &IID_ID3D12DescriptorHeap, (void**)&s_d3d.rt_rtv_heap);
              if (FAILED(hr)) printf("[D3D12] offscreen RTV heap creation failed (0x%08lX)\n", hr);
-@@ -1118,11 +2092,19 @@ static int init_d3d12(u32 width, u32 height)
+@@ -1118,11 +2093,19 @@ static int init_d3d12(u32 width, u32 height)
           * t0 and are unaffected. Matching 4 static samplers s0-s3. */
          D3D12_DESCRIPTOR_RANGE srv_range = {0};
          srv_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -13273,7 +13274,7 @@ index 68929ed2..066dad0c 100644
          rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;   /* b0 = vp_c bank */
          rp[0].Descriptor.ShaderRegister = 0;
          rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-@@ -1134,8 +2116,8 @@ static int init_d3d12(u32 width, u32 height)
+@@ -1134,8 +2117,8 @@ static int init_d3d12(u32 width, u32 height)
          rp[2].Descriptor.ShaderRegister = 1;
          rp[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
  
@@ -13284,7 +13285,7 @@ index 68929ed2..066dad0c 100644
              samp[_s].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
              samp[_s].AddressU = samp[_s].AddressV = samp[_s].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
              samp[_s].ShaderRegister = (UINT)_s;
-@@ -1146,10 +2128,31 @@ static int init_d3d12(u32 width, u32 height)
+@@ -1146,10 +2129,31 @@ static int init_d3d12(u32 width, u32 height)
           * linear filtering bleeds neighbouring glyphs. */
          samp[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
          samp[0].AddressU = samp[0].AddressV = samp[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -13318,7 +13319,7 @@ index 68929ed2..066dad0c 100644
          rd.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
  
          ID3DBlob* sig = NULL; ID3DBlob* err = NULL;
-@@ -1158,18 +2161,41 @@ static int init_d3d12(u32 width, u32 height)
+@@ -1158,18 +2162,41 @@ static int init_d3d12(u32 width, u32 height)
              s_d3d.device->lpVtbl->CreateRootSignature(s_d3d.device, 0,
                  sig->lpVtbl->GetBufferPointer(sig), sig->lpVtbl->GetBufferSize(sig),
                  &IID_ID3D12RootSignature, (void**)&s_d3d.vp_root_sig);
@@ -13361,7 +13362,7 @@ index 68929ed2..066dad0c 100644
                                            * DOUBLE-buffered by frame parity so a
                                            * new frame's upload never overwrites
                                            * vertices the in-flight GPU frame is
-@@ -1179,32 +2205,103 @@ static int init_d3d12(u32 width, u32 height)
+@@ -1179,32 +2206,103 @@ static int init_d3d12(u32 width, u32 height)
           * declines to upload -- the scene just does not render, with no error
           * anywhere. Report the size too: this buffer is
           * MAX_VERTICES * 256 * 2 bytes and grows fast. */
@@ -13481,7 +13482,7 @@ index 68929ed2..066dad0c 100644
          printf("[D3D12] VP path resources: rootsig=%p vb=%p cb=%p\n",
                 (void*)s_d3d.vp_root_sig, (void*)s_d3d.vp_vb, (void*)s_d3d.vp_cb);
      }
-@@ -1375,6 +2472,9 @@ static void cap_write_bmp(const char* path, const void* mapped, u32 w, u32 h,
+@@ -1375,6 +2473,9 @@ static void cap_write_bmp(const char* path, const void* mapped, u32 w, u32 h,
              } else if (dxgi == DXGI_FORMAT_R32G32B32A32_FLOAT) {
                  const float* fp = (const float*)(srow + (u64)x * 16);
                  rv = fp[0]; gv = fp[1]; bv = fp[2];
@@ -13491,7 +13492,7 @@ index 68929ed2..066dad0c 100644
              } else {
                  const u8* p = srow + (u64)x * 4;
                  rv = p[0]/255.0f; gv = p[1]/255.0f; bv = p[2]/255.0f;
-@@ -1399,7 +2499,7 @@ static void cap_readback_write(ID3D12Resource* res, u32 w, u32 h, u32 dxgi,
+@@ -1399,7 +2500,7 @@ static void cap_readback_write(ID3D12Resource* res, u32 w, u32 h, u32 dxgi,
                                 D3D12_RESOURCE_STATES prior, u32 fi, const char* path)
  {
      if (!res || !w || !h) return;
@@ -13500,7 +13501,7 @@ index 68929ed2..066dad0c 100644
                (dxgi == DXGI_FORMAT_R32G32B32A32_FLOAT) ? 16 : 4;
      u32 pitch = (w * bpp + 255) & ~255u;
  
-@@ -1437,6 +2537,7 @@ static void cap_readback_write(ID3D12Resource* res, u32 w, u32 h, u32 dxgi,
+@@ -1437,6 +2538,7 @@ static void cap_readback_write(ID3D12Resource* res, u32 w, u32 h, u32 dxgi,
      dst.PlacedFootprint.Footprint.Depth = 1; dst.PlacedFootprint.Footprint.RowPitch = pitch;
      src.pResource = res; src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
      src.SubresourceIndex = 0;
@@ -13508,7 +13509,7 @@ index 68929ed2..066dad0c 100644
      s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dst, 0, 0, 0, &src, NULL);
          /* TEXUP_DBG=1: texture uploads per second. A cache that misses every
           * draw re-uploads megabytes per frame, which is the kind of GPU work
-@@ -1479,6 +2580,7 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
+@@ -1479,6 +2581,7 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
      snprintf(dir, sizeof dir, "%s/frame_%02u", base, capidx);
      CreateDirectoryA(dir, NULL);
      char path[512];
@@ -13516,7 +13517,7 @@ index 68929ed2..066dad0c 100644
  
      /* Manifest: every op in submission order with full state. */
      snprintf(path, sizeof path, "%s/manifest.txt", dir);
-@@ -1492,25 +2594,39 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
+@@ -1492,25 +2595,39 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
                          s_d3d.off_rt[i].w, s_d3d.off_rt[i].h, s_d3d.off_rt[i].dxgi);
          fprintf(mf, "--- ops ---\n");
          for (u32 d = 0; d < ndraws && d < MAX_DRAWS; d++) {
@@ -13562,7 +13563,7 @@ index 68929ed2..066dad0c 100644
              }
          }
          /* Per-draw VP constant banks for the first few offscreen-RT geometry
-@@ -1519,14 +2635,27 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
+@@ -1519,14 +2636,27 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
           * live at slot==draw-index; parity is post-^1 here (capture is after the
           * frame's vp_parity flip), so read the other half. */
          if (s_d3d.vp_cb_mapped) {
@@ -13595,7 +13596,7 @@ index 68929ed2..066dad0c 100644
                  int last_nz = -1; float maxabs = 0.0f;
                  for (int i = 0; i < RSX_MAX_VERTEX_CONSTANTS * 4; i++) {
                      float a = c[i] < 0 ? -c[i] : c[i];
-@@ -1555,7 +2684,10 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
+@@ -1555,7 +2685,10 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
                         DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_STATE_PRESENT, fi, path);
      for (int i = 0; i < MAX_OFF_RTS; i++) {
          OffRT* r = &s_d3d.off_rt[i];
@@ -13607,7 +13608,7 @@ index 68929ed2..066dad0c 100644
          snprintf(path, sizeof path, "%s/rt_%08X.bmp", dir, r->off);
          cap_readback_write(r->res, r->w, r->h, r->dxgi, r->st, fi, path);
      }
-@@ -1726,9 +2858,44 @@ static u32 vp_hash_ucode(const u8* p, u32 n)
+@@ -1726,9 +2859,44 @@ static u32 vp_hash_ucode(const u8* p, u32 n)
      return h ? h : 1u;
  }
  
@@ -13653,7 +13654,7 @@ index 68929ed2..066dad0c 100644
      if (!st || st->vp_ucode_bytes < 16) return -1;
      /* Start at the instruction SET_TRANSFORM_PROGRAM_START selects, not at 0.
       * The microcode store holds every resident program -- this title keeps its
-@@ -1743,13 +2910,57 @@ static int vp_get_vs(const rsx_state* st)
+@@ -1743,13 +2911,57 @@ static int vp_get_vs(const rsx_state* st)
      if (vstart >= st->vp_ucode_bytes) vstart = 0;
      const u8* vuc = st->vp_ucode + vstart;
      u32 vlen = st->vp_ucode_bytes - vstart;
@@ -13714,7 +13715,7 @@ index 68929ed2..066dad0c 100644
      if (getenv("VP_DUMP")) { static int _d=0; if (_d++ < 4) {
          FILE* f = fopen("vp2_dump.hlsl", _d==1 ? "w" : "a");
          if (f) { fprintf(f, "/* per-draw VS hash pending, %d instrs */%s%s", ni, hlsl, "\n"); fclose(f); } } }
-@@ -1767,6 +2978,18 @@ static int vp_get_vs(const rsx_state* st)
+@@ -1767,6 +2979,18 @@ static int vp_get_vs(const rsx_state* st)
                     fclose(f); }
            fprintf(stderr, "[DUCKVP] wrote duck_vp.hlsl (%d instrs)%c", ni, 10);
        } }
@@ -13733,7 +13734,7 @@ index 68929ed2..066dad0c 100644
      /* VP_BYPASS=1: replace the guest transform with a direct map of attribute 0
       * into clip space. If geometry appears with this on, everything from the
       * input layout through raster/depth/present is sound and the fault is the
-@@ -1803,22 +3026,46 @@ static int vp_get_vs(const rsx_state* st)
+@@ -1803,22 +3027,46 @@ static int vp_get_vs(const rsx_state* st)
          }
      }
      ID3DBlob* vb = NULL; ID3DBlob* e = NULL;
@@ -13788,7 +13789,7 @@ index 68929ed2..066dad0c 100644
      s_d3d.vp_vs[slot].uses_c03 =
          (strstr(hlsl, "vp_c[0]") || strstr(hlsl, "vp_c[1]") ||
           strstr(hlsl, "vp_c[2]") || strstr(hlsl, "vp_c[3]")) ? 1 : 0;
-@@ -1884,6 +3131,13 @@ static u8 gl_blend_op_d3d(u32 e)
+@@ -1884,6 +3132,13 @@ static u8 gl_blend_op_d3d(u32 e)
  static u32 rsx_cull_key(const rsx_state* st)
  {
      if (!st || !st->cull_face_enable) return 0;
@@ -13802,7 +13803,7 @@ index 68929ed2..066dad0c 100644
      u32 k = 1u;
      if (st->cull_face == 0x0404u || st->cull_face == 0x0408u) k |= 2u;  /* FRONT */
      if (st->front_face == 0x0901u) k |= 4u;                             /* CCW */
-@@ -1943,7 +3197,189 @@ static void hlsl_replace_all(char* buf, size_t cap, const char* find, const char
+@@ -1943,7 +3198,189 @@ static void hlsl_replace_all(char* buf, size_t cap, const char* find, const char
      }
  }
  
@@ -13993,7 +13994,7 @@ index 68929ed2..066dad0c 100644
  static u32 dr_cube_mask(const D3D12DrawRecord* dr)
  {
      /* ON by default (RSX_CUBE_TEX=0 to disable). This was off while the cube path
-@@ -1954,76 +3390,3244 @@ static u32 dr_cube_mask(const D3D12DrawRecord* dr)
+@@ -1954,76 +3391,3477 @@ static u32 dr_cube_mask(const D3D12DrawRecord* dr)
       * image) all six faces decode as clean environment art. */
      static int en = -1;
      if (en < 0) { const char* e = getenv("RSX_CUBE_TEX"); en = e ? atoi(e) : 1; }
@@ -17101,6 +17102,218 @@ index 68929ed2..066dad0c 100644
 +    snprintf(path, sizeof path, "%s/%016llx.txt", folder, (unsigned long long)hash);
 +    pso_warm_write(path, text, strlen(text));
 +}
++/* ---- Persistent fast pipeline lookup (ported from Tourline Prologue Phase 221) ----
++ * The in-memory pipeline cache (s_d3d.vp_fp) is keyed by session state (vs_idx, vp_gen), so the first draw of
++ * every shader/state combination in a process misses it and rebuilds its HLSL and finds its DXBC before it can
++ * look up the native pipeline. This table maps a session-independent key (fragment program structural identity,
++ * the 64-bit FNV-1a of the vertex shader's bytecode, every state field of the in-memory key) to the native
++ * pipeline hash the full path produced. A miss whose mapped pipeline is resident in the prepared/warm set uses it
++ * directly. Persisted in warmup-v1/ (already per compiler) as fp-lookup-gt5-v1-<tag>.bin. The tag covers the
++ * engine executable (size, write time), the compiler, the guest root signature, ultrawide, native render scaling,
++ * high precision and every translation-affecting environment value (all RSX_, FP_, VP_ names except texture,
++ * cache, preparation and diagnostic ones, plus the unprefixed pipeline switches); the MSAA count is in the key.
++ * A different tag starts an empty table. Only pipelines resident under the current root signature and bytecode
++ * can be returned, so a stale or absent mapping falls back to the full path.
++ * RSX_PSO_FAST_LOOKUP=0 disables it (no reads, writes or lookups); =2 checks: a mapped pipeline is never used,
++ * the full path runs and each mapping is compared with the hash it produces ([fast-lookup] mismatch count). */
++#define FPLK_N (1u << 16)
++typedef struct { u64 k, v; } FpLookup;
++static FpLookup* s_fplk;
++static u32 s_fplk_n, s_fplk_dirty;
++static u64 s_fplk_epoch;
++static int s_fplk_state;                   /* 0 not loaded, 1 ready, -1 off/unavailable */
++static ULONGLONG s_fplk_saved_at;
++static volatile LONG s_fplk_saving;
++static struct { u64 hit, miss_absent, miss_cold, loaded, recorded, checked, mismatch; } s_fplk_stat;
++static char s_fplk_path[700];
++static int fplk_mode(void)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("RSX_PSO_FAST_LOOKUP"); on = !e ? 1 : (e[0] == '0' ? 0 : (e[0] == '2' ? 2 : 1)); }
++    return on;
++}
++static int fplk_on(void) { return fplk_mode() != 0; }
++static u64 fplk_mix(u64 h, u64 v) { for (int b = 0; b < 8; b++) { h ^= (u8)(v >> (b * 8)); h *= 1099511628211ull; } return h; }
++static u64 fplk_fnv(const char* t, u64 h) { for (; *t; t++) { h ^= (u8)*t; h *= 1099511628211ull; } return h; }
++static int shader_dxc_on(void);
++/* Environment names that cannot change a guest pipeline's shaders or description. */
++static int fplk_env_ignored(const char* name)
++{
++    static const char* const skip[] = { "RSX_PSO_FAST_LOOKUP", "RSX_PSO_TIMING", "RSX_HITCH_LOG", "RSX_TEXUPSTAT",
++        "RSX_TEX_", "RSX_SHADER_CACHE", "RSX_SHADER_WARMUP", "RSX_SHADER_PACK", "RSX_RACE_", "RSX_PSO_ASYNC",
++        "RSX_PSO_RESIDENT", "RSX_PSO_RECIPE", "RSX_PSO_HITCH", "RSX_PSO_RACE", "RSX_PSO_MENU", "RSX_DXBC_",
++        "RSX_SHADER_INDICATOR", "RSX_DRAWPROF", "RSX_GPU_TIME", "RSX_CAP", "RSX_RDOC", "RSX_WINDOW",
++        "RSX_OUTPUT_", "RSX_PRESENT_", "RSX_HOT_METHODS", "RSX_OVERLAY", "RSX_FP_CATALOG", "FP_DUMP_DIR", NULL };
++    for (int i = 0; skip[i]; i++) if (!strncmp(name, skip[i], strlen(skip[i]))) return 1;
++    return 0;
++}
++static u64 fplk_epoch(void)
++{
++    u64 h = fplk_fnv("GT5FPLK1", 1469598103934665603ull);
++    char exe[MAX_PATH]; WIN32_FILE_ATTRIBUTE_DATA fa;
++    DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
++    if (n && n < sizeof exe && GetFileAttributesExA(exe, GetFileExInfoStandard, &fa)) {
++        h = fplk_mix(h, ((u64)fa.nFileSizeHigh << 32) | fa.nFileSizeLow);
++        h = fplk_mix(h, ((u64)fa.ftLastWriteTime.dwHighDateTime << 32) | fa.ftLastWriteTime.dwLowDateTime);
++    } else h = fplk_mix(h, 0);
++    h = fplk_mix(h, (u64)shader_dxc_on());
++    h = fplk_mix(h, (u64)s_vp_rs_hash);
++    h = fplk_mix(h, (u64)rsx_ultrawide());
++    h = fplk_mix(h, (u64)s_rs_y);
++    h = fplk_mix(h, (u64)(rsx_hp() ? 1 : 0));
++    u64 envsum = 0;
++    LPCH env = GetEnvironmentStringsA();
++    if (env) {
++        for (const char* e = env; *e; e += strlen(e) + 1) {
++            const char* eq = strchr(e + 1, '=');
++            if (!eq) continue;
++            char name[128]; size_t nl = (size_t)(eq - e);
++            if (nl >= sizeof name) continue;
++            for (size_t i = 0; i < nl; i++) name[i] = (e[i] >= 'a' && e[i] <= 'z') ? (char)(e[i] - 32) : e[i];
++            name[nl] = 0;
++            const int named = !strcmp(name, "CMASK_FORCE") || !strcmp(name, "CULL_FLIP") || !strcmp(name, "CULL_OFF") ||
++                              !strcmp(name, "DEPTH_OFF") || !strcmp(name, "PSO_DSV_ALWAYS") ||
++                              !strncmp(name, "GT5P_ULTRAWIDE", 14) || !strcmp(name, "GT5P_RESOLUTION") ||
++                              !strcmp(name, "GT5P_RENDER_NATIVE");
++            if (!named && strncmp(name, "RSX_", 4) && strncmp(name, "FP_", 3) && strncmp(name, "VP_", 3)) continue;
++            if (fplk_env_ignored(name)) continue;
++            u64 v = fplk_fnv(name, 1469598103934665603ull);
++            v = fplk_fnv("=", v); v = fplk_fnv(eq + 1, v);
++            envsum += v;
++        }
++        FreeEnvironmentStringsA(env);
++    }
++    return fplk_mix(h, envsum);
++}
++static void fplk_load(void)
++{
++    s_fplk_state = -1;
++    if (!fplk_on()) return;
++    char dir[512];
++    if (!pso_warm_dir(dir, sizeof dir)) return;
++    s_fplk = (FpLookup*)calloc(FPLK_N, sizeof *s_fplk);
++    if (!s_fplk) return;
++    s_fplk_epoch = fplk_epoch();
++    snprintf(s_fplk_path, sizeof s_fplk_path, "%s/fp-lookup-gt5-v1-%016llx.bin", dir, (unsigned long long)s_fplk_epoch);
++    s_fplk_state = 1;
++    s_fplk_saved_at = GetTickCount64();
++    FILE* f = fopen(s_fplk_path, "rb");
++    if (f) {
++        u64 hdr[3] = {0};
++        if (fread(hdr, 1, sizeof hdr, f) == sizeof hdr && hdr[0] == 0x314B4C5046355447ull && hdr[1] == s_fplk_epoch &&
++            hdr[2] <= FPLK_N * 3 / 4) {
++            for (u64 i = 0; i < hdr[2]; i++) {
++                FpLookup e;
++                if (fread(&e, 1, sizeof e, f) != sizeof e || !e.k || !e.v) break;
++                for (u32 h = (u32)e.k & (FPLK_N - 1), n = 0; n < FPLK_N; n++, h = (h + 1) & (FPLK_N - 1))
++                    if (!s_fplk[h].k) { s_fplk[h] = e; s_fplk_n++; break; }
++                    else if (s_fplk[h].k == e.k) break;
++            }
++            s_fplk_stat.loaded = s_fplk_n;
++        }
++        fclose(f);
++    }
++    fprintf(stderr, "[fast-lookup] %u entries loaded (tag %016llx%s)\n", s_fplk_n, (unsigned long long)s_fplk_epoch,
++            fplk_mode() == 2 ? ", check mode" : "");
++}
++/* FNV-1a 64 of each vertex shader slot's bytecode, computed once per slot (slots are never reused). */
++static u64 s_fplk_vs[VP_VS_CACHE];
++static u64 fplk_vs_code(int vs_idx)
++{
++    if (vs_idx < 0 || vs_idx >= s_d3d.vp_vs_n || vs_idx >= VP_VS_CACHE || !s_d3d.vp_vs[vs_idx].vs) return 0;
++    if (!s_fplk_vs[vs_idx]) {
++        ID3DBlob* b = s_d3d.vp_vs[vs_idx].vs;
++        s_fplk_vs[vs_idx] = pso_hash_bytes(1469598103934665603ull, b->lpVtbl->GetBufferPointer(b), b->lpVtbl->GetBufferSize(b));
++    }
++    return s_fplk_vs[vs_idx];
++}
++static u64 fplk_key(const VPFPEntry* k, u64 vs_code)
++{
++    u64 h = 1469598103934665603ull;
++    h = fplk_mix(h, k->ucode_hash); h = fplk_mix(h, vs_code);
++    h = fplk_mix(h, ((u64)k->blend << 32) | k->cmask); h = fplk_mix(h, ((u64)(u32)k->nrt << 32) | k->rtfmt);
++    h = fplk_mix(h, ((u64)(u32)k->exp32 << 32) | k->cull); h = fplk_mix(h, ((u64)k->stencil << 32) | k->unnorm);
++    h = fplk_mix(h, ((u64)k->cube_mask << 32) | k->vmask); h = fplk_mix(h, k->samp_key);
++    h = fplk_mix(h, ((u64)k->ghi << 32) | k->shd); h = fplk_mix(h, k->unhi);
++    return h ? h : 1;
++}
++static u64 fplk_get(u64 key)
++{
++    if (s_fplk_state == 0) fplk_load();
++    if (s_fplk_state != 1) return 0;
++    for (u32 h = (u32)key & (FPLK_N - 1), n = 0; n < FPLK_N; n++, h = (h + 1) & (FPLK_N - 1)) {
++        if (!s_fplk[h].k) return 0;
++        if (s_fplk[h].k == key) return s_fplk[h].v;
++    }
++    return 0;
++}
++static void fplk_put(u64 key, u64 native)
++{
++    if (s_fplk_state == 0) fplk_load();
++    if (s_fplk_state != 1 || !native) return;
++    for (u32 h = (u32)key & (FPLK_N - 1), n = 0; n < FPLK_N; n++, h = (h + 1) & (FPLK_N - 1)) {
++        if (!s_fplk[h].k) {
++            if (s_fplk_n >= FPLK_N * 3 / 4) return;
++            s_fplk[h].k = key; s_fplk[h].v = native; s_fplk_n++; s_fplk_dirty++; s_fplk_stat.recorded++; return;
++        }
++        if (s_fplk[h].k == key) {
++            if (fplk_mode() == 2) {
++                s_fplk_stat.checked++;
++                if (s_fplk[h].v != native && s_fplk_stat.mismatch++ < 8)
++                    fprintf(stderr, "[fast-lookup] MISMATCH key %016llx mapped %016llx built %016llx\n",
++                            (unsigned long long)key, (unsigned long long)s_fplk[h].v, (unsigned long long)native);
++            }
++            if (s_fplk[h].v != native) { s_fplk[h].v = native; s_fplk_dirty++; }
++            return;
++        }
++    }
++}
++typedef struct { FpLookup* rows; u32 n; u64 epoch; char path[700]; } FplkSave;
++static DWORD WINAPI fplk_save_main(LPVOID arg)
++{
++    FplkSave* job = (FplkSave*)arg;
++    char tmp[720]; snprintf(tmp, sizeof tmp, "%s.%lu.tmp", job->path, (unsigned long)GetCurrentThreadId());
++    FILE* f = fopen(tmp, "wb");
++    if (f) {
++        u64 hdr[3] = { 0x314B4C5046355447ull, job->epoch, job->n };
++        int ok = fwrite(hdr, 1, sizeof hdr, f) == sizeof hdr && fwrite(job->rows, sizeof *job->rows, job->n, f) == job->n;
++        ok = (fclose(f) == 0) && ok;
++        if (!ok || !MoveFileExA(tmp, job->path, MOVEFILE_REPLACE_EXISTING)) DeleteFileA(tmp);
++    }
++    free(job->rows); free(job);
++    InterlockedExchange(&s_fplk_saving, 0);
++    return 0;
++}
++/* Snapshot and write on a short-lived thread (never on the replay thread's critical path). wait: shutdown. */
++static void fplk_save(int wait)
++{
++    if (s_fplk_state != 1 || !s_fplk_dirty) return;
++    if (!wait && (s_fplk_dirty < 64 || GetTickCount64() - s_fplk_saved_at < 20000)) return;
++    if (InterlockedCompareExchange(&s_fplk_saving, 1, 0) != 0) return;
++    char dir[512];
++    if (pso_warm_dir(dir, sizeof dir)) CreateDirectoryA(dir, NULL);
++    FplkSave* job = (FplkSave*)calloc(1, sizeof *job);
++    if (job) job->rows = (FpLookup*)malloc((size_t)s_fplk_n * sizeof *job->rows + sizeof *job->rows);
++    if (!job || !job->rows) { if (job) free(job); InterlockedExchange(&s_fplk_saving, 0); return; }
++    for (u32 i = 0; i < FPLK_N; i++) if (s_fplk[i].k && job->n < s_fplk_n) job->rows[job->n++] = s_fplk[i];
++    job->epoch = s_fplk_epoch; memcpy(job->path, s_fplk_path, sizeof job->path);
++    s_fplk_dirty = 0; s_fplk_saved_at = GetTickCount64();
++    if (wait) { fplk_save_main(job); return; }
++    HANDLE t = CreateThread(NULL, 0, fplk_save_main, job, 0, NULL);
++    if (t) CloseHandle(t); else fplk_save_main(job);
++}
++static void fplk_log(void)
++{
++    static ULONGLONG last;
++    ULONGLONG now = GetTickCount64();
++    if (s_fplk_state != 1 || (last && now - last < 5000)) return;
++    last = now;
++    fprintf(stderr, "[fast-lookup] hit %llu absent %llu not-resident %llu recorded %llu entries %u checked %llu mismatch %llu\n",
++            (unsigned long long)s_fplk_stat.hit, (unsigned long long)s_fplk_stat.miss_absent,
++            (unsigned long long)s_fplk_stat.miss_cold, (unsigned long long)s_fplk_stat.recorded, s_fplk_n,
++            (unsigned long long)s_fplk_stat.checked, (unsigned long long)s_fplk_stat.mismatch);
++}
++
 +static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, int nrt,
 +                                          DXGI_FORMAT rtfmt, int exp32, u32 cmask, u32 cull,
 +                                          u32 cube_mask, u32 stencil,
@@ -17283,6 +17496,27 @@ index 68929ed2..066dad0c 100644
 +            break;
 +        }
 +    }
++    /* Persistent fast lookup (RSX_PSO_FAST_LOOKUP): a known, resident pipeline without rebuilding its HLSL/DXBC. */
++    u64 fplk = 0;
++    const u64 fplk_vs = (fplk_on() && !s_library_fp) ? fplk_vs_code(vs_idx) : 0;
++    if (fplk_vs) {
++        fplk = fplk_key(&key, fplk_vs);
++        u64 mapped = fplk_get(fplk);
++        ID3D12PipelineState* fast = NULL;
++        if (!mapped) s_fplk_stat.miss_absent++;
++        else if (fplk_mode() == 2) { /* check mode: the full path runs and fplk_put compares */ }
++        else if (s_fp_full || s_d3d.vp_fp_n + 1 >= VP_FP_CACHE || !pso_warm_get(mapped, &fast)) s_fplk_stat.miss_cold++;
++        else {
++            s_fplk_stat.hit++;
++            pso_race_learn(mapped);
++            VPFPEntry* e = &s_d3d.vp_fp[s_d3d.vp_fp_n];
++            *e = key; e->native_hash = mapped; e->pso = fast;
++            for (u32 h = fp_key_hash(e) & (FPI_N - 1), n = 0; n < FPI_N; n++, h = (h + 1) & (FPI_N - 1))
++                if (!s_fpi[h]) { s_fpi[h] = s_d3d.vp_fp_n + 1; break; }
++            s_d3d.vp_fp_n++;
++            return fast;
++        }
++    }
 +    s_perf_pso_miss++;      /* falls through to a full decompile + D3DCompile */
 +    if (pso_timing_on()) { QueryPerformanceCounter(&s_pt_t0); s_pt_n++; pso_timing_report(); }
 +    /* PSOMISSDBG=1: on a miss, name the key field that differs from an existing
@@ -17297,7 +17531,7 @@ index 68929ed2..066dad0c 100644
          int idx = -1;
          for (int i = 0; i < nf; i++) if (fps[i] == fp_addr) idx = i;
          if (idx < 0 && nf < 32) { idx = nf++; fps[idx] = fp_addr; cnt[idx] = 0; }
-@@ -2033,19 +6637,65 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -2033,19 +6871,65 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
                      fp_addr, cnt[idx], 10); } } }
      { static int md = -1;
        if (md < 0) { const char* e = getenv("PSOMISSDBG"); md = e ? atoi(e) : 0; }
@@ -17366,7 +17600,7 @@ index 68929ed2..066dad0c 100644
                      q->cube_mask != cube_mask  ? " cube_mask"  : "", 10);
              break;
          } } }
-@@ -2060,13 +6710,90 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -2060,13 +6944,90 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
          if (!known && ns < 64) { seen[ns][0] = fp_addr; seen[ns][1] = cube_mask; ns++;
              fprintf(stderr, "[CUBEKEY] fp=0x%X cube_mask=0x%X (distinct pairs=%d)%c",
                      fp_addr, cube_mask, ns, 10); } } }
@@ -17461,7 +17695,7 @@ index 68929ed2..066dad0c 100644
      /* FP_LIST=1: every program the title actually compiles, with its size. A
       * fragment program that hangs the GPU shows up here as an implausible
       * instruction count long before it shows up as a TDR. */
-@@ -2076,12 +6803,23 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -2076,12 +7037,23 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
      if (getenv("FP_DUMP")) { static int _d=0; if (_d++ < 4) {
          FILE* f = fopen("fp_dump.hlsl", _d==1 ? "w" : "a");
          if (f) {
@@ -17486,7 +17720,7 @@ index 68929ed2..066dad0c 100644
      /* FP_PICK=<hex fp_addr>: write just that program, whatever order it compiles
       * in. fp_dump.hlsl keeps only the first four, same trap as vp2_dump.hlsl. */
      { static const char* fpk = (const char*)1; static u32 wantf = 0; static int done = 0;
-@@ -2095,23 +6833,462 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -2095,23 +7067,462 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
                    fp_addr, n, 10);
        } }
  
@@ -17952,7 +18186,7 @@ index 68929ed2..066dad0c 100644
                    size_t tail = strlen(semi) + 1;
                    if ((rp - hlsl) + newlen + tail < sizeof(hlsl)) {
                        memmove(rp + newlen, semi, tail);
-@@ -2147,28 +7324,68 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -2147,28 +7558,68 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
        } }
      { const char* sh = getenv("FP_SHOW");
        const char* only = getenv("FP_TEX_FP");
@@ -18028,7 +18262,7 @@ index 68929ed2..066dad0c 100644
              char f1[64], r1[64], f2[64], r2[64];
              snprintf(f1, sizeof f1, "Texture2D    rsx_tex%d", _u);
              snprintf(r1, sizeof r1, "TextureCube  rsx_tex%d", _u);
-@@ -2182,13 +7399,36 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -2182,13 +7633,36 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
          }
          { static int _n = 0; if (_n++ < 4)
              fprintf(stderr, "[CUBE] fp=0x%X compiled with cube units mask 0x%X%c",
@@ -18068,7 +18302,7 @@ index 68929ed2..066dad0c 100644
          if (rp) {
              char* semi = strchr(rp, ';');
              if (semi) {
-@@ -2206,7 +7446,10 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -2206,7 +7680,10 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
                  float cg = (float)(((hsh >>  8) & 0x7F) | 0x80) / 255.0f;
                  float cb = (float)(((hsh      ) & 0x7F) | 0x80) / 255.0f;
                  char rep[128];
@@ -18080,13 +18314,10 @@ index 68929ed2..066dad0c 100644
                  size_t newlen = strlen(rep), tail = strlen(semi) + 1;
                  if ((size_t)(rp - hlsl) + newlen + tail < sizeof(hlsl)) {
                      memmove(rp + newlen, semi, tail);
-@@ -2259,9 +7502,89 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -2259,9 +7736,89 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
          char* rp = strstr(hlsl, "return r[0];");
          if (rp) memcpy(rp, "return float4(1,0,1,1)", 23);
      }
--    ID3DBlob* pb = NULL; ID3DBlob* e = NULL;
--    HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "guest_fp", NULL, NULL,
--                            "main", "ps_5_0", 0, 0, &pb, &e);
 +    /* fp_final_dither: with RSX_HIGH_PRECISION, a draw into the 8-bit display
 +     * (one 8-bit target) adds a triangular noise of +-1 step from a hash of
 +     * the host pixel, so rounding the 16-bit picture to 8 bits leaves no
@@ -18120,7 +18351,9 @@ index 68929ed2..066dad0c 100644
 +              }
 +          }
 +      } }
-+    ID3DBlob* pb = NULL; ID3DBlob* e = NULL;
+     ID3DBlob* pb = NULL; ID3DBlob* e = NULL;
+-    HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "guest_fp", NULL, NULL,
+-                            "main", "ps_5_0", 0, 0, &pb, &e);
 +    /* Remap all units once; never reinterpret a bank register as a texture unit. */
 +    if (samp_key) rsx_fp_apply_sampler_map(hlsl, sizeof hlsl, samp_key);
 +    ULONGLONG fp_t0 = GetTickCount64();
@@ -18173,7 +18406,7 @@ index 68929ed2..066dad0c 100644
      if (FAILED(hr) || !pb) {
          static int _e2=0; if (_e2++<16)
              printf("[FP] PS compile FAIL (fp=0x%08X): %s\n", fp_addr,
-@@ -2275,7 +7598,9 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -2275,7 +7832,9 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
      for (int _i = 0; _i < 16; _i++) {
          il[_i].SemanticName = "ATTR"; il[_i].SemanticIndex = _i;
          il[_i].Format = DXGI_FORMAT_R32G32B32A32_FLOAT; il[_i].InputSlot = 0;
@@ -18184,7 +18417,7 @@ index 68929ed2..066dad0c 100644
          il[_i].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
          il[_i].InstanceDataStepRate = 0;
      }
-@@ -2286,6 +7611,8 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -2286,6 +7845,8 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
      pd.PS.pShaderBytecode = pb->lpVtbl->GetBufferPointer(pb);
      pd.PS.BytecodeLength  = pb->lpVtbl->GetBufferSize(pb);
      pd.InputLayout.pInputElementDescs = il; pd.InputLayout.NumElements = 16;
@@ -18193,7 +18426,7 @@ index 68929ed2..066dad0c 100644
      pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
      /* Guest face culling. CULL_OFF=1 forces double-sided, the old
       * unconditional behaviour -- geometry that vanishes under culling is a
-@@ -2337,32 +7664,134 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -2337,48 +7898,641 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
      pd.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
      pd.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
      pd.DepthStencilState.StencilEnable = FALSE;
@@ -18270,16 +18503,15 @@ index 68929ed2..066dad0c 100644
                    pd.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO; } }
 -    pd.SampleDesc.Count = 1;
 +    pd.SampleDesc.Count = ((cube_mask >> 16) & 0xFu) ? ((cube_mask >> 16) & 0xFu) : 1;
- 
-     ID3D12PipelineState* pso = NULL;
--    hr = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(
--        s_d3d.device, &pd, &IID_ID3D12PipelineState, (void**)&pso);
++
++    ID3D12PipelineState* pso = NULL;
 +    if (pso_timing_on()) pt_ms_since(&s_pt_t0);
 +    u64 native_hash = guest_pso_hash(&pd);
 +    pso_race_learn(native_hash);
++    if (fplk) fplk_put(fplk, native_hash);
 +    hr = pso_async_on() ? pso_queue_get(native_hash, &pd, &pso) : create_guest_pso_job(&pd, &pso);
 +    if (pso_timing_on()) s_pt_pso += pt_ms_since(&s_pt_t0);
-     pb->lpVtbl->Release(pb);
++    pb->lpVtbl->Release(pb);
 +    if (hr == E_PENDING) {
 +        for (u32 h=fp_pend_h,n=0;n<32;++n,h=(h+1)&(FP_PEND_N-1))
 +            if (!s_fp_pend[h].used || fp_key_eq(&s_fp_pend[h].key,&key)) {
@@ -18287,9 +18519,7 @@ index 68929ed2..066dad0c 100644
 +            }
 +        s_fp_pending=1; return NULL;
 +    }
-     if (FAILED(hr)) {
--        static int _e3=0; if (_e3++<16) printf("[FP] PSO FAIL (fp=0x%08X, 0x%08lX)\n", fp_addr, hr);
--        return NULL;
++    if (FAILED(hr)) {
 +        static int _e3 = 0;
 +        if (_e3 < 16) { _e3++;
 +            fprintf(stderr, "[FP] PSO FAIL (fp=0x%08X, 0x%08lX) nrt=%d rtfmt=%u blend=0x%X stencil=0x%X "
@@ -18317,14 +18547,7 @@ index 68929ed2..066dad0c 100644
 +         * so every draw with this key decompiled and compiled its shader
 +         * again, each frame, to fail the same way. */
 +        pso = NULL;
-     }
--    { static int _ok=0; if (_ok++<32) printf("[FP] guest FP pipeline ready (fp=0x%08X)\n", fp_addr); }
--
--    /* insert (evict oldest when full) */
--    if (s_d3d.vp_fp_n >= VP_FP_CACHE) {
--        if (s_d3d.vp_fp[0].pso) s_d3d.vp_fp[0].pso->lpVtbl->Release(s_d3d.vp_fp[0].pso);
--        memmove(&s_d3d.vp_fp[0], &s_d3d.vp_fp[1], sizeof(VPFPEntry) * (VP_FP_CACHE - 1));
--        s_d3d.vp_fp_n = VP_FP_CACHE - 1;
++    }
 +    else { static int _ok=0; if (_ok++<32) printf("[FP] guest FP pipeline ready (fp=0x%08X)\n", fp_addr); }
 +
 +    /* insert; a full cache keeps the pipeline aside until the next frame start */
@@ -18337,33 +18560,34 @@ index 68929ed2..066dad0c 100644
 +        s_fp_full = 1;
 +        if (pso && s_fp_orphan_n < (int)(sizeof s_fp_orphan / sizeof s_fp_orphan[0])) s_fp_orphan[s_fp_orphan_n++] = pso;
 +        return pso;
-     }
-     s_d3d.vp_fp[s_d3d.vp_fp_n].fp_addr = fp_addr;
-     s_d3d.vp_fp[s_d3d.vp_fp_n].vs_idx  = vs_idx;
-@@ -2372,15 +7801,240 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
-     s_d3d.vp_fp[s_d3d.vp_fp_n].nrt     = nrt;
-     s_d3d.vp_fp[s_d3d.vp_fp_n].rtfmt   = (u32)rtfmt;
-     s_d3d.vp_fp[s_d3d.vp_fp_n].exp32   = exp32;
--    s_d3d.vp_fp[s_d3d.vp_fp_n].ucode_hash = uhash;
++    }
++    s_d3d.vp_fp[s_d3d.vp_fp_n].fp_addr = fp_addr;
++    s_d3d.vp_fp[s_d3d.vp_fp_n].vs_idx  = vs_idx;
++    s_d3d.vp_fp[s_d3d.vp_fp_n].vs_hash = vs_hash;
++    s_d3d.vp_fp[s_d3d.vp_fp_n].gen     = s_d3d.vp_gen;
++    s_d3d.vp_fp[s_d3d.vp_fp_n].blend   = blend;
++    s_d3d.vp_fp[s_d3d.vp_fp_n].nrt     = nrt;
++    s_d3d.vp_fp[s_d3d.vp_fp_n].rtfmt   = (u32)rtfmt;
++    s_d3d.vp_fp[s_d3d.vp_fp_n].exp32   = exp32;
 +    s_d3d.vp_fp[s_d3d.vp_fp_n].ucode_hash = code_identity;
-     s_d3d.vp_fp[s_d3d.vp_fp_n].cmask   = cmask;
-     s_d3d.vp_fp[s_d3d.vp_fp_n].cull    = cull;
++    s_d3d.vp_fp[s_d3d.vp_fp_n].cmask   = cmask;
++    s_d3d.vp_fp[s_d3d.vp_fp_n].cull    = cull;
 +    s_d3d.vp_fp[s_d3d.vp_fp_n].stencil = stencil;
 +    s_d3d.vp_fp[s_d3d.vp_fp_n].unnorm  = unnorm;
-     s_d3d.vp_fp[s_d3d.vp_fp_n].cube_mask = cube_mask;
++    s_d3d.vp_fp[s_d3d.vp_fp_n].cube_mask = cube_mask;
 +    s_d3d.vp_fp[s_d3d.vp_fp_n].vmask = s_pso_vmask;
 +    s_d3d.vp_fp[s_d3d.vp_fp_n].samp_key = samp_key;
 +    s_d3d.vp_fp[s_d3d.vp_fp_n].ghi = s_pso_ghi;
 +    s_d3d.vp_fp[s_d3d.vp_fp_n].shd = s_pso_shd;
 +    s_d3d.vp_fp[s_d3d.vp_fp_n].unhi = s_pso_unhi;
 +    s_d3d.vp_fp[s_d3d.vp_fp_n].native_hash = native_hash;
-     s_d3d.vp_fp[s_d3d.vp_fp_n].pso     = pso;
++    s_d3d.vp_fp[s_d3d.vp_fp_n].pso     = pso;
 +    for (u32 h = fp_key_hash(&s_d3d.vp_fp[s_d3d.vp_fp_n]) & (FPI_N - 1), n = 0; n < FPI_N; n++, h = (h + 1) & (FPI_N - 1))
 +        if (!s_fpi[h]) { s_fpi[h] = s_d3d.vp_fp_n + 1; break; }
-     s_d3d.vp_fp_n++;
-     return pso;
- }
- 
++    s_d3d.vp_fp_n++;
++    return pso;
++}
++
 +/* Explicit offline catalog pass. Caller holds the startup barrier; no guest
 + * thread may be running. It only writes the normal DXBC cache, never draws. */
 +void rsx_d3d12_backend_prepare_library(void)
@@ -18446,6 +18670,278 @@ index 68929ed2..066dad0c 100644
 +    win_set_title("Gran Turismo 5 Prologue (ps3recomp)");
 +}
 +
++/* ---- Placed textures and a staging ring (ported from Tourline Prologue Phase 221) ----
++ * A first-time texture was a committed resource plus its own committed staging buffer. At a High Speed Ring
++ * race start about 290 textures are new in one frame: ~50 ms of texture and ~26 ms of staging creation on the
++ * replay thread (GT5's pool below rarely has a texture of the same description then).
++ *   RSX_TEX_PLACED (default on, =0 committed as before): textures are placed resources in 64 MB default heaps
++ *     (RSX_TEX_HEAP_MB) made ahead of need: RSX_TEX_HEAP_PRE (2) at the first upload, and the next one whenever
++ *     free space falls under one heap, up to RSX_TEX_HEAP_MAX (32). First fit with coalescing; small textures
++ *     take the 4 KB placement alignment when the driver accepts it. A texture over half a heap, a full set of
++ *     heaps or any failure is committed as before. A released texture's range returns to its heap only at the
++ *     next batch start, after the GPU wait, so a later placement in the same batch never aliases memory that an
++ *     earlier draw of that batch still reads.
++ *   RSX_TEX_RING_MB=<n> (default 64, 0 off): a texture without a staging buffer stages through one persistently
++ *     mapped upload buffer, reset at the batch start after the GPU wait. An upload that does not fit, or a
++ *     texture that keeps its own staging buffer, uses the per-slot buffer (and GT5's staging pool) as before.
++ * Stats: [tex-heap] every 5 s with RSX_TEXUPSTAT=1. */
++static int tex_placed_on(void)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("RSX_TEX_PLACED"); on = !(e && !strcmp(e, "0")); }
++    return on;
++}
++#define TEXH_MAX 64
++typedef struct { u64 off, size; } TexFree;
++typedef struct { ID3D12Heap* heap; TexFree* fr; u32 nfr, cap; u64 free_bytes; } TexHeap;
++static TexHeap s_texh[TEXH_MAX];
++static u32 s_texh_n;
++static int s_texh_failed;
++#define TEXP_MAP (1u << 15)
++static struct { ID3D12Resource* r; u32 heap; u64 off, size; } s_texp[TEXP_MAP];
++#define TEXH_PEND_MAX 8192
++static struct { u32 heap; u64 off, size; } s_texh_pend[TEXH_PEND_MAX];
++static u32 s_texh_pend_n;
++static struct { u64 placed, committed_fallback, heaps, released, pend_overflow; double heap_ms, place_ms; } s_texh_stat;
++static u64 texh_bytes(void)
++{
++    static u64 b = 0;
++    if (!b) { const char* e = getenv("RSX_TEX_HEAP_MB"); long mb = e ? atol(e) : 64; if (mb < 16) mb = 16; if (mb > 512) mb = 512; b = (u64)mb << 20; }
++    return b;
++}
++static u32 texh_max(void)
++{
++    static long n = -1;
++    if (n < 0) { const char* e = getenv("RSX_TEX_HEAP_MAX"); n = e ? atol(e) : 32; if (n < 1) n = 1; if (n > TEXH_MAX) n = TEXH_MAX; }
++    return (u32)n;
++}
++static int texh_new(void)
++{
++    if (s_texh_failed || s_texh_n >= texh_max()) return 0;
++    double t0 = perf_now();
++    D3D12_HEAP_DESC hd = {0};
++    hd.SizeInBytes = texh_bytes();
++    hd.Properties.Type = D3D12_HEAP_TYPE_DEFAULT;
++    hd.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
++    hd.Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES;
++    TexHeap* h = &s_texh[s_texh_n];
++    if (FAILED(s_d3d.device->lpVtbl->CreateHeap(s_d3d.device, &hd, &IID_ID3D12Heap, (void**)&h->heap)) || !h->heap) {
++        h->heap = NULL; s_texh_failed = 1;
++        fprintf(stderr, "[tex-heap] texture heap unavailable; committed textures kept\n");
++        return 0;
++    }
++    h->cap = 256; h->fr = (TexFree*)malloc(h->cap * sizeof *h->fr);
++    if (!h->fr) { h->heap->lpVtbl->Release(h->heap); h->heap = NULL; s_texh_failed = 1; return 0; }
++    h->fr[0].off = 0; h->fr[0].size = hd.SizeInBytes; h->nfr = 1; h->free_bytes = hd.SizeInBytes;
++    s_texh_n++; s_texh_stat.heaps++;
++    s_texh_stat.heap_ms += (perf_now() - t0) * 1000.;
++    return 1;
++}
++static u64 texh_free_total(void)
++{
++    u64 f = 0;
++    for (u32 i = 0; i < s_texh_n; i++) f += s_texh[i].free_bytes;
++    return f;
++}
++static int texh_take(u64 size, u64 align, u32* heap, u64* off)
++{
++    for (u32 i = 0; i < s_texh_n; i++) {
++        TexHeap* h = &s_texh[i];
++        if (h->free_bytes < size) continue;
++        for (u32 k = 0; k < h->nfr; k++) {
++            u64 a = (h->fr[k].off + align - 1) & ~(align - 1);
++            u64 end = h->fr[k].off + h->fr[k].size;
++            if (a + size > end) continue;
++            u64 head = a - h->fr[k].off, tail = end - (a + size);
++            if (head && tail) {
++                if (h->nfr == h->cap) {
++                    TexFree* g = (TexFree*)realloc(h->fr, (h->cap * 2) * sizeof *g);
++                    if (!g) return 0;
++                    h->fr = g; h->cap *= 2;
++                }
++                memmove(&h->fr[k + 2], &h->fr[k + 1], (h->nfr - k - 1) * sizeof *h->fr);
++                h->fr[k].size = head;
++                h->fr[k + 1].off = a + size; h->fr[k + 1].size = tail;
++                h->nfr++;
++            } else if (head) h->fr[k].size = head;
++            else if (tail) { h->fr[k].off = a + size; h->fr[k].size = tail; }
++            else { memmove(&h->fr[k], &h->fr[k + 1], (h->nfr - k - 1) * sizeof *h->fr); h->nfr--; }
++            h->free_bytes -= size;
++            *heap = i; *off = a;
++            return 1;
++        }
++    }
++    return 0;
++}
++static void texh_give(u32 heap, u64 off, u64 size)
++{
++    TexHeap* h = &s_texh[heap];
++    u32 k = 0;
++    while (k < h->nfr && h->fr[k].off < off) k++;
++    int merge_prev = k > 0 && h->fr[k - 1].off + h->fr[k - 1].size == off;
++    int merge_next = k < h->nfr && off + size == h->fr[k].off;
++    if (merge_prev && merge_next) {
++        h->fr[k - 1].size += size + h->fr[k].size;
++        memmove(&h->fr[k], &h->fr[k + 1], (h->nfr - k - 1) * sizeof *h->fr); h->nfr--;
++    } else if (merge_prev) h->fr[k - 1].size += size;
++    else if (merge_next) { h->fr[k].off = off; h->fr[k].size += size; }
++    else {
++        if (h->nfr == h->cap) {
++            TexFree* g = (TexFree*)realloc(h->fr, (h->cap * 2) * sizeof *g);
++            if (!g) return;   /* leaks the range; the heap keeps working */
++            h->fr = g; h->cap *= 2;
++        }
++        memmove(&h->fr[k + 1], &h->fr[k], (h->nfr - k) * sizeof *h->fr);
++        h->fr[k].off = off; h->fr[k].size = size; h->nfr++;
++    }
++    h->free_bytes += size;
++}
++/* Batch start, after the GPU wait: ranges released during the previous batch become free. */
++static void texh_flush_pending(void)
++{
++    for (u32 i = 0; i < s_texh_pend_n; i++) texh_give(s_texh_pend[i].heap, s_texh_pend[i].off, s_texh_pend[i].size);
++    s_texh_pend_n = 0;
++}
++/* A texture resource for td (COPY_DEST): placed when possible, else committed. NULL on failure. */
++static ID3D12Resource* tex_create(D3D12_RESOURCE_DESC* td)
++{
++    ID3D12Resource* r = NULL;
++    if (tex_placed_on() && !s_texh_failed) {
++        double t0 = perf_now();
++        static int pre = -1;
++        if (pre < 0) { const char* e = getenv("RSX_TEX_HEAP_PRE"); pre = e ? atoi(e) : 2; if (pre < 1) pre = 1; if (pre > 8) pre = 8;
++                       for (int i = 0; i < pre; i++) texh_new(); }
++        D3D12_RESOURCE_ALLOCATION_INFO ai;
++        D3D12_RESOURCE_DESC d = *td;
++        d.Alignment = D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT;
++        s_d3d.device->lpVtbl->GetResourceAllocationInfo(s_d3d.device, &ai, 0, 1, &d);
++        if (ai.Alignment != D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT) {
++            d.Alignment = 0;
++            s_d3d.device->lpVtbl->GetResourceAllocationInfo(s_d3d.device, &ai, 0, 1, &d);
++        }
++        u32 hi; u64 off;
++        if (ai.SizeInBytes && ai.SizeInBytes != UINT64_MAX && ai.SizeInBytes <= texh_bytes() / 2) {
++            int ok = texh_take(ai.SizeInBytes, ai.Alignment, &hi, &off);
++            if (!ok && texh_new()) ok = texh_take(ai.SizeInBytes, ai.Alignment, &hi, &off);
++            if (ok) {
++                if (SUCCEEDED(s_d3d.device->lpVtbl->CreatePlacedResource(s_d3d.device, s_texh[hi].heap, off, &d,
++                        D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&r)) && r) {
++                    for (u32 k = ((u32)((uintptr_t)r >> 4) * 2654435761u) & (TEXP_MAP - 1), n = 0; n < TEXP_MAP; n++, k = (k + 1) & (TEXP_MAP - 1))
++                        if (!s_texp[k].r) { s_texp[k].r = r; s_texp[k].heap = hi; s_texp[k].off = off; s_texp[k].size = ai.SizeInBytes; break; }
++                    s_texh_stat.placed++;
++                    /* Keep a heap's worth of headroom so the next burst does not wait for CreateHeap. */
++                    if (texh_free_total() < texh_bytes()) texh_new();
++                    s_texh_stat.place_ms += (perf_now() - t0) * 1000.;
++                    return r;
++                }
++                r = NULL;
++                texh_give(hi, off, ai.SizeInBytes);
++            }
++        }
++        s_texh_stat.committed_fallback++;
++    }
++    D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
++    if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE, td,
++            D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&r))) return NULL;
++    return r;
++}
++/* Release a texture resource; a placed one's range returns to its heap at the next batch start. */
++static void tex_res_release(ID3D12Resource* r)
++{
++    if (!r) return;
++    for (u32 k = ((u32)((uintptr_t)r >> 4) * 2654435761u) & (TEXP_MAP - 1), n = 0; n < TEXP_MAP; n++, k = (k + 1) & (TEXP_MAP - 1)) {
++        if (!s_texp[k].r) break;
++        if (s_texp[k].r == r) {
++            u32 heap = s_texp[k].heap; u64 off = s_texp[k].off, size = s_texp[k].size;
++            /* Backward-shift deletion keeps the probe chains intact. */
++            u32 hole = k;
++            for (u32 j = (k + 1) & (TEXP_MAP - 1); s_texp[j].r; j = (j + 1) & (TEXP_MAP - 1)) {
++                u32 want = ((u32)((uintptr_t)s_texp[j].r >> 4) * 2654435761u) & (TEXP_MAP - 1);
++                if (((j - want) & (TEXP_MAP - 1)) >= ((j - hole) & (TEXP_MAP - 1))) { s_texp[hole] = s_texp[j]; hole = j; }
++            }
++            s_texp[hole].r = NULL;
++            r->lpVtbl->Release(r);
++            s_texh_stat.released++;
++            if (s_texh_pend_n < TEXH_PEND_MAX) {
++                s_texh_pend[s_texh_pend_n].heap = heap; s_texh_pend[s_texh_pend_n].off = off;
++                s_texh_pend[s_texh_pend_n].size = size; s_texh_pend_n++;
++            } else s_texh_stat.pend_overflow++;   /* the range stays used: safe, only less space */
++            return;
++        }
++    }
++    r->lpVtbl->Release(r);
++}
++static ID3D12Resource* s_tex_ring;
++static u8* s_tex_ring_map;
++static u64 s_tex_ring_size, s_tex_ring_used;
++static int s_tex_ring_failed;
++static struct { u64 up, fallback, peak; } s_tex_ring_stat;
++static u64 tex_ring_bytes(void)
++{
++    static long mb = -1;
++    if (mb < 0) { const char* e = getenv("RSX_TEX_RING_MB"); mb = e ? atol(e) : 64; if (mb < 0) mb = 0; if (mb > 1024) mb = 1024; }
++    return (u64)mb << 20;
++}
++/* Space for one upload in the ring, 512-byte aligned (D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT). */
++static int tex_ring_take(u64 bytes, u64* off)
++{
++    if (!tex_ring_bytes() || s_tex_ring_failed) return 0;
++    if (!s_tex_ring) {
++        D3D12_HEAP_PROPERTIES hu = {0}; hu.Type = D3D12_HEAP_TYPE_UPLOAD;
++        D3D12_RESOURCE_DESC bd = {0};
++        bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = tex_ring_bytes();
++        bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1; bd.SampleDesc.Count = 1;
++        bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
++        void* m = NULL; D3D12_RANGE nr = {0, 0};
++        if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hu, D3D12_HEAP_FLAG_NONE, &bd,
++                D3D12_RESOURCE_STATE_GENERIC_READ, NULL, &IID_ID3D12Resource, (void**)&s_tex_ring)) ||
++            FAILED(s_tex_ring->lpVtbl->Map(s_tex_ring, 0, &nr, &m)) || !m) {
++            if (s_tex_ring) { s_tex_ring->lpVtbl->Release(s_tex_ring); s_tex_ring = NULL; }
++            s_tex_ring_failed = 1;
++            fprintf(stderr, "[tex-heap] staging ring unavailable; per-texture staging kept\n");
++            return 0;
++        }
++        s_tex_ring_map = (u8*)m; s_tex_ring_size = tex_ring_bytes(); s_tex_ring_used = 0;
++    }
++    u64 o = (s_tex_ring_used + 511u) & ~(u64)511u;
++    if (o + bytes > s_tex_ring_size) { s_tex_ring_stat.fallback++; return 0; }
++    s_tex_ring_used = o + bytes;
++    if (s_tex_ring_used > s_tex_ring_stat.peak) s_tex_ring_stat.peak = s_tex_ring_used;
++    s_tex_ring_stat.up++;
++    *off = o;
++    return 1;
++}
++/* Batch start, after the GPU wait: nothing recorded earlier still reads the ring or a released range. */
++static void tex_heap_frame_start(void)
++{
++    s_tex_ring_used = 0;
++    texh_flush_pending();
++    static int stat = -1;
++    if (stat < 0) stat = getenv("RSX_TEXUPSTAT") ? 1 : 0;
++    if (!stat) return;
++    static ULONGLONG last;
++    ULONGLONG now = GetTickCount64();
++    if (last && now - last < 5000) return;
++    last = now;
++    fprintf(stderr, "[tex-heap] placed %llu committed %llu released %llu heaps %llu (%.0f ms) place %.0f ms free %llu MB; "
++        "ring uploads %llu fallback %llu peak %llu KB\n",
++        (unsigned long long)s_texh_stat.placed, (unsigned long long)s_texh_stat.committed_fallback,
++        (unsigned long long)s_texh_stat.released, (unsigned long long)s_texh_stat.heaps, s_texh_stat.heap_ms,
++        s_texh_stat.place_ms, (unsigned long long)(texh_free_total() >> 20), (unsigned long long)s_tex_ring_stat.up,
++        (unsigned long long)s_tex_ring_stat.fallback, (unsigned long long)(s_tex_ring_stat.peak >> 10));
++}
++static void tex_heap_shutdown(void)
++{
++    if (s_tex_ring) { s_tex_ring->lpVtbl->Unmap(s_tex_ring, 0, NULL); s_tex_ring->lpVtbl->Release(s_tex_ring); s_tex_ring = NULL; }
++}
+ 
+-    ID3D12PipelineState* pso = NULL;
+-    hr = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(
+-        s_d3d.device, &pd, &IID_ID3D12PipelineState, (void**)&pso);
+-    pb->lpVtbl->Release(pb);
+-    if (FAILED(hr)) {
+-        static int _e3=0; if (_e3++<16) printf("[FP] PSO FAIL (fp=0x%08X, 0x%08lX)\n", fp_addr, hr);
+-        return NULL;
 +/* Pools of released texture and staging resources (GT5 Phase 29). A new
 + * texture in a held slot of another size used to release that slot's
 + * resources and create two committed ones; GT5 streams the next stretch of
@@ -18477,7 +18973,7 @@ index 68929ed2..066dad0c 100644
 +static void texpool_drop(TexPoolEnt* p, u64* total)
 +{
 +    if (!p->r) return;
-+    p->r->lpVtbl->Release(p->r);
++    if (total == &s_tpool_bytes) tex_res_release(p->r); else p->r->lpVtbl->Release(p->r);
 +    *total -= p->bytes;
 +    memset(p, 0, sizeof *p);
 +}
@@ -18538,9 +19034,15 @@ index 68929ed2..066dad0c 100644
 +    for (int i = 0; i < TEXPOOL_N; i++) {
 +        if (s_tpool[i].r && s_d3d.frame_count - s_tpool[i].frame > 600) texpool_drop(&s_tpool[i], &s_tpool_bytes);
 +        if (s_upool[i].r && s_d3d.frame_count - s_upool[i].frame > 600) texpool_drop(&s_upool[i], &s_upool_bytes);
-+    }
+     }
+-    { static int _ok=0; if (_ok++<32) printf("[FP] guest FP pipeline ready (fp=0x%08X)\n", fp_addr); }
 +}
-+
+ 
+-    /* insert (evict oldest when full) */
+-    if (s_d3d.vp_fp_n >= VP_FP_CACHE) {
+-        if (s_d3d.vp_fp[0].pso) s_d3d.vp_fp[0].pso->lpVtbl->Release(s_d3d.vp_fp[0].pso);
+-        memmove(&s_d3d.vp_fp[0], &s_d3d.vp_fp[1], sizeof(VPFPEntry) * (VP_FP_CACHE - 1));
+-        s_d3d.vp_fp_n = VP_FP_CACHE - 1;
 +/* At a frame start, after the GPU wait: free the system-memory staging buffer
 + * of every texture slot not uploaded for RSX_TEX_UPLOAD_KEEP frames (default
 + * 120). Each slot used to keep one for life, a second copy of every resident
@@ -18562,7 +19064,22 @@ index 68929ed2..066dad0c 100644
 +        }
 +        D3D12_RESOURCE_DESC d; t->up->lpVtbl->GetDesc(t->up, &d);
 +        live += d.Width;
-+    }
+     }
+-    s_d3d.vp_fp[s_d3d.vp_fp_n].fp_addr = fp_addr;
+-    s_d3d.vp_fp[s_d3d.vp_fp_n].vs_idx  = vs_idx;
+-    s_d3d.vp_fp[s_d3d.vp_fp_n].vs_hash = vs_hash;
+-    s_d3d.vp_fp[s_d3d.vp_fp_n].gen     = s_d3d.vp_gen;
+-    s_d3d.vp_fp[s_d3d.vp_fp_n].blend   = blend;
+-    s_d3d.vp_fp[s_d3d.vp_fp_n].nrt     = nrt;
+-    s_d3d.vp_fp[s_d3d.vp_fp_n].rtfmt   = (u32)rtfmt;
+-    s_d3d.vp_fp[s_d3d.vp_fp_n].exp32   = exp32;
+-    s_d3d.vp_fp[s_d3d.vp_fp_n].ucode_hash = uhash;
+-    s_d3d.vp_fp[s_d3d.vp_fp_n].cmask   = cmask;
+-    s_d3d.vp_fp[s_d3d.vp_fp_n].cull    = cull;
+-    s_d3d.vp_fp[s_d3d.vp_fp_n].cube_mask = cube_mask;
+-    s_d3d.vp_fp[s_d3d.vp_fp_n].pso     = pso;
+-    s_d3d.vp_fp_n++;
+-    return pso;
 +    s_tex_up_bytes = live;
 +    texpool_sweep();
 +}
@@ -18577,12 +19094,10 @@ index 68929ed2..066dad0c 100644
 +    s_d3d.vp_fp_n = 0; s_fp_orphan_n = 0; s_fp_full = 0;
 +    memset(s_fpi, 0, sizeof s_fpi);
 +    fprintf(stderr, "[FP] pipeline cache emptied%c", 10);
-+}
-+
+ }
+ 
  /* Upload the guest texture for a VP draw into a per-frame texture slot
-  * (re-uploaded every frame: gcm/cube's plasma animates in guest memory).
-  * Returns the slot index (SRV at heap 1+slot) or -1. Must run while the
-@@ -2440,8 +8094,291 @@ static u32 tex_csum(const u8* base, u32 nbytes)
+@@ -2440,8 +8594,291 @@ static u32 tex_csum(const u8* base, u32 nbytes)
      return h;
  }
  
@@ -18640,7 +19155,7 @@ index 68929ed2..066dad0c 100644
 + * are dropped and the draws skip the check while none is left. */
 +static void tex_snap_draw_locked(void);
 +static void tex_snap_draw(void)
- {
++{
 +    extern uint8_t* vm_base;
 +    if (!tex_snap_on() || !vm_base) return;
 +    if (!s_tex_vol_live && s_tex_vol_swept == s_d3d.frame_count) return;
@@ -18865,7 +19380,7 @@ index 68929ed2..066dad0c 100644
 +}
 +
 +static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips, u32 depth)
-+{
+ {
 +    /* Bit 1 of `cube`: a border texture (SET_TEXTURE_FORMAT bit 3 clear; see
 +     * tex_border_on). Each swizzled face is a power-of-two grid holding the
 +     * image with a one-texel border, centred: GT5's 8x8 irradiance cubes are
@@ -18875,7 +19390,7 @@ index 68929ed2..066dad0c 100644
      /* TEX_BUDGET=<n>: cap texture uploads per frame. Off by default -- it was
       * tried against the TDR and does not help, because PERF shows the upload
       * path costing 0.01s for 775 calls. Kept because it is the right lever if a
-@@ -2490,17 +8427,57 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+@@ -2490,17 +8927,57 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
       * never Morton-swizzled on RSX). Row of blocks = (w/4)*blocksize. */
      u32 blkrow  = dxt ? tl.row_bytes : 0;
      u32 blkrows = dxt ? tl.rows      : 0;
@@ -18937,7 +19452,7 @@ index 68929ed2..066dad0c 100644
              if (c->used) return i;                /* already bound this frame */
              { static int nocache = -1;            /* TEX_NOCACHE=1: always re-upload */
                if (nocache < 0) { const char* e = getenv("TEX_NOCACHE");
-@@ -2509,13 +8486,50 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+@@ -2509,13 +8986,50 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
              /* Held from an earlier frame: re-upload only if the guest bytes
               * changed. Most of this scene's textures are static, and converting
               * every one of them every frame was ~70% of the frame's CPU time. */
@@ -18992,7 +19507,7 @@ index 68929ed2..066dad0c 100644
      /* TEX_OFF_BIAS=1: sample the image one whole level-0 BELOW the bound offset.
       * Measured on the Rubber Ducky demo: at the bind offset every texture reads
       * as all-zero, while [off - w*h*bpp, off) holds the image (3800-4160 of 4298
-@@ -2569,7 +8583,12 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+@@ -2569,7 +9083,12 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
      /* A stale cache entry (slot >= 0) re-uses its own slot; otherwise take a
       * free one. Without this the stale path fell through to freeslot and either
       * duplicated the texture into a second slot or bailed when none was free. */
@@ -19006,7 +19521,7 @@ index 68929ed2..066dad0c 100644
      /* TEX_SRCDBG=<N>: is the guest memory this slot uploads FROM actually
       * populated? An empty source and a broken sampler both render flat. */
      { static int cap = -1, n = 0;
-@@ -2615,52 +8634,105 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+@@ -2615,52 +9134,108 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
            fprintf(stderr, "[TEXSRC]    data starts at off%+ld (level0=%u bytes)%c",
                    start_delta, w * h * bpp, 10); } } }
      if (slot < 0) slot = freeslot;
@@ -19050,7 +19565,7 @@ index 68929ed2..066dad0c 100644
 -        t->res->lpVtbl->Release(t->res); t->res = NULL;
 -        if (t->up) { t->up->lpVtbl->Release(t->up); t->up = NULL; }
 +    if (t->res && (t->w != w || t->h != h || t->fmt != fmt || t->cube != cube || t->depth != depth || t->levels != levels)) {
-+        if (!(t->res_psr && texpool_put(0, t->res))) t->res->lpVtbl->Release(t->res);
++        if (!(t->res_psr && texpool_put(0, t->res))) tex_res_release(t->res);
 +        t->res = NULL; t->res_psr = 0;
 +        if (t->up) { if (!texpool_put(1, t->up)) t->up->lpVtbl->Release(t->up); t->up = NULL; }
      }
@@ -19077,10 +19592,8 @@ index 68929ed2..066dad0c 100644
 +        if ((t->res = texpool_get(0, &td)) != NULL) {
 +            fresh = 0;                     /* pooled: in PIXEL_SHADER_RESOURCE */
 +        } else {
-+            if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(
-+                    s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE, &td,
-+                    D3D12_RESOURCE_STATE_COPY_DEST, NULL,
-+                    &IID_ID3D12Resource, (void**)&t->res)))
++            (void)hp;
++            if (!(t->res = tex_create(&td)))
 +                return -1;
 +            fresh = 1;
 +        }
@@ -19088,8 +19601,12 @@ index 68929ed2..066dad0c 100644
 +        if (_tc0) { s_tcr_t += __rdtsc() - _tc0; s_tcr_n++; }
 +    }
 +    /* The staging buffer lives in system memory. tex_upload_sweep frees it
-+     * once a texture stops changing; a later re-upload makes a new one. */
-+    if (!t->up) {
++     * once a texture stops changing; a later re-upload makes a new one.
++     * RSX_TEX_RING_MB: a texture without one stages through the ring instead. */
++    const u64 stage_bytes = levels > 1 ? mip_upload_bytes : (u64)pitch * (depth ? h : dxt ? blkrows : h) * (depth ? depth : cube ? 6 : 1);
++    u64 ring_off = 0;
++    const int ring = !t->up && tex_ring_take(stage_bytes, &ring_off);
++    if (!t->up && !ring) {
 +        if (hitch_on()) s_hitch_up_allocs++;
          D3D12_HEAP_PROPERTIES hu = {0}; hu.Type = D3D12_HEAP_TYPE_UPLOAD;
          D3D12_RESOURCE_DESC bd = {0};
@@ -19111,7 +19628,7 @@ index 68929ed2..066dad0c 100644
 +        if (_tu0) { s_tcu_t += __rdtsc() - _tu0; s_tcu_n++; }
 +        if (FAILED(_uhr)) {
 +            t->up = NULL;
-+            if (fresh) { t->res->lpVtbl->Release(t->res); t->res = NULL; }
++            if (fresh) { tex_res_release(t->res); t->res = NULL; }
 +            return -1;
          }
 -        fresh = 1;
@@ -19123,13 +19640,15 @@ index 68929ed2..066dad0c 100644
 +    t->up_frame = s_d3d.frame_count;
  
      void* mapped = NULL; D3D12_RANGE nr = {0,0};
+-    if (FAILED(t->up->lpVtbl->Map(t->up, 0, &nr, &mapped)) || !mapped) return -1;
 +    double map_begin = hitch_on() ? perf_now() : 0;
-     if (FAILED(t->up->lpVtbl->Map(t->up, 0, &nr, &mapped)) || !mapped) return -1;
++    if (ring) mapped = s_tex_ring_map + ring_off;
++    else if (FAILED(t->up->lpVtbl->Map(t->up, 0, &nr, &mapped)) || !mapped) return -1;
 +    if (hitch_on()) s_hitch_tex_map_ms += (perf_now()-map_begin)*1000.;
      { static int _tp=0; if (getenv("RTT_DUMP") && _tp++ < 6) {
          const u8* sp = vm_base + off;
          fprintf(stderr, "[TEXUP] off=0x%X fmt=0x%X row0:", off, fmt);
-@@ -2696,9 +8768,15 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+@@ -2696,9 +9271,15 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
          }
          _face_bytes = (total + 127u) & ~127u;
      }
@@ -19140,13 +19659,13 @@ index 68929ed2..066dad0c 100644
 +    if (depth) {
 +        if (!rsx_texture_decode_volume(mapped, pitch, pitch*h, tex_src(off, chain_bytes),
 +                                      w, h, depth, &tl, rsx_texture_argb_is_rgba())) {
-+            t->up->lpVtbl->Unmap(t->up, 0, NULL); return -1;
++            if (!ring) t->up->lpVtbl->Unmap(t->up, 0, NULL); return -1;
 +        }
 +    } else for (u32 _f = 0; _f < _nfaces; _f++) {
      off    = _off0 + _f * _face_bytes;
      if (cube && getenv("CUBEDBG")) { u32 _s=0; const u8* _p = vm_base + off;
          for (u32 _i = 0; _i < _face_bytes; _i += 97) _s = _s*131 + _p[_i];
-@@ -2708,8 +8786,26 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+@@ -2708,8 +9289,26 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
      /* Pixel conversion -- deswizzle, channel order, block copy -- is RSX
       * semantics and lives in rsx_texture_layout.c, so a second backend gets
       * it by calling this rather than porting the loops again. */
@@ -19175,7 +19694,7 @@ index 68929ed2..066dad0c 100644
  
      /* The diagnostics below only apply to the linear 8-bit case (Bink video
       * planes); they used to sit inside that branch of the conversion. */
-@@ -2836,7 +8932,9 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+@@ -2836,7 +9435,9 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
      /* TEX_SAVE=1: dump the first few converted ARGB uploads as BMPs (rgb +
       * alpha channel separately) -- ground-truth for "is the guest texture
       * wrong or is the sampling wrong" questions (wave's hue palette). */
@@ -19186,10 +19705,11 @@ index 68929ed2..066dad0c 100644
          /* For a cube, write every face: the point of the dump is to check the
           * assumed 6-face layout against the game's cubemap art. */
          for (u32 _face = 0; _face < _nfaces; _face++)
-@@ -2971,8 +9069,22 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+@@ -2971,8 +9572,22 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
        } }
      }   /* end per-face conversion */
      off = _off0; mapped = _map0;
+-    t->up->lpVtbl->Unmap(t->up, 0, NULL);
 +    if (levels > 1) {
 +        u32 src_off = blkrow * blkrows, lw = w, lh = h;
 +        for (u32 l = 1; l < levels; l++) {
@@ -19203,13 +19723,18 @@ index 68929ed2..066dad0c 100644
 +            src_off += bytes;
 +        }
 +    }
-     t->up->lpVtbl->Unmap(t->up, 0, NULL);
++    if (!ring) t->up->lpVtbl->Unmap(t->up, 0, NULL);
  
 +    double copy_begin = hitch_on() ? perf_now() : 0;
      if (!fresh) {   /* reused resource: PSR -> COPY_DEST first */
          D3D12_RESOURCE_BARRIER b = {0};
          b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-@@ -2988,11 +9100,13 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+@@ -2984,15 +9599,18 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+     }
+     D3D12_TEXTURE_COPY_LOCATION dst = {0}, src = {0};
+     dst.pResource = t->res; dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+-    src.pResource = t->up;  src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
++    src.pResource = ring ? s_tex_ring : t->up;  src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
      src.PlacedFootprint.Footprint.Format   = dxfmt;
      src.PlacedFootprint.Footprint.Width    = w;
      src.PlacedFootprint.Footprint.Height   = h;
@@ -19221,11 +19746,12 @@ index 68929ed2..066dad0c 100644
          dst.SubresourceIndex        = _f;      /* cube face = array slice */
          src.PlacedFootprint.Offset  = (u64)_f * pitch * _face_rows;
 +        if (levels > 1) src.PlacedFootprint = mip_fp[_f];
++        src.PlacedFootprint.Offset += ring_off;   /* 0 for the per-slot buffer */
 +        DRED_MARK_COPY(s_d3d.cmd_list);
          s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dst, 0, 0, 0, &src, NULL);
      }
      {
-@@ -3003,7 +9117,9 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+@@ -3003,7 +9621,9 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
          b.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
          b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
          s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &b);
@@ -19235,7 +19761,7 @@ index 68929ed2..066dad0c 100644
      /* SRV at heap slot 1+slot */
      D3D12_SHADER_RESOURCE_VIEW_DESC sv = {0};
      sv.Format = dxfmt;
-@@ -3013,22 +9129,30 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+@@ -3013,22 +9633,30 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
       * = encoded 0x1000 (component 0 in all lanes + always-set bit). ARGB8
       * keeps the identity mapping. */
      sv.Shader4ComponentMapping = (basef == 0x81) ? 0x1000 : D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -19271,7 +19797,7 @@ index 68929ed2..066dad0c 100644
      #undef TEX_CSUM
      return slot;
  }
-@@ -3047,15 +9171,86 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+@@ -3047,15 +9675,86 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
  /* Snapshot the VP constant bank + viewport epilogue for one draw into its
   * vp_cb slot. Runs at record time so every draw keeps the constants that
   * were live when the guest issued it. */
@@ -19361,7 +19887,7 @@ index 68929ed2..066dad0c 100644
          for (int _u = 0; _u < 4; _u++) {
              float sx = 1.0f, sy = 1.0f;
              if (dr && dr->tex[_u].set && (dr->tex[_u].fmt & 0x40) &&
-@@ -3081,19 +9276,61 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+@@ -3081,19 +9780,61 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
          } else {
              ts[16] = 0.0f; ts[17] = 0.0f; ts[18] = 7.0f; ts[19] = 0.0f;
          }
@@ -19424,7 +19950,7 @@ index 68929ed2..066dad0c 100644
              /* FPK_DBG=1: the fragment constants as the shader will see them.
               * A program whose only output is fp_k[0].xxxx renders black if
               * those constants never arrive, which looks identical from the
-@@ -3120,9 +9357,92 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+@@ -3120,9 +9861,92 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
                        fprintf(stderr, "[FPK] distinct fp #%d = 0x%08X%c", ns, dr->fp_addr, 10); } } }
          }
      }
@@ -19518,7 +20044,7 @@ index 68929ed2..066dad0c 100644
      /* VP_MVP=<N>: the constant bank as the shader will see it, for the first N
       * draws. A snapshot taken from a stale rsx_state looks exactly like a broken
       * vertex program from the outside -- both give zero fragments. */
-@@ -3153,6 +9473,13 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+@@ -3153,6 +9977,13 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
            for (int r = 256; r <= 259; r++)
                fprintf(stderr, "[DUCKCB]   c%d=(%g %g %g %g)%c", r,
                        c[r*4+0], c[r*4+1], c[r*4+2], c[r*4+3], 10);
@@ -19532,7 +20058,7 @@ index 68929ed2..066dad0c 100644
        } }
  
      /* Viewport epilogue (see the render_frame notes this logic came from):
-@@ -3161,9 +9488,23 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+@@ -3161,9 +9992,23 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
      const float* vs_ = st->viewport_scale;
      const float* vo_ = st->viewport_offset;
      vpx[0] = vpx[1] = vpx[3] = 1.0f;
@@ -19557,7 +20083,7 @@ index 68929ed2..066dad0c 100644
      /* DBG_ZOOM=<k> with DBG_CENTER="cx,cy": a debug camera applied in CLIP space,
       * not a framebuffer crop -- the geometry is re-rasterized at full resolution.
       * The shader epilogue already computes
-@@ -3192,7 +9533,20 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+@@ -3192,7 +10037,20 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
                         ? s_d3d.vp_vs[vs_idx].uses_c03 : s_d3d.vp_uses_c03;
      float* c = (float*)dst;
      float c00 = c[0];
@@ -19579,7 +20105,7 @@ index 68929ed2..066dad0c 100644
      if (getenv("VP_NOFIXPROJ")) garbage = 0;
      if ((garbage && uses_c03) || getenv("VP_FIXPROJ")) {
          { static int _fb = 0; if (_fb++ < 6)
-@@ -3203,14 +9557,30 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+@@ -3203,14 +10061,30 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
          c[10]=1.0f/99.0f; c[14]=-1.0f/99.0f;
          vpx[2] = 1.0f; vpx[6] = 0.0f;
      }
@@ -19613,7 +20139,7 @@ index 68929ed2..066dad0c 100644
  static u32 current_rt_off(u32* out_w, u32* out_h, u32 out_mrt[3])
  {
      extern int cellGcmOffsetIsDisplay(u32 offset);
-@@ -3221,6 +9591,14 @@ static u32 current_rt_off(u32* out_w, u32* out_h, u32 out_mrt[3])
+@@ -3221,6 +10095,14 @@ static u32 current_rt_off(u32* out_w, u32* out_h, u32 out_mrt[3])
      if (!st) return 0;
      /* SET_SURFACE_COLOR_TARGET: 1 = A, 2 = B, 0x13 = MRT1 (A+B),
       * 0x17 = MRT2 (A+B+C), 0x1F = MRT3 (A+B+C+D). */
@@ -19628,7 +20154,7 @@ index 68929ed2..066dad0c 100644
      int sel = (st->color_target == 2) ? 1 : 0;
      u32 raw = st->surface_color_offset[sel];
      if (out_mrt) {
-@@ -3255,12 +9633,21 @@ static u32 current_rt_off(u32* out_w, u32* out_h, u32 out_mrt[3])
+@@ -3255,12 +10137,21 @@ static u32 current_rt_off(u32* out_w, u32* out_h, u32 out_mrt[3])
       * only the clear, which looks exactly like "nothing rasterizes". */
      { static int _bs = -1; if (_bs < 0) _bs = getenv("RT_DISPLAY_BY_SIZE") ? 1 : 0;
        if (_bs && st->color_target < 0x13 &&
@@ -19652,7 +20178,7 @@ index 68929ed2..066dad0c 100644
      if (out_w) *out_w = w;
      if (out_h) *out_h = h;
      return raw;
-@@ -3269,31 +9656,434 @@ static u32 current_rt_off(u32* out_w, u32* out_h, u32 out_mrt[3])
+@@ -3269,31 +10160,434 @@ static u32 current_rt_off(u32* out_w, u32* out_h, u32 out_mrt[3])
  /* RSX surface colour format (SET_SURFACE_FORMAT bits [4:0]) -> DXGI. Float
   * targets matter: wave's water height maps store SIGNED values (F_W16..),
   * demosaic's differential planes likewise -- RGBA8 clamps them to zero. */
@@ -20102,7 +20628,7 @@ index 68929ed2..066dad0c 100644
      DXGI_FORMAT want_fmt = rsx_surface_dxgi(rsx_fmt);
      /* RT_FORCE_RGBA8=1: allocate every offscreen target as R8G8B8A8 rather than
       * its native format. A title whose final composite reads a half-float
-@@ -3306,29 +10096,61 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
+@@ -3306,29 +10600,61 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
      int slot = off_rt_find(off);
      if (slot >= 0) {
          OffRT* r = &s_d3d.off_rt[slot];
@@ -20174,7 +20700,7 @@ index 68929ed2..066dad0c 100644
          }
      }
      OffRT* r = &s_d3d.off_rt[slot];
-@@ -3347,7 +10169,11 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
+@@ -3347,7 +10673,11 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
              &IID_ID3D12Resource, (void**)&r->res)))
          return -1;
      r->off = off; r->w = w; r->h = h; r->dxgi = (u32)want_fmt;
@@ -20186,7 +20712,7 @@ index 68929ed2..066dad0c 100644
      r->used = 1;
  
      /* Populate the new RT from guest memory: titles CPU-initialise their
-@@ -3360,10 +10186,23 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
+@@ -3360,10 +10690,23 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
          extern u32 cellGcmResolveOffset(u32);
          u32 bpp = (want_fmt == DXGI_FORMAT_R16G16B16A16_FLOAT) ? 8u :
                    (want_fmt == DXGI_FORMAT_R32G32B32A32_FLOAT) ? 16u :
@@ -20213,7 +20739,7 @@ index 68929ed2..066dad0c 100644
              D3D12_HEAP_PROPERTIES hu = {0}; hu.Type = D3D12_HEAP_TYPE_UPLOAD;
              D3D12_RESOURCE_DESC bd = {0};
              bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-@@ -3380,7 +10219,16 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
+@@ -3380,7 +10723,16 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
                      for (u32 y = 0; y < h; y++) {
                          const u8* srow = sp + (u64)y * w * bpp;
                          u8* drow = (u8*)mp + (u64)y * pitch;
@@ -20231,7 +20757,7 @@ index 68929ed2..066dad0c 100644
                              /* guest A8R8G8B8 (bytes A,R,G,B) -> R,G,B,A */
                              for (u32 x = 0; x < w; x++) {
                                  drow[x*4+0] = srow[x*4+1];
-@@ -3404,6 +10252,12 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
+@@ -3404,6 +10756,12 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
                          }
                      }
                      r->up->lpVtbl->Unmap(r->up, 0, NULL);
@@ -20244,7 +20770,7 @@ index 68929ed2..066dad0c 100644
                      D3D12_TEXTURE_COPY_LOCATION cdst = {0}, csrc = {0};
                      cdst.pResource = r->res;
                      cdst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-@@ -3414,6 +10268,7 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
+@@ -3414,6 +10772,7 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
                      csrc.PlacedFootprint.Footprint.Height   = h;
                      csrc.PlacedFootprint.Footprint.Depth    = 1;
                      csrc.PlacedFootprint.Footprint.RowPitch = pitch;
@@ -20252,7 +20778,7 @@ index 68929ed2..066dad0c 100644
                      s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &cdst, 0, 0, 0, &csrc, NULL);
                  }
              }
-@@ -3443,9 +10298,12 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
+@@ -3443,9 +10802,12 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
      sv.Texture2D.MipLevels = 1;
      D3D12_CPU_DESCRIPTOR_HANDLE sh;
      s_d3d.srv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.srv_heap, &sh);
@@ -20266,7 +20792,7 @@ index 68929ed2..066dad0c 100644
      static int _log = 0;
      if (_log++ < 8)
          printf("[D3D12] offscreen RT %d: off=0x%X %ux%u (render-to-texture)\n",
-@@ -3457,6 +10315,9 @@ static D3D12_CPU_DESCRIPTOR_HANDLE off_rt_rtv(int slot)
+@@ -3457,6 +10819,9 @@ static D3D12_CPU_DESCRIPTOR_HANDLE off_rt_rtv(int slot)
  {
      D3D12_CPU_DESCRIPTOR_HANDLE rh;
      s_d3d.rt_rtv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.rt_rtv_heap, &rh);
@@ -20276,7 +20802,7 @@ index 68929ed2..066dad0c 100644
      rh.ptr += (u64)slot * s_d3d.device->lpVtbl->GetDescriptorHandleIncrementSize(
          s_d3d.device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
      return rh;
-@@ -3464,24 +10325,85 @@ static D3D12_CPU_DESCRIPTOR_HANDLE off_rt_rtv(int slot)
+@@ -3464,24 +10829,85 @@ static D3D12_CPU_DESCRIPTOR_HANDLE off_rt_rtv(int slot)
  
  /* Write a texture SRV (or a null SRV when res == NULL) at an absolute SRV
   * heap slot. Used to fill per-draw t0-t3 descriptor windows. */
@@ -20364,7 +20890,7 @@ index 68929ed2..066dad0c 100644
  }
  
  static void srv_write(u32 heap_slot, ID3D12Resource* res, DXGI_FORMAT fmt, UINT mapping)
-@@ -3492,6 +10414,35 @@ static void srv_write(u32 heap_slot, ID3D12Resource* res, DXGI_FORMAT fmt, UINT
+@@ -3492,6 +10918,35 @@ static void srv_write(u32 heap_slot, ID3D12Resource* res, DXGI_FORMAT fmt, UINT
  static void off_rt_transition(int slot, D3D12_RESOURCE_STATES to)
  {
      OffRT* r = &s_d3d.off_rt[slot];
@@ -20400,7 +20926,7 @@ index 68929ed2..066dad0c 100644
      if (r->st == to) return;
      D3D12_RESOURCE_BARRIER b = {0};
      b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-@@ -3507,7 +10458,6 @@ static void off_rt_transition(int slot, D3D12_RESOURCE_STATES to)
+@@ -3507,7 +10962,6 @@ static void off_rt_transition(int slot, D3D12_RESOURCE_STATES to)
   * Present, 0 = execute the recorded draws only. An OFFSCREEN-only batch (a
   * render-to-texture pass) must still run -- it is what fills the texture a
   * later batch samples -- but presenting it would show a half-built frame. */
@@ -20408,7 +20934,7 @@ index 68929ed2..066dad0c 100644
  
  /* Resolve a DRAW_*_TEX value: a hex raw offset, or the literal "duck" for the
   * content-identified duck texture. */
-@@ -3565,39 +10515,907 @@ static void screen_copy_capture(u32 fi)
+@@ -3565,39 +11019,907 @@ static void screen_copy_capture(u32 fi)
                  bb[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
                  s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 2, bb);
  
@@ -21346,7 +21872,7 @@ index 68929ed2..066dad0c 100644
  }
  
  /* rsx_topology -> D3D_PRIMITIVE_TOPOLOGY. Spelled out rather than relying on
-@@ -3686,6 +11504,7 @@ static void composite_present(u32 fi)
+@@ -3686,6 +12008,7 @@ static void composite_present(u32 fi)
      D3D12_BOX box = {0};
      box.left = 0; box.top = 0; box.front = 0;
      box.right = cw; box.bottom = ch; box.back = 1;
@@ -21354,7 +21880,7 @@ index 68929ed2..066dad0c 100644
      s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dl, 0, 0, 0, &sl, &box);
  
      b[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-@@ -3696,6 +11515,382 @@ static void composite_present(u32 fi)
+@@ -3696,6 +12019,382 @@ static void composite_present(u32 fi)
  }
  
  
@@ -21737,7 +22263,7 @@ index 68929ed2..066dad0c 100644
  static void guest_fb_present(u32 fi)
  {
      static int inited = 0;
-@@ -3759,6 +11954,7 @@ static void guest_fb_present(u32 fi)
+@@ -3759,6 +12458,7 @@ static void guest_fb_present(u32 fi)
      sl.PlacedFootprint.Footprint.Height   = gh;
      sl.PlacedFootprint.Footprint.Depth    = 1;
      sl.PlacedFootprint.Footprint.RowPitch = up_pitch;
@@ -21745,7 +22271,7 @@ index 68929ed2..066dad0c 100644
      s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dl, 0, 0, 0, &sl, NULL);
  
      gb.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-@@ -3767,7 +11963,295 @@ static void guest_fb_present(u32 fi)
+@@ -3767,7 +12467,295 @@ static void guest_fb_present(u32 fi)
  }
  
  
@@ -22041,7 +22567,7 @@ index 68929ed2..066dad0c 100644
  {
      double _rf0 = perf_on() ? perf_now() : 0.0;
      u32 fi = s_d3d.frame_index;
-@@ -3778,7 +12262,13 @@ static void render_frame(void)
+@@ -3778,7 +12766,16 @@ static void render_frame(void)
       * (gcm/cube: triangles mixing stale and new vertices -> missing/sliver
       * polygons). These workloads are a few draws/frame, so full serialisation
       * costs little. */
@@ -22051,12 +22577,15 @@ index 68929ed2..066dad0c 100644
 +      if (perf_on()) s_perf_wait += perf_now() - _w0; }
 +    vp_fp_cache_flush_if_full();
 +    tex_upload_sweep();          /* staging of textures that stopped changing */
++    tex_heap_frame_start();      /* RSX_TEX_RING_MB / RSX_TEX_PLACED: the drained batch no longer reads them */
++    fplk_save(0);                /* RSX_PSO_FAST_LOOKUP: new entries, written off this thread */
++    fplk_log();
 +    off_rt_release_deferred();   /* the list that last referenced them is done */
 +    wb_flush();                  /* last frame's small results into guest memory */
  
      /* Compile the real vertex program once its microcode is captured, and keep
       * the constant bank uploaded for the VS. */
-@@ -3815,6 +12305,7 @@ static void render_frame(void)
+@@ -3815,6 +12812,7 @@ static void render_frame(void)
      /* Reset command allocator and list */
      s_d3d.cmd_allocators[fi]->lpVtbl->Reset(s_d3d.cmd_allocators[fi]);
      s_d3d.cmd_list->lpVtbl->Reset(s_d3d.cmd_list, s_d3d.cmd_allocators[fi], NULL);
@@ -22064,7 +22593,7 @@ index 68929ed2..066dad0c 100644
  
      /* Upload the bound font atlas into an R8_UNORM texture and create its SRV.
       * The atlas is a linear 8-bit coverage map, so a straight row copy (no
-@@ -3875,6 +12366,7 @@ static void render_frame(void)
+@@ -3875,6 +12873,7 @@ static void render_frame(void)
                  src.PlacedFootprint.Footprint.Height   = h;
                  src.PlacedFootprint.Footprint.Depth    = 1;
                  src.PlacedFootprint.Footprint.RowPitch = pitch;
@@ -22072,7 +22601,7 @@ index 68929ed2..066dad0c 100644
                  s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dst, 0, 0, 0, &src, NULL);
  
                  D3D12_RESOURCE_BARRIER tb = {0};
-@@ -3905,12 +12397,14 @@ static void render_frame(void)
+@@ -3905,12 +12904,14 @@ static void render_frame(void)
      /* Frames with no ops (init/boot presents) don't count against the cap --
       * PNG-decode-heavy titles burn hundreds of empty presents before the first
       * real draw. */
@@ -22093,7 +22622,7 @@ index 68929ed2..066dad0c 100644
                  r->rt_mrt[0], r->rt_mrt[1], r->rt_mrt[2],
                  r->tex[0].raw, r->fp_addr, r->vertex_count,
                  r->cmask, r->vp_x, r->vp_y, r->vp_w, r->vp_h, r->blend);
-@@ -3919,12 +12413,48 @@ static void render_frame(void)
+@@ -3919,12 +12920,48 @@ static void render_frame(void)
  
      /* Debug: RTT_PASS=N shows pass N's output directly on screen (drops later
       * ops, retargets pass N to the backbuffer). */
@@ -22145,7 +22674,7 @@ index 68929ed2..066dad0c 100644
              if (r->is_clear || !r->is_vp) continue;
              if (seen == keep) {
                  /* Alone: retarget op N to the backbuffer. With RTT_VIEWRT:
-@@ -3937,15 +12467,15 @@ static void render_frame(void)
+@@ -3937,15 +12974,15 @@ static void render_frame(void)
              seen++;
          }
          if (viewrt) {
@@ -22165,7 +22694,7 @@ index 68929ed2..066dad0c 100644
        } }
  
      /* DRAW_LIMIT=<N>: keep only the first N recorded ops this frame. The duck's
-@@ -3954,7 +12484,7 @@ static void render_frame(void)
+@@ -3954,7 +12991,7 @@ static void render_frame(void)
       * painted over them". Diagnostic only. */
      { static int lim = -1;
        if (lim < 0) { const char* e = getenv("DRAW_LIMIT"); lim = e ? atoi(e) : 0; }
@@ -22174,7 +22703,7 @@ index 68929ed2..066dad0c 100644
  
      /* DRAW_SKIP_TEX=<hex raw offset>: drop every op binding that texture on
       * unit 0. The ducks sit behind the water's slab geometry, so removing the
-@@ -3964,12 +12494,12 @@ static void render_frame(void)
+@@ -3964,12 +13001,12 @@ static void render_frame(void)
        want = draw_filter_tex(sk);
        if (want) {
          u32 keep = 0;
@@ -22191,7 +22720,7 @@ index 68929ed2..066dad0c 100644
        } }
  
      /* DRAW_KEEP_TEX=<hex raw offset>: the inverse -- keep only the ops binding
-@@ -4001,15 +12531,15 @@ static void render_frame(void)
+@@ -4001,15 +13038,15 @@ static void render_frame(void)
          static D3D12DrawRecord kept[MAX_DRAWS];
          u32 nk = 0;
          if (!noclr)
@@ -22215,7 +22744,7 @@ index 68929ed2..066dad0c 100644
        } }
  
      /* DRAW_LAST_TEX=<hex raw offset>: move the ops binding that texture to the
-@@ -4020,33 +12550,125 @@ static void render_frame(void)
+@@ -4020,33 +13057,125 @@ static void render_frame(void)
      { static const char* lt = (const char*)1; static u32 want = 0;
        if (lt == (const char*)1) lt = getenv("DRAW_LAST_TEX");
        want = draw_filter_tex(lt);
@@ -22353,7 +22882,7 @@ index 68929ed2..066dad0c 100644
      }
  
      /* Per-frame VP textures + guest-FP pipelines: for each VP draw, upload the
-@@ -4056,8 +12678,8 @@ static void render_frame(void)
+@@ -4056,8 +13185,8 @@ static void render_frame(void)
       * (tex_slot 1000+idx) -- no guest-memory upload. */
      double _pre0 = perf_on() ? perf_now() : 0.0;
      for (int _i = 0; _i < VP_TEX_SLOTS; _i++) s_d3d.vp_tex[_i].used = 0;
@@ -22364,7 +22893,7 @@ index 68929ed2..066dad0c 100644
          if (!dr->is_vp || dr->is_clear) continue;
          /* Debug: RTT_VIEWRT=<hex raw offset> makes display draws sample that
           * offscreen RT at t0 (the composite blit then shows it fullscreen). */
-@@ -4139,14 +12761,366 @@ static void render_frame(void)
+@@ -4139,14 +13268,366 @@ static void render_frame(void)
           * resolves to an offscreen RT (sampled directly), an uploaded guest
           * texture, or a null SRV. */
          double _sv0 = perf_on() ? perf_now() : 0.0;
@@ -22737,7 +23266,7 @@ index 68929ed2..066dad0c 100644
                  if (en) {
                      { static int _n = 0; if (_n++ < 3)
                          fprintf(stderr, "[SCREENTEX] bound frame copy at unit %d for"
-@@ -4159,7 +13133,7 @@ static void render_frame(void)
+@@ -4159,7 +13640,7 @@ static void render_frame(void)
              }
              /* A sampler whose guest buffer was never written, at the size of a
               * reduced-viewport pass we captured: that pass IS its producer. */
@@ -22746,7 +23275,7 @@ index 68929ed2..066dad0c 100644
                  int hit = -1;
                  for (int i = 0; i < s_subvp_n; i++)
                      if (s_subvp[i].res && s_subvp[i].w == dr->tex[_u].w &&
-@@ -4180,7 +13154,17 @@ static void render_frame(void)
+@@ -4180,7 +13661,17 @@ static void render_frame(void)
                  }
              }
              if (dr->tex[_u].set) {
@@ -22765,7 +23294,7 @@ index 68929ed2..066dad0c 100644
                  if (rt >= 0) {
                      dr->tex_rt[_u] = rt;
                      srv_write(wslot, s_d3d.off_rt[rt].res, (DXGI_FORMAT)s_d3d.off_rt[rt].dxgi,
-@@ -4188,14 +13172,20 @@ static void render_frame(void)
+@@ -4188,14 +13679,20 @@ static void render_frame(void)
                      continue;
                  }
                  u32 _bf = dr->tex[_u].fmt & 0x9F;
@@ -22789,7 +23318,7 @@ index 68929ed2..066dad0c 100644
                      if (perf_on()) { s_perf_tex += perf_now() - _tt; s_perf_ntex++;
                          s_perf_texbytes += (u64)dr->tex[_u].w * dr->tex[_u].h * 4u; }
                      /* Both forms of the offset are in hand here; the filters
-@@ -4209,11 +13199,13 @@ static void render_frame(void)
+@@ -4209,11 +13706,13 @@ static void render_frame(void)
                              (_bf == 0x86) ? DXGI_FORMAT_BC1_UNORM :
                              (_bf == 0x87) ? DXGI_FORMAT_BC2_UNORM :
                              (_bf == 0x88) ? DXGI_FORMAT_BC3_UNORM :
@@ -22804,7 +23333,7 @@ index 68929ed2..066dad0c 100644
                          continue;
                      }
                  }
-@@ -4232,11 +13224,17 @@ static void render_frame(void)
+@@ -4232,11 +13731,17 @@ static void render_frame(void)
          }
          if (perf_on()) s_perf_srv += perf_now() - _sv0;
          double _ps0 = perf_on() ? perf_now() : 0.0;
@@ -22824,7 +23353,7 @@ index 68929ed2..066dad0c 100644
          if (perf_on()) s_perf_pso += perf_now() - _ps0;
      }
  
-@@ -4257,6 +13255,7 @@ static void render_frame(void)
+@@ -4257,6 +13762,7 @@ static void render_frame(void)
      /* Get DSV handle (single depth buffer shared across frames) */
      D3D12_CPU_DESCRIPTOR_HANDLE dsv_handle;
      s_d3d.dsv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.dsv_heap, &dsv_handle);
@@ -22832,7 +23361,7 @@ index 68929ed2..066dad0c 100644
  
      if (perf_on()) s_perf_pre += perf_now() - _pre0;
      /* Set render target + depth */
-@@ -4264,7 +13263,7 @@ static void render_frame(void)
+@@ -4264,7 +13770,7 @@ static void render_frame(void)
  
      /* Clear color and depth */
      s_d3d.cmd_list->lpVtbl->ClearRenderTargetView(
@@ -22841,7 +23370,7 @@ index 68929ed2..066dad0c 100644
      s_d3d.cmd_list->lpVtbl->ClearDepthStencilView(
          s_d3d.cmd_list, dsv_handle,
          D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL,
-@@ -4277,7 +13276,7 @@ static void render_frame(void)
+@@ -4277,7 +13783,7 @@ static void render_frame(void)
      s_d3d.cmd_list->lpVtbl->RSSetScissorRects(s_d3d.cmd_list, 1, &scissor);
  
      /* Bind pipeline state and push MVP if anything to draw */
@@ -22850,7 +23379,7 @@ index 68929ed2..066dad0c 100644
          s_d3d.cmd_list->lpVtbl->SetGraphicsRootSignature(s_d3d.cmd_list, s_d3d.root_signature);
          s_d3d.cmd_list->lpVtbl->IASetVertexBuffers(s_d3d.cmd_list, 0, 1, &s_d3d.vb_view);
  
-@@ -4323,7 +13322,7 @@ static void render_frame(void)
+@@ -4323,7 +13829,7 @@ static void render_frame(void)
            if (_vd && _n < 3) {
              _n++;
              fprintf(stderr, "[D3D12-DBG] have_mvp=%d draw_count=%u vb_offset=%u\n",
@@ -22859,7 +23388,7 @@ index 68929ed2..066dad0c 100644
              fprintf(stderr, "[D3D12-DBG] mvp rows: [%.2f %.2f %.2f %.2f][%.2f %.2f %.2f %.2f]"
                              "[%.2f %.2f %.2f %.2f][%.2f %.2f %.2f %.2f]\n",
                      mvp[0],mvp[1],mvp[2],mvp[3], mvp[4],mvp[5],mvp[6],mvp[7],
-@@ -4337,8 +13336,8 @@ static void render_frame(void)
+@@ -4337,8 +13843,8 @@ static void render_frame(void)
                              k, v[0], v[1], v[2], v[3], v[4], v[5], v[6]);
                  }
              }
@@ -22870,7 +23399,7 @@ index 68929ed2..066dad0c 100644
                  fprintf(stderr, "[D3D12-DBG]  draw[%u] is_vp=%d is_clear=%d topo=%u cnt=%u vbofs=%u startv=%u rt=%u\n",
                          d, dr->is_vp, dr->is_clear, dr->topology, dr->vertex_count,
                          dr->vb_byte_offset, dr->vb_byte_offset / VERTEX_STRIDE, dr->rt_off);
-@@ -4351,10 +13350,10 @@ static void render_frame(void)
+@@ -4351,10 +13857,10 @@ static void render_frame(void)
           * must match the topology or D3D12 rejects the draw. */
          u32 last_topo = 0xFFFFFFFFu;
          ID3D12PipelineState* last_pso = NULL;
@@ -22884,7 +23413,7 @@ index 68929ed2..066dad0c 100644
              if (dr->is_vp) continue; /* drawn by the VP pass below */
  
              /* Select PSO: textured triangles (dbgfont) use the atlas PSO;
-@@ -4386,10 +13385,10 @@ static void render_frame(void)
+@@ -4386,10 +13892,10 @@ static void render_frame(void)
  
      /* VP pass: real decompiled vertex program + atlas alpha-test PS. Feeds raw
       * float4 attrib0 from vp_vb and the vp_c[] constant bank. */
@@ -22898,7 +23427,7 @@ index 68929ed2..066dad0c 100644
          /* Textured geometry (dbgfont atlas) uses the sampling PS; untextured 3D
           * (vkcube) uses the colour-only PS. Fall back to whichever exists. */
          ID3D12PipelineState* vpso =
-@@ -4400,60 +13399,79 @@ static void render_frame(void)
+@@ -4400,60 +13906,79 @@ static void render_frame(void)
            if (cap < 0) { const char* e = getenv("VP_SUBMIT"); cap = e ? atoi(e) : 0; }
            if (cap && n < cap) { n++;
              u32 nvp = 0, nclr = 0;
@@ -22993,7 +23522,7 @@ index 68929ed2..066dad0c 100644
                  int want  = dr->rt_off  ? off_rt_find(dr->rt_off)  : -1;
                  /* Remember where geometry actually went: off_rt_find() matches
                   * on offset alone and slots share offsets at different sizes,
-@@ -4462,11 +13480,58 @@ static void render_frame(void)
+@@ -4462,11 +13987,58 @@ static void render_frame(void)
                  int wantm[3];
                  for (int _m = 0; _m < 3; _m++)
                      wantm[_m] = dr->rt_mrt[_m] ? off_rt_find(dr->rt_mrt[_m]) : -1;
@@ -23053,7 +23582,7 @@ index 68929ed2..066dad0c 100644
                      D3D12_VIEWPORT vp = {0, 0, (float)s_d3d.width, (float)s_d3d.height, 0.0f, 1.0f};
                      if (want >= 0) {
                          off_rt_transition(want, D3D12_RESOURCE_STATE_RENDER_TARGET);
-@@ -4480,11 +13545,39 @@ static void render_frame(void)
+@@ -4480,11 +14052,39 @@ static void render_frame(void)
                      }
                      D3D12_RECT sc = {0, 0, (LONG)vp.Width, (LONG)vp.Height};
                      vp_last_w = vp.Width; vp_last_h = vp.Height;
@@ -23096,7 +23625,7 @@ index 68929ed2..066dad0c 100644
                      /* RT_CLEARDBG=2: magenta-clear the surface the DRAWS bind,
                       * at the moment they bind it. The guest's own clears may go
                       * to a different surface entirely (they do here: clears to
-@@ -4511,7 +13604,7 @@ static void render_frame(void)
+@@ -4511,7 +14111,7 @@ static void render_frame(void)
                        if (tt < 0) { const char* e = getenv("VP_TESTTRI"); tt = e ? atoi(e) : 0; }
                        if (tt && want >= 0 && s_d3d.vp_vb_mapped) {
                            float* vtx = (float*)((char*)s_d3d.vp_vb_mapped
@@ -23105,7 +23634,7 @@ index 68929ed2..066dad0c 100644
                                + (u64)1000 * 256u);
                            static const float tri[3][4] = {
                                {-2.0f, -2.0f, 0.0f, 1.0f},
-@@ -4529,8 +13622,30 @@ static void render_frame(void)
+@@ -4529,8 +14129,30 @@ static void render_frame(void)
                        } }
                      cur_rt = want;
                      for (int _m = 0; _m < 3; _m++) cur_m[_m] = wantm[_m];
@@ -23136,7 +23665,7 @@ index 68929ed2..066dad0c 100644
                      D3D12_CPU_DESCRIPTOR_HANDLE rh =
                          (cur_rt >= 0) ? off_rt_rtv(cur_rt) : rtv_handle;
                      /* RT_CLEARDBG=1: clear offscreen targets to magenta rather
-@@ -4554,24 +13669,129 @@ static void render_frame(void)
+@@ -4554,24 +14176,129 @@ static void render_frame(void)
                          }
                      continue;
                  }
@@ -23276,7 +23805,7 @@ index 68929ed2..066dad0c 100644
                          (float)(dr->vp_x + dr->vp_w) <= tw + 0.5f &&
                          (float)(dr->vp_y + dr->vp_h) <= th + 0.5f) {
                          dvp.TopLeftX = (float)dr->vp_x;
-@@ -4582,6 +13802,58 @@ static void render_frame(void)
+@@ -4582,6 +14309,58 @@ static void render_frame(void)
                      D3D12_RECT dsc = {(LONG)dvp.TopLeftX, (LONG)dvp.TopLeftY,
                                        (LONG)(dvp.TopLeftX + dvp.Width),
                                        (LONG)(dvp.TopLeftY + dvp.Height)};
@@ -23335,7 +23864,7 @@ index 68929ed2..066dad0c 100644
                      dvp_x = dvp.TopLeftX; dvp_y = dvp.TopLeftY;
                      dvp_w = dvp.Width;    dvp_h = dvp.Height;
                      s_d3d.cmd_list->lpVtbl->RSSetViewports(s_d3d.cmd_list, 1, &dvp);
-@@ -4590,23 +13862,40 @@ static void render_frame(void)
+@@ -4590,23 +14369,40 @@ static void render_frame(void)
                  /* Per-draw textures: bind this draw's t0-t3 SRV window.
                   * Any sampled offscreen RT transitions to PSR first (never
                   * one of the currently-bound colour targets). */
@@ -23382,7 +23911,7 @@ index 68929ed2..066dad0c 100644
                  /* DRAWARGS=<N>: the arguments actually handed to the GPU, plus
                   * the target they are aimed at. A zero vertex count, or a start
                   * vertex past the buffer, rasterises nothing while every other
-@@ -4640,10 +13929,47 @@ static void render_frame(void)
+@@ -4640,10 +14436,47 @@ static void render_frame(void)
                        for (int _m = 0; _m < 3; _m++)
                            if (cur_m[_m] >= 0) brh[bn++] = off_rt_rtv(cur_m[_m]);
                        s_d3d.cmd_list->lpVtbl->OMSetRenderTargets(
@@ -23433,7 +23962,7 @@ index 68929ed2..066dad0c 100644
                  /* VP_SUBMIT=<N>: prove the VP pass actually reaches the GPU.
                   * "records exist" and "draws were submitted" are different
                   * claims, and every blank-output investigation conflates them. */
-@@ -4658,10 +13984,16 @@ static void render_frame(void)
+@@ -4658,10 +14491,16 @@ static void render_frame(void)
                              dr->vs_idx, dr->cb_slot, dr->vb_byte_offset / 256,
                              dr->cull, dr->blend, 10); } }
              }
@@ -23451,7 +23980,7 @@ index 68929ed2..066dad0c 100644
                  D3D12_VIEWPORT vp = {0, 0, (float)s_d3d.width, (float)s_d3d.height, 0.0f, 1.0f};
                  D3D12_RECT sc = {0, 0, (LONG)s_d3d.width, (LONG)s_d3d.height};
                  s_d3d.cmd_list->lpVtbl->RSSetViewports(s_d3d.cmd_list, 1, &vp);
-@@ -4719,19 +14051,28 @@ static void render_frame(void)
+@@ -4719,19 +14558,28 @@ static void render_frame(void)
       * it silently produced nothing in exactly the configuration being used. */
      { static int fb = -1;
        if (fb < 0) { const char* e = getenv("FRAME_BUDGET"); fb = e ? atoi(e) : 0; }
@@ -23486,7 +24015,7 @@ index 68929ed2..066dad0c 100644
              fprintf(stderr, "[PERF] %.2f fps | tex %.2fs (%.0f%%, %d calls) | vtx %.2fs"
                              " (%.0f%%, %.0fk verts) | render_frame %.2fs (%.0f%%)"
                              " | prepass %.2fs (%.0f%%) [srv %.2fs %.0f%% | pso %.2fs %.0f%% %d calls %d MISS %dKB hashed] | guest %.2fs (%.0f%%)%c",
-@@ -4766,11 +14107,47 @@ static void render_frame(void)
+@@ -4766,11 +14614,47 @@ static void render_frame(void)
          s_lock_valid = 1;
          s_lock_sx = s_lock_sy = 0.0; s_lock_n = 0;
      }
@@ -23539,7 +24068,7 @@ index 68929ed2..066dad0c 100644
  
      /* Debug: RTT_SAVERT=<hex raw offset>[:frame] copies that offscreen RT
       * into a readback buffer this frame and writes rt_save.bmp (half-float
-@@ -4836,6 +14213,7 @@ static void render_frame(void)
+@@ -4836,6 +14720,7 @@ static void render_frame(void)
                  cdst.PlacedFootprint.Footprint.RowPitch = pitch;
                  csrc.pResource = r->res;
                  csrc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -23547,7 +24076,7 @@ index 68929ed2..066dad0c 100644
                  s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &cdst, 0, 0, 0, &csrc, NULL);
                  off_rt_transition(rt, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                  s_rtsave_state = 1;
-@@ -4863,6 +14241,7 @@ static void render_frame(void)
+@@ -4863,6 +14748,7 @@ static void render_frame(void)
  skip_dump_consider: ;
      guest_fb_present(fi);
      composite_present(fi);
@@ -23555,7 +24084,7 @@ index 68929ed2..066dad0c 100644
      int dumping = (s_d3d.dump_frames_left > 0 && s_d3d.readback_buf
                     && s_d3d.dump_skip_left == 0);
      { static int mind2 = -1;
-@@ -4896,6 +14275,7 @@ skip_dump_consider: ;
+@@ -4896,6 +14782,7 @@ skip_dump_consider: ;
          src.pResource = s_d3d.render_targets[fi];
          src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
          src.SubresourceIndex = 0;
@@ -23563,7 +24092,7 @@ index 68929ed2..066dad0c 100644
          s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dst, 0, 0, 0, &src, NULL);
  
          barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-@@ -4910,11 +14290,36 @@ skip_dump_consider: ;
+@@ -4910,11 +14797,36 @@ skip_dump_consider: ;
          barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
          s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &barrier);
      }
@@ -23600,7 +24129,7 @@ index 68929ed2..066dad0c 100644
  
      /* D3D12_IQ=1: drain the debug layer's message queue after submitting the
       * frame. The legacy (is_vp=0) DrawInstanced path silently produced ZERO
-@@ -4930,21 +14335,34 @@ skip_dump_consider: ;
+@@ -4930,21 +14842,34 @@ skip_dump_consider: ;
                  s_d3d.device, &IID_ID3D12InfoQueue, (void**)&iq)) && iq) {
              UINT64 n = iq->lpVtbl->GetNumStoredMessages(iq);
              static int _printed = 0;
@@ -23640,7 +24169,7 @@ index 68929ed2..066dad0c 100644
        } }
  
      if (s_sc_dump_pending) {
-@@ -5059,16 +14477,108 @@ skip_dump_consider: ;
+@@ -5059,16 +14984,108 @@ skip_dump_consider: ;
          }
          if (s_cap_done < s_cap_count) {
              u32 target = s_cap_start + s_cap_done * s_cap_stride;
@@ -23752,7 +24281,7 @@ index 68929ed2..066dad0c 100644
  
      move_to_next_frame();
  
-@@ -5089,7 +14599,10 @@ skip_dump_consider: ;
+@@ -5089,7 +15106,10 @@ skip_dump_consider: ;
                       g_rsx_title_base,
                       s_tframes * 1000.0 / (double)(tnow - s_tt0),
                       s_dbg_last_draws, s_d3d.width, s_d3d.height);
@@ -23764,7 +24293,7 @@ index 68929ed2..066dad0c 100644
              s_tframes = 0;
              s_tt0 = tnow;
          }
-@@ -5145,7 +14658,7 @@ static void d3d12_present(void* ud, u32 buffer_id)
+@@ -5145,7 +15165,7 @@ static void d3d12_present(void* ud, u32 buffer_id)
  
      if (blink_dbg())
          printf("[PRESENT] draws=%u clears_since_last=%u\n",
@@ -23773,7 +24302,7 @@ index 68929ed2..066dad0c 100644
      s_dbg_clears_since_present = 0;
  
      /* An accumulated batch with draws but NONE targeting a display buffer is
-@@ -5153,9 +14666,9 @@ static void d3d12_present(void* ud, u32 buffer_id)
+@@ -5153,9 +15173,9 @@ static void d3d12_present(void* ud, u32 buffer_id)
       * it would strobe the bare backbuffer clear. Keep accumulating -- the
       * composite draw that targets the display presents the whole chain, in
       * order, in one command list. Empty batches still present (boot/idle). */
@@ -23786,7 +24315,7 @@ index 68929ed2..066dad0c 100644
              flip_has_display = 1;
              break;
          }
-@@ -5175,9 +14688,78 @@ static void d3d12_present(void* ud, u32 buffer_id)
+@@ -5175,9 +15195,78 @@ static void d3d12_present(void* ud, u32 buffer_id)
  static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
  {
      (void)ud;
@@ -23868,7 +24397,7 @@ index 68929ed2..066dad0c 100644
  
      /* Convert RSX ARGB u32 to float[4] RGBA */
      float cc[4];
-@@ -5200,19 +14782,20 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
+@@ -5200,19 +15289,20 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
       * chain (demosaic clears each effect pass's surface) -- record it, don't
       * touch the frame boundary. */
      if (rt != 0) {
@@ -23892,7 +24421,7 @@ index 68929ed2..066dad0c 100644
  
      /* A DISPLAY clear marks the start of a new visible frame. If a completed
       * frame is still accumulated (the drain gulped across a frame boundary --
-@@ -5222,8 +14805,8 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
+@@ -5222,8 +15312,8 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
       * batch of offscreen pass work (render-to-texture) must keep accumulating
       * until its composite draw arrives, or the screen strobes intermediates. */
      int have_display_draws = 0;
@@ -23903,7 +24432,7 @@ index 68929ed2..066dad0c 100644
              have_display_draws = 1;
              break;
          }
-@@ -5240,7 +14823,7 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
+@@ -5240,7 +15330,7 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
       * display clear still follows their single flip. Fall back to the old
       * clear-only heuristic for titles that never flip (fc stays 0). */
      static u32 s_frame_draws_max = 0;   /* running max frame size (typical full frame) */
@@ -23912,7 +24441,7 @@ index 68929ed2..066dad0c 100644
      {
          extern unsigned cellGcm_flip_request_count(void);
          static unsigned s_last_present_flip = 0;
-@@ -5257,7 +14840,7 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
+@@ -5257,7 +15347,7 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
               * in one present. Gauged against the running MAX frame size (not
               * the last, which a leaked tiny batch would poison), so it
               * self-scales per title with no fixed threshold. */
@@ -23921,7 +24450,7 @@ index 68929ed2..066dad0c 100644
                  return;   /* intermediate: keep accumulating, flip stays pending */
              s_last_present_flip = fc;
          }
-@@ -5274,14 +14857,17 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
+@@ -5274,14 +15364,17 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
      if (s_d3d.initialized) {
          if (blink_dbg())
              printf("[CLEAR] presenting %u accumulated draws at frame boundary\n",
@@ -23941,7 +24470,7 @@ index 68929ed2..066dad0c 100644
  }
  
  static void d3d12_set_render_target(void* ud, const rsx_state* state)
-@@ -5430,9 +15016,282 @@ void rsx_vtx_pos_dbg(const rsx_state* state, const float* v, u32 n);
+@@ -5430,9 +15523,282 @@ void rsx_vtx_pos_dbg(const rsx_state* state, const float* v, u32 n);
  /* Fill all 16 attribute slots for one vertex. The per-attribute work lives in
   * rsx_vertex_fetch.c so the Metal and null backends read guest vertices the
   * same way this one does, rather than each porting the logic again. */
@@ -24224,7 +24753,7 @@ index 68929ed2..066dad0c 100644
          rsx_fetch_attrib(state, i, vi, out16[i].v);
          if (i == 0) {
              const rsx_vertex_attrib* a = &state->vertex_attribs[0];
-@@ -5442,6 +15301,793 @@ static void read_vp_vertex(const rsx_state* state, u32 vi, VPSlot* out16)
+@@ -5442,6 +15808,793 @@ static void read_vp_vertex(const rsx_state* state, u32 vi, VPSlot* out16)
      }
  }
  
@@ -25018,7 +25547,7 @@ index 68929ed2..066dad0c 100644
  /* VTX_POS=<N>: print the first fetched position of the first N draws. A guest
   * vertex array that resolves to the wrong memory reads as garbage/denormals, and
   * that is indistinguishable from "the shader is wrong" without seeing the input. */
-@@ -5484,6 +16130,21 @@ static void vp_attrs_dbg(const rsx_state* state)
+@@ -5484,6 +16637,21 @@ static void vp_attrs_dbg(const rsx_state* state)
          if (a->enabled) fprintf(stderr, "[VPATTR] a%d off=0x%X stride=%u size=%u type=%u freq=%u fmt=0x%08X\n",
                                  i, a->offset, a->stride, a->size, a->type, a->frequency, a->format);
      }
@@ -25040,7 +25569,7 @@ index 68929ed2..066dad0c 100644
      /* VP_ATTRS_DUMP=<attr>:<n>: read n entries of that attribute straight out of
       * guest memory. Answers "did the guest write these values, or did our fetch
       * mangle them" without inferring it from the rendered image. */
-@@ -5568,18 +16229,47 @@ static u32 upload_quads_vp(const rsx_state* state, u32 first, u32 count)
+@@ -5568,18 +16736,47 @@ static u32 upload_quads_vp(const rsx_state* state, u32 first, u32 count)
  {
      extern uint8_t* vm_base;
      if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
@@ -25092,7 +25621,7 @@ index 68929ed2..066dad0c 100644
          /* quad -> two triangles (perimeter winding) */
          static const int idx[6] = {0,1,2, 0,2,3};
          for (int t = 0; t < 6; t++) { memcpy(&out[o*16], c[idx[t]], sizeof(c[0])); o++; }
-@@ -5591,7 +16281,7 @@ static u32 upload_quads_vp(const rsx_state* state, u32 first, u32 count)
+@@ -5591,7 +16788,7 @@ static u32 upload_quads_vp(const rsx_state* state, u32 first, u32 count)
                      c[k][8].v[0],c[k][8].v[1]);
                fclose(f); } } }
      }
@@ -25101,7 +25630,7 @@ index 68929ed2..066dad0c 100644
      return o;
  }
  
-@@ -5602,16 +16292,16 @@ static u32 upload_tris_vp(const rsx_state* state, u32 first, u32 count)
+@@ -5602,16 +16799,16 @@ static u32 upload_tris_vp(const rsx_state* state, u32 first, u32 count)
      extern uint8_t* vm_base;
      s_req_verts += count; s_req_draws++;
      if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
@@ -25122,7 +25651,7 @@ index 68929ed2..066dad0c 100644
      { double _tv = perf_on() ? perf_now() : 0.0;
        for (u32 k = 0; k < count; k++)
            read_vp_vertex(state, first + k, &out[k*16]);
-@@ -5655,7 +16345,7 @@ static u32 upload_tris_vp(const rsx_state* state, u32 first, u32 count)
+@@ -5655,7 +16852,7 @@ static u32 upload_tris_vp(const rsx_state* state, u32 first, u32 count)
                  out[k*16+2].v[0],out[k*16+2].v[1],out[k*16+2].v[2],
                  out[k*16+9].v[0],out[k*16+9].v[1],out[k*16+9].v[2],out[k*16+9].v[3]);
            fclose(f); } } }
@@ -25131,7 +25660,7 @@ index 68929ed2..066dad0c 100644
      return count;
  }
  
-@@ -5668,24 +16358,41 @@ static u32 upload_strip_vp(const rsx_state* state, u32 first, u32 count, int fan
+@@ -5668,24 +16865,41 @@ static u32 upload_strip_vp(const rsx_state* state, u32 first, u32 count, int fan
  {
      extern uint8_t* vm_base;
      if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
@@ -25184,7 +25713,7 @@ index 68929ed2..066dad0c 100644
      return o;
  }
  
-@@ -5701,10 +16408,10 @@ static u32 read_guest_index(const rsx_state* st, u32 k)
+@@ -5701,10 +16915,10 @@ static u32 read_guest_index(const rsx_state* st, u32 k)
      const u8* p = vm_base + base;
      if (((st->index_array_dma >> 4) & 0xF) == 1) {
          p += (u64)k * 2;
@@ -25197,7 +25726,7 @@ index 68929ed2..066dad0c 100644
  }
  
  /* Indexed variants of the VP-path uploads. */
-@@ -5714,10 +16421,10 @@ static u32 upload_quads_vp_indexed(const rsx_state* state, u32 first, u32 count)
+@@ -5714,10 +16928,10 @@ static u32 upload_quads_vp_indexed(const rsx_state* state, u32 first, u32 count)
      if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
      if (!state->vertex_attribs[0].enabled) return 0;
      u32 quads = count / 4;
@@ -25211,7 +25740,7 @@ index 68929ed2..066dad0c 100644
      u32 o = 0;
      for (u32 q = 0; q < quads; q++) {
          VPSlot c[4][16];
-@@ -5744,7 +16451,7 @@ static u32 upload_quads_vp_indexed(const rsx_state* state, u32 first, u32 count)
+@@ -5744,7 +16958,7 @@ static u32 upload_quads_vp_indexed(const rsx_state* state, u32 first, u32 count)
                  fclose(f);
              } } }
      }
@@ -25220,7 +25749,7 @@ index 68929ed2..066dad0c 100644
      return o;
  }
  
-@@ -5755,14 +16462,56 @@ static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
+@@ -5755,14 +16969,56 @@ static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
      if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
      if (!state->vertex_attribs[0].enabled) return 0;
      vp_attrs_dbg(state);
@@ -25280,7 +25809,7 @@ index 68929ed2..066dad0c 100644
      { double _tv = perf_on() ? perf_now() : 0.0;
        for (u32 k = 0; k < count; k++)
            read_vp_vertex(state, read_guest_index(state, first + k), &out[k*16]);
-@@ -5957,7 +16706,7 @@ static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
+@@ -5957,7 +17213,7 @@ static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
                  read_guest_index(state, first+2),
                  a0->offset, vbase, nz, a0->stride, a0->size, a0->type,
                  out[0].v[0], out[0].v[1], out[0].v[2], 10); } }
@@ -25289,7 +25818,7 @@ index 68929ed2..066dad0c 100644
      return count;
  }
  
-@@ -5967,28 +16716,122 @@ static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
+@@ -5967,28 +17223,122 @@ static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
   * octopus tentacles -- are indexed strips. */
  static u32 upload_strip_vp_indexed(const rsx_state* state, u32 first, u32 count, int fan)
  {
@@ -25423,7 +25952,7 @@ index 68929ed2..066dad0c 100644
      /* RSX_LIVE_FEED_DBG=1: pair with the [feed] method counts so "the FIFO
       * carries no draw batches" can be checked against "the backend is told
       * to draw" in the same run. */
-@@ -5997,6 +16840,7 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -5997,6 +17347,7 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
            if (((++n) % 20000) == 0)
                printf("[backend] arrays callbacks=%lld (prim=%u count=%u)\n", n, primitive, count), fflush(stdout); } }
      (void)ud;
@@ -25431,7 +25960,7 @@ index 68929ed2..066dad0c 100644
      /* Log the first 20 calls in detail, then every 1000th to show liveness
       * without flooding. */
      static u64 s_total = 0;
-@@ -6022,10 +16866,14 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6022,10 +17373,14 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
           * off-screen. Untextured VP draws now render via the colour PSO. */
          if (s_d3d.vp_vb_mapped && s_d3d.vp_root_sig) {
              u32 rec = s_d3d.vp_vb_offset;
@@ -25448,7 +25977,7 @@ index 68929ed2..066dad0c 100644
                  dr->vertex_count   = emitted;
                  dr->topology       = RSX_TOPOLOGY_TRIANGLES;
                  dr->textured       = s_d3d.tex_bound;
-@@ -6036,6 +16884,8 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6036,6 +17391,8 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                  dr->cull = rsx_cull_key(s_d3d.current_rsx_state);
          dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
              dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
@@ -25457,7 +25986,7 @@ index 68929ed2..066dad0c 100644
                  dr->cmask = 0xF;
                  if (s_d3d.current_rsx_state) {
                      u32 _cm = s_d3d.current_rsx_state->color_mask;
-@@ -6046,15 +16896,15 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6046,15 +17403,15 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                  }
                  dr->alpha_ctl = 0;
                  if (s_d3d.current_rsx_state)
@@ -25477,7 +26006,7 @@ index 68929ed2..066dad0c 100644
                      dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1;
                      dr->tex[_u].cube  = s_d3d.cur_texs[_u].cube;
                      dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips;
-@@ -6062,10 +16912,13 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6062,10 +17419,13 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                      dr->tex_rt[_u]  = -1;
                  }
                  dr->tex_slot = -1;
@@ -25493,7 +26022,7 @@ index 68929ed2..066dad0c 100644
                  if (getenv("BLENDDBG")) { static u32 seen[32]; static int ns=0;
                      u32 k = (dr->blend ? 0x80000000u : 0u) | dr->blend_key;
                      int f=0; for (int i=0;i<ns;i++) if (seen[i]==k) f=1;
-@@ -6073,31 +16926,35 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6073,31 +17433,35 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                          fprintf(stderr, "[BLEND] enable=%d key=0x%X%c",
                                  dr->blend, dr->blend_key, 10); } }
                  dr->rt_off = current_rt_off(&dr->rt_w, &dr->rt_h, dr->rt_mrt);
@@ -25542,7 +26071,7 @@ index 68929ed2..066dad0c 100644
          }
          return;
      }
-@@ -6113,14 +16970,22 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6113,14 +17477,22 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
       * zero pixels (it also uploads to vp_vb, leaving the fixed-function vb empty).
       * Geometry already in clip space with no VP -- flOw's injected scene -- must
       * go down the fixed-function passthrough below instead. */
@@ -25567,7 +26096,7 @@ index 68929ed2..066dad0c 100644
          /* RSX splits one primitive stream across several DRAW_ARRAYS entries
           * inside a single BEGIN/END (each carries at most 256 vertices), and the
           * hardware concatenates them before assembling primitives. Recording a
-@@ -6130,24 +16995,26 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6130,24 +17502,26 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
           * rendered as spike triangles with a zero texcoord along the tub rim.
           * The batches land contiguously in the vertex buffer, so extending the
           * previous record is all that is needed to restore the stream. */
@@ -25599,7 +26128,7 @@ index 68929ed2..066dad0c 100644
              dr->vertex_count   = emitted;
              dr->topology       = RSX_TOPOLOGY_TRIANGLES;
              dr->textured       = s_d3d.tex_bound;
-@@ -6158,6 +17025,8 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6158,6 +17532,8 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
              dr->cull = rsx_cull_key(s_d3d.current_rsx_state);
          dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
              dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
@@ -25608,7 +26137,7 @@ index 68929ed2..066dad0c 100644
              dr->cmask = 0xF;
              if (s_d3d.current_rsx_state) {
                  u32 _cm = s_d3d.current_rsx_state->color_mask;
-@@ -6168,15 +17037,15 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6168,15 +17544,15 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
              }
              dr->alpha_ctl = 0;
              if (s_d3d.current_rsx_state)
@@ -25628,7 +26157,7 @@ index 68929ed2..066dad0c 100644
                      dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1;
                      dr->tex[_u].cube  = s_d3d.cur_texs[_u].cube;
                      dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips;
-@@ -6184,21 +17053,28 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6184,21 +17560,28 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                  dr->tex_rt[_u]  = -1;
              }
              dr->tex_slot = -1;
@@ -25663,7 +26192,7 @@ index 68929ed2..066dad0c 100644
              /* Anchor for merging the next DRAW_ARRAYS batch of this stream. */
              s_d3d.merge_prev_draw  = (primitive == RSX_PRIMITIVE_TRIANGLES);
              s_d3d.merge_first_end  = first + count;
-@@ -6224,20 +17100,28 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6224,20 +17607,28 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
      u32 actual_count  = upload_vertices_from_rsx(first, count);
      if (actual_count == 0) return;
  
@@ -25701,7 +26230,7 @@ index 68929ed2..066dad0c 100644
      /* RSX_LIVE_FEED_DBG=1: pair with the [feed] method counts so "the FIFO
       * carries no draw batches" can be checked against "the backend is told
       * to draw" in the same run. */
-@@ -6254,6 +17138,7 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6254,6 +17645,7 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
      }
      if (!s_d3d.pipeline_ready) return;
      if (count == 0 || count > MAX_VERTICES) return;
@@ -25709,7 +26238,7 @@ index 68929ed2..066dad0c 100644
      if (!s_d3d.vp_vb_mapped || !s_d3d.vp_root_sig) return;
  
      /* Expand through the VP path (indices resolved CPU-side): QUADS -> two
-@@ -6261,6 +17146,10 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6261,6 +17653,10 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
       * list. Other primitives are skipped rather than drawn wrong. */
      u32 emitted = 0;
      u32 rec = s_d3d.vp_vb_offset;
@@ -25720,7 +26249,7 @@ index 68929ed2..066dad0c 100644
      if (primitive == RSX_PRIMITIVE_QUADS)             emitted = upload_quads_vp_indexed(s_d3d.current_rsx_state, first, count);
      else if (primitive == RSX_PRIMITIVE_TRIANGLES)    emitted = upload_tris_vp_indexed(s_d3d.current_rsx_state, first, count);
      else if (primitive == RSX_PRIMITIVE_TRIANGLE_STRIP) emitted = upload_strip_vp_indexed(s_d3d.current_rsx_state, first, count, 0);
-@@ -6271,27 +17160,105 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6271,27 +17667,105 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
              printf("[D3D12] draw_indexed: skipping prim=%u (not wired)\n", primitive);
          return;
      }
@@ -25831,7 +26360,7 @@ index 68929ed2..066dad0c 100644
          dr->vertex_count   = emitted;
          dr->topology       = RSX_TOPOLOGY_TRIANGLES;
          dr->textured       = s_d3d.tex_bound;
-@@ -6301,6 +17268,8 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6301,6 +17775,8 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
              ((s_d3d.current_rsx_state->shader_control & 0x40) != 0) : 1;
          dr->cull = rsx_cull_key(s_d3d.current_rsx_state);
          dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
@@ -25840,7 +26369,7 @@ index 68929ed2..066dad0c 100644
          dr->cmask = 0xF;
          if (s_d3d.current_rsx_state) {
              u32 _cm = s_d3d.current_rsx_state->color_mask;
-@@ -6311,15 +17280,15 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6311,15 +17787,15 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
          }
          dr->alpha_ctl = 0;
          if (s_d3d.current_rsx_state)
@@ -25860,7 +26389,7 @@ index 68929ed2..066dad0c 100644
                      dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1;
                      dr->tex[_u].cube  = s_d3d.cur_texs[_u].cube;
                      dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips;
-@@ -6327,21 +17296,58 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6327,21 +17803,58 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
              dr->tex_rt[_u]  = -1;
          }
          dr->tex_slot = -1;
@@ -25925,7 +26454,7 @@ index 68929ed2..066dad0c 100644
          /* Anchor for merging the next batch of this indexed stream. */
          s_d3d.merge_prev_draw = (primitive == RSX_PRIMITIVE_TRIANGLES);
          s_d3d.merge_first_end = first + count;
-@@ -6358,6 +17364,24 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
+@@ -6358,6 +17871,24 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
      u32 height = tex->image_rect & 0xFFFF;
      u32 format = (tex->format >> 8) & 0xFF;
      u32 offset = tex->offset;
@@ -25950,7 +26479,7 @@ index 68929ed2..066dad0c 100644
      /* CUBEDBG=1: NV4097_SET_TEXTURE_FORMAT bit 2 is the cubemap flag, and the
       * line above throws it away with the rest of the low byte. Nothing in this
       * backend handles cube textures, so a cubemap bound for an environment
-@@ -6416,14 +17440,27 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
+@@ -6416,14 +17947,27 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
       * as-seen 0xA1 with the LN flag) is wired up so far; other formats fall
       * back to untextured. */
      u32 base_fmt = format & 0x9F;   /* strip LN(0x20)/UN(0x40) flags */
@@ -25980,7 +26509,7 @@ index 68929ed2..066dad0c 100644
          /* TEX_RESOLVE_AUTO=1: resolve through the page tables (local-page map
           * then IO table) instead of trusting the format's location bits. A
           * texture the guest built in main memory but tagged local resolves to
-@@ -6466,18 +17503,28 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
+@@ -6466,18 +18010,28 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
              } }
            s_d3d.cur_texs[unit].off = _r; }
          s_d3d.cur_texs[unit].raw = offset;
@@ -26011,7 +26540,7 @@ index 68929ed2..066dad0c 100644
          s_d3d.cur_texs[unit].set = 1;
      }
      if (base_fmt == 0x81 /* B8 */) {
-@@ -6583,12 +17630,27 @@ static rsx_backend s_d3d12_backend = {0};
+@@ -6583,12 +18137,27 @@ static rsx_backend s_d3d12_backend = {0};
  int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
  {
      memset(&s_d3d, 0, sizeof(s_d3d));
@@ -26043,7 +26572,7 @@ index 68929ed2..066dad0c 100644
  
      /* Debug: dump the first N presented frames to BMP if CELLMARK_DUMP is set
       * (its numeric value when > 1, else 24). */
-@@ -6609,7 +17671,8 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
+@@ -6609,7 +18178,8 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
          snprintf(g_rsx_title_base, sizeof(g_rsx_title_base), "%s",
                   title ? title : "ps3recomp");
      }
@@ -26053,7 +26582,7 @@ index 68929ed2..066dad0c 100644
      if (!s_d3d.hwnd) {
          printf("[D3D12] ERROR: Window creation failed\n");
          return -1;
-@@ -6636,11 +17699,13 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
+@@ -6636,11 +18206,13 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
      s_d3d12_backend.set_shader        = d3d12_set_shader;
      s_d3d12_backend.set_vertex_attribs = d3d12_set_vertex_attribs;
      s_d3d12_backend.draw_arrays       = d3d12_draw_arrays;
@@ -26067,7 +26596,7 @@ index 68929ed2..066dad0c 100644
      s_d3d.initialized = 1;
      s_d3d.last_fps_time = GetTickCount64();
  
-@@ -6652,7 +17717,20 @@ void rsx_d3d12_backend_shutdown(void)
+@@ -6652,7 +18224,23 @@ void rsx_d3d12_backend_shutdown(void)
  {
      if (!s_d3d.initialized) return;
  
@@ -26078,8 +26607,11 @@ index 68929ed2..066dad0c 100644
 +    dxb_shutdown();
      wait_for_gpu();
 +    spack_race_end_ex(1);   /* quitting from a race keeps what it learned */
++    while (InterlockedCompareExchange(&s_fplk_saving, 0, 0)) Sleep(1);
++    fplk_save(1);
 +    dxbc_mem_clear();
 +    pso_warm_clear();
++    tex_heap_shutdown();
 +    { ID3D12Resource** m[6] = { &s_vb_gpu, &s_ib_gpu, &s_cb_gpu, &s_fpcb_gpu, &s_vraw_gpu, &s_vfcb_gpu };
 +      s_vram_on = 0;
 +      for (int i = 0; i < 6; i++) if (*m[i]) { (*m[i])->lpVtbl->Release(*m[i]); *m[i] = NULL; }
@@ -26088,7 +26620,7 @@ index 68929ed2..066dad0c 100644
  
      /* Release D3D12 resources */
      if (s_d3d.vertex_buffer) {
-@@ -6662,6 +17740,8 @@ void rsx_d3d12_backend_shutdown(void)
+@@ -6662,6 +18250,8 @@ void rsx_d3d12_backend_shutdown(void)
      if (s_d3d.pipeline_state)        s_d3d.pipeline_state->lpVtbl->Release(s_d3d.pipeline_state);
      if (s_d3d.pipeline_state_lines)  s_d3d.pipeline_state_lines->lpVtbl->Release(s_d3d.pipeline_state_lines);
      if (s_d3d.pipeline_state_points) s_d3d.pipeline_state_points->lpVtbl->Release(s_d3d.pipeline_state_points);
@@ -26097,7 +26629,7 @@ index 68929ed2..066dad0c 100644
      if (s_d3d.depth_buffer) s_d3d.depth_buffer->lpVtbl->Release(s_d3d.depth_buffer);
      if (s_d3d.dsv_heap)     s_d3d.dsv_heap->lpVtbl->Release(s_d3d.dsv_heap);
      if (s_d3d.root_signature) s_d3d.root_signature->lpVtbl->Release(s_d3d.root_signature);
-@@ -6671,13 +17751,14 @@ void rsx_d3d12_backend_shutdown(void)
+@@ -6671,13 +18261,14 @@ void rsx_d3d12_backend_shutdown(void)
      for (u32 i = 0; i < FRAME_COUNT; i++) {
          if (s_d3d.cmd_allocators[i]) s_d3d.cmd_allocators[i]->lpVtbl->Release(s_d3d.cmd_allocators[i]);
          if (s_d3d.render_targets[i]) s_d3d.render_targets[i]->lpVtbl->Release(s_d3d.render_targets[i]);
@@ -26113,7 +26645,7 @@ index 68929ed2..066dad0c 100644
  
      rsx_set_backend(NULL);
      s_d3d.initialized = 0;
-@@ -6687,6 +17768,7 @@ void rsx_d3d12_backend_shutdown(void)
+@@ -6687,6 +18278,7 @@ void rsx_d3d12_backend_shutdown(void)
  
  int rsx_d3d12_backend_pump_messages(void)
  {
@@ -26121,7 +26653,7 @@ index 68929ed2..066dad0c 100644
      MSG msg;
      while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
          if (msg.message == WM_QUIT) return -1;
-@@ -6700,7 +17782,7 @@ void rsx_d3d12_backend_present(void)
+@@ -6700,7 +18292,7 @@ void rsx_d3d12_backend_present(void)
  {
      if (blink_dbg())
          printf("[PRESENT] draws=%u clears_since_last=%u clear_presents=%u\n",
@@ -26130,7 +26662,7 @@ index 68929ed2..066dad0c 100644
      s_dbg_clears_since_present = 0;
  
      /* Once frame-boundary presents are active (d3d12_clear presents each
-@@ -6709,8 +17791,22 @@ void rsx_d3d12_backend_present(void)
+@@ -6709,8 +18301,22 @@ void rsx_d3d12_backend_present(void)
       * that partial present right after the FIFO ring recycle was the visible
       * blink. Keep the ticker present solely as the boot-time fallback (before
       * the first framed clear arrives). */
@@ -26155,7 +26687,7 @@ index 68929ed2..066dad0c 100644
  
      /* Same display gate as d3d12_present: a batch of offscreen pass work only
       * (render-to-texture) keeps accumulating until its composite arrives.
-@@ -6718,9 +17814,12 @@ void rsx_d3d12_backend_present(void)
+@@ -6718,9 +18324,12 @@ void rsx_d3d12_backend_present(void)
       * empty present is a flip/drain race and wipes the screen for a frame
       * (wave: black flashes and layout flicker between frames). */
      static int s_seen_content = 0;
@@ -26171,7 +26703,7 @@ index 68929ed2..066dad0c 100644
              has_display = 1;
              break;
          }
-@@ -6729,7 +17828,7 @@ void rsx_d3d12_backend_present(void)
+@@ -6729,7 +18338,7 @@ void rsx_d3d12_backend_present(void)
        if (gfb < 0) { const char* e = getenv("GCM_GUEST_FB"); gfb = e ? 1 : 0; }
        if (gfb) has_display = 1; }
      if (s_composite_src) has_display = 1;
@@ -26180,7 +26712,7 @@ index 68929ed2..066dad0c 100644
  
      /* VP_SUBMIT=<N>: has_display gates render_frame() entirely, so a batch whose
       * records all target an OFFSCREEN rt (rt_off != 0) presents without ever
-@@ -6737,26 +17836,26 @@ void rsx_d3d12_backend_present(void)
+@@ -6737,26 +18346,26 @@ void rsx_d3d12_backend_present(void)
       * reads as "nothing rasterizes" from every downstream check. */
      { static int cap = -1, n = 0;
        if (cap < 0) { const char* e = getenv("VP_SUBMIT"); cap = e ? atoi(e) : 0; }
@@ -26217,7 +26749,7 @@ index 68929ed2..066dad0c 100644
              }
              /* The execution loop skips anything without is_vp, so a batch full
               * of !is_vp records is counted, gated and then never drawn. */
-@@ -6767,7 +17866,7 @@ void rsx_d3d12_backend_present(void)
+@@ -6767,7 +18376,7 @@ void rsx_d3d12_backend_present(void)
            fprintf(stderr, "%c", 10); }
          fprintf(stderr, "[PRESENTGATE] records=%u onscreen=%u offscreen=%u clears=%u"
                          " has_display=%d seen_content=%d -> render_frame=%s\n",
@@ -26226,7 +26758,7 @@ index 68929ed2..066dad0c 100644
                  s_seen_content, (s_d3d.initialized && has_display) ? "YES" : "SKIPPED"); } }
  
      /* Execute the batch whenever it has draws. Gating the whole call on
-@@ -6775,14 +17874,14 @@ void rsx_d3d12_backend_present(void)
+@@ -6775,14 +18384,14 @@ void rsx_d3d12_backend_present(void)
       * offscreen surface -- was DISCARDED rather than deferred, so the texture
       * it produces was never written and whatever sampled it later read an
       * empty resource. Only the Present needs onscreen content. */
@@ -26244,7 +26776,7 @@ index 68929ed2..066dad0c 100644
      }
  }
  
-@@ -6799,7 +17898,12 @@ int rsx_d3d12_backend_init(u32 w, u32 h, const char* t)
+@@ -6799,7 +18408,12 @@ int rsx_d3d12_backend_init(u32 w, u32 h, const char* t)
      return -1;
  }
  void rsx_d3d12_backend_shutdown(void) {}
