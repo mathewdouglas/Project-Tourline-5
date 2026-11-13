@@ -115,7 +115,7 @@ index 00000000..e3700ff5
 +#endif
 +#endif
 diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
-index b51fb7c4..484c4976 100644
+index b51fb7c4..69069a35 100644
 --- a/libs/audio/cellAudio.c
 +++ b/libs/audio/cellAudio.c
 @@ -15,6 +15,7 @@
@@ -143,18 +143,60 @@ index b51fb7c4..484c4976 100644
  #endif
  
  #if AUDIO_BACKEND_SDL2
-@@ -233,37 +238,31 @@ static IAudioClient*        s_wasapi_client = NULL;
+@@ -156,6 +161,41 @@ static mutex_t       s_audio_mutex;
+ /* Output mix buffer (stereo, one block worth) */
+ static float s_mix_buffer[CELL_AUDIO_BLOCK_SAMPLES * 2];
+ 
++static unsigned s_input_nan[CELL_AUDIO_PORT_MAX], s_input_inf[CELL_AUDIO_PORT_MAX];
++static unsigned s_input_port;
++static int audio_scrub_enabled(void)
++{
++    static int enabled = -1;
++    if (enabled < 0) {
++        const char* e = getenv("AUDIO_NONFINITE_SCRUB");
++        enabled = !(e && !strcmp(e, "0"));
++    }
++    return enabled;
++}
++
++/* Classify before sanitizing: invalid PCM must not masquerade as healthy
++ * non-silence in diagnostics or reach the host audio engine by default. */
++typedef struct AudioBlockStats {
++    unsigned nan, inf, nonzero;
++    float peak;
++} AudioBlockStats;
++static AudioBlockStats audio_check_block(float* samples, u32 count, int scrub)
++{
++    AudioBlockStats stats = {0};
++    for (u32 i = 0; i < count; i++) {
++        u32 bits; memcpy(&bits, &samples[i], sizeof bits);
++        if ((bits & 0x7F800000u) == 0x7F800000u) {
++            if (bits & 0x007FFFFFu) stats.nan++; else stats.inf++;
++            if (scrub) samples[i] = 0.0f;
++            continue;
++        }
++        float a = samples[i]; if (a < 0.0f) a = -a;
++        if (a > stats.peak) stats.peak = a;
++        if (a != 0.0f) stats.nonzero++;
++    }
++    return stats;
++}
++
+ /* ---------------------------------------------------------------------------
+  * Host audio output backend
+  * -----------------------------------------------------------------------*/
+@@ -233,37 +273,43 @@ static IAudioClient*        s_wasapi_client = NULL;
  static IAudioRenderClient*  s_wasapi_render = NULL;
  static HANDLE               s_wasapi_event  = NULL;
  static UINT32               s_wasapi_buf_frames = 0;
+-
+-static int audio_backend_init(void)
 +static IMMDeviceEnumerator* s_wasapi_enumerator;
 +static LPWSTR s_wasapi_device_id;
 +static int s_wasapi_com_owned;
 +static int s_audio_hotplug;
-+static ULONGLONG s_wasapi_next_check;
- 
--static int audio_backend_init(void)
-+static void audio_backend_close_stream(void)
++/* Report startup failures too, with bounded retries when no stream exists. */
++static void audio_backend_report_error(const char* stage, HRESULT hr)
  {
 -    HRESULT hr;
 -
@@ -170,8 +212,17 @@ index b51fb7c4..484c4976 100644
 -    if (FAILED(hr)) {
 -        printf("[cellAudio] Failed to create device enumerator: 0x%08lX\n", hr);
 -        return -1;
--    }
--
++    static const char* last_stage;
++    static HRESULT last_hr;
++    static ULONGLONG next_log;
++    ULONGLONG now = GetTickCount64();
++    if (!last_stage || strcmp(last_stage, stage) || last_hr != hr || now >= next_log) {
++        fprintf(stderr, "[cellAudio] %s failed: 0x%08lX; retrying output\n", stage, (unsigned long)hr);
++        last_stage = stage; last_hr = hr; next_log = now + 5000;
+     }
++}
++static ULONGLONG s_wasapi_next_check;
+ 
 -    IMMDevice* device = NULL;
 -    hr = enumerator->lpVtbl->GetDefaultAudioEndpoint(enumerator, eRender,
 -                                                      eConsole, &device);
@@ -180,6 +231,8 @@ index b51fb7c4..484c4976 100644
 -        printf("[cellAudio] Failed to get default audio endpoint: 0x%08lX\n", hr);
 -        return -1;
 -    }
++static void audio_backend_close_stream(void)
++{
 +    if (s_wasapi_client) s_wasapi_client->lpVtbl->Stop(s_wasapi_client);
 +    if (s_wasapi_render) s_wasapi_render->lpVtbl->Release(s_wasapi_render);
 +    if (s_wasapi_client) s_wasapi_client->lpVtbl->Release(s_wasapi_client);
@@ -201,7 +254,7 @@ index b51fb7c4..484c4976 100644
      if (FAILED(hr)) {
          printf("[cellAudio] Failed to activate audio client: 0x%08lX\n", hr);
          return -1;
-@@ -280,65 +279,175 @@ static int audio_backend_init(void)
+@@ -280,65 +326,180 @@ static int audio_backend_init(void)
  
      /* Request event-driven mode with a ~20ms buffer */
      REFERENCE_TIME buf_duration = 200000; /* 20ms in 100ns units */
@@ -303,7 +356,9 @@ index b51fb7c4..484c4976 100644
 +static HRESULT STDMETHODCALLTYPE audio_notify_device(IMMNotificationClient* self, LPCWSTR id)
 +{ (void)self; (void)id; InterlockedExchange(&s_wasapi_change, 1); return S_OK; }
 +static HRESULT STDMETHODCALLTYPE audio_notify_default(IMMNotificationClient* self, EDataFlow flow, ERole role, LPCWSTR id)
-+{
+ {
+-    if (s_wasapi_client) {
+-        s_wasapi_client->lpVtbl->Stop(s_wasapi_client);
 +    (void)self; (void)id;
 +    if (flow == eRender && role == eConsole) InterlockedExchange(&s_wasapi_change, 1);
 +    return S_OK;
@@ -317,9 +372,7 @@ index b51fb7c4..484c4976 100644
 +static IMMNotificationClient s_audio_notify = { &s_audio_notify_vt };
 +
 +static void audio_backend_refresh(void)
- {
--    if (s_wasapi_client) {
--        s_wasapi_client->lpVtbl->Stop(s_wasapi_client);
++{
 +    ULONGLONG now = GetTickCount64();
 +    if (s_wasapi_next_check && (!s_audio_hotplug || now < s_wasapi_next_check)) return;
 +    /* Registered and streaming: nothing to do until a change is reported. */
@@ -335,7 +388,7 @@ index b51fb7c4..484c4976 100644
 +    if (!s_wasapi_enumerator) {
 +        HRESULT hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL,
 +                                     &IID_IMMDeviceEnumerator, (void**)&s_wasapi_enumerator);
-+        if (FAILED(hr)) return;
++        if (FAILED(hr)) { audio_backend_report_error("Create device enumerator", hr); return; }
 +        const char* poll = getenv("AUDIO_HOTPLUG_POLL");
 +        if (s_audio_hotplug && !(poll && !strcmp(poll, "1")))
 +            s_wasapi_notify = SUCCEEDED(s_wasapi_enumerator->lpVtbl->RegisterEndpointNotificationCallback(
@@ -350,6 +403,7 @@ index b51fb7c4..484c4976 100644
 +    HRESULT hr = s_wasapi_enumerator->lpVtbl->GetDefaultAudioEndpoint(
 +        s_wasapi_enumerator, eRender, eConsole, &device);
 +    if (FAILED(hr)) {
++        audio_backend_report_error("Get default output", hr);
 +        if (s_wasapi_client) {
 +            printf("[cellAudio] No default output; waiting for a device\n");
 +            audio_backend_close_stream();
@@ -366,6 +420,7 @@ index b51fb7c4..484c4976 100644
 +        audio_backend_close_stream();
 +        audio_backend_open(device);
 +    }
++    if (FAILED(hr)) audio_backend_report_error("Get output ID", hr);
 +    CoTaskMemFree(id);
 +    device->lpVtbl->Release(device);
 +}
@@ -376,7 +431,10 @@ index b51fb7c4..484c4976 100644
 +    s_audio_hotplug = !e || strcmp(e, "0");
 +    HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
 +    s_wasapi_com_owned = SUCCEEDED(hr);
-+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) return -1;
++    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
++        fprintf(stderr, "[cellAudio] COM initialization failed: 0x%08lX\n", (unsigned long)hr);
++        return -1;
++    }
 +    s_wasapi_next_check = 0;
 +    audio_backend_refresh();
 +    return s_wasapi_client ? 0 : -1;
@@ -403,7 +461,7 @@ index b51fb7c4..484c4976 100644
      }
  }
  
-@@ -347,7 +456,8 @@ static void audio_backend_submit(const float* stereo_samples, u32 num_samples)
+@@ -347,7 +508,8 @@ static void audio_backend_submit(const float* stereo_samples, u32 num_samples)
      if (!s_wasapi_render) return;
  
      UINT32 padding = 0;
@@ -413,7 +471,7 @@ index b51fb7c4..484c4976 100644
  
      UINT32 available = s_wasapi_buf_frames - padding;
      if (num_samples > available) {
-@@ -357,11 +467,12 @@ static void audio_backend_submit(const float* stereo_samples, u32 num_samples)
+@@ -357,11 +519,12 @@ static void audio_backend_submit(const float* stereo_samples, u32 num_samples)
      if (num_samples == 0) return;
  
      BYTE* buf = NULL;
@@ -428,7 +486,7 @@ index b51fb7c4..484c4976 100644
  }
  
  /* Frames the device can take right now; -1 with no device open. */
-@@ -371,10 +482,7 @@ static int audio_backend_room(void)
+@@ -371,10 +534,7 @@ static int audio_backend_room(void)
      UINT32 padding = 0;
      const HRESULT hr = s_wasapi_client->lpVtbl->GetCurrentPadding(s_wasapi_client, &padding);
      if (FAILED(hr)) {
@@ -440,24 +498,48 @@ index b51fb7c4..484c4976 100644
          return -1;
      }
      return (int)(s_wasapi_buf_frames - padding);
-@@ -408,6 +516,16 @@ static inline float ld_be_f32(const float* p)
+@@ -403,20 +563,40 @@ static inline float ld_be_f32(const float* p)
+     u32 v;
+     memcpy(&v, p, 4);
+     v = (v >> 24) | ((v >> 8) & 0xFF00u) | ((v << 8) & 0xFF0000u) | (v << 24);
++    if ((v & 0x7F800000u) == 0x7F800000u) {
++        if (v & 0x007FFFFFu) s_input_nan[s_input_port]++;
++        else s_input_inf[s_input_port]++;
++        /* Sanitize before summing: one broken port/channel must not erase
++         * valid sound from another port (for example the opening movie). */
++        if (audio_scrub_enabled()) return 0.0f;
++    }
+     float f;
+     memcpy(&f, &v, 4);
      return f;
  }
  
 +/* Whether the title has put anything in a ring block since it was last
-+ * consumed (and cleared). Every 8th sample of every channel. */
++ * consumed (and cleared). Check every channel and sample. */
 +static unsigned long long g_audio_underruns;
 +static int audio_block_has_data(const float* blk, u32 nch)
 +{
 +    const u32 n = CELL_AUDIO_BLOCK_SAMPLES * nch;
-+    for (u32 i = 0; i < n; i += 8) if (blk[i] != 0.0f) return 1;
++    for (u32 i = 0; i < n; i++) if (blk[i] != 0.0f) return 1;
 +    return 0;
 +}
 +
  /* Mix one block from all active ports into s_mix_buffer (stereo float) */
  static void audio_mix_one_block(void)
  {
-@@ -444,7 +562,71 @@ static void audio_mix_one_block(void)
+     memset(s_mix_buffer, 0, sizeof(s_mix_buffer));
++    memset(s_input_nan, 0, sizeof(s_input_nan));
++    memset(s_input_inf, 0, sizeof(s_input_inf));
+ 
+     mutex_lock(&s_audio_mutex);
+ 
+     for (int p = 0; p < CELL_AUDIO_PORT_MAX; p++) {
+         AudioPortSlot* port = &s_ports[p];
++        s_input_port = (unsigned)p;
+         /* Diagnostic: a port that HOLDS PCM but was never started is inaudible
+          * by design -- flag it once so "no PortStart" vs "no data" is decidable
+          * from the log (LBP's Bink movie audio port sat exactly there). */
+@@ -444,9 +624,74 @@ static void audio_mix_one_block(void)
          if (level > 1.0f) level = 1.0f;
  
          /* Read one block at the current read_index */
@@ -529,8 +611,11 @@ index b51fb7c4..484c4976 100644
 +          } }
          u32 block_offset = block_idx * CELL_AUDIO_BLOCK_SAMPLES * nch;
          float* src = port->buffer + block_offset;
++        float port_mix[CELL_AUDIO_BLOCK_SAMPLES * 2] = {0};
  
-@@ -467,7 +649,7 @@ static void audio_mix_one_block(void)
+         /* AUDIO_PEAK diag: which blocks of this port's WHOLE ring hold data,
+          * vs which block the read cursor is on -- distinguishes "writer never
+@@ -467,7 +712,7 @@ static void audio_mix_one_block(void)
                          p, (unsigned long long)port->read_index, block_idx, map);
              } } }
  
@@ -539,7 +624,23 @@ index b51fb7c4..484c4976 100644
              float left, right;
              if (nch >= 2) {
                  left  = ld_be_f32(&src[s * nch + 0]) * level;
-@@ -496,7 +678,7 @@ static void audio_mix_one_block(void)
+@@ -489,14 +734,21 @@ static void audio_mix_one_block(void)
+                 right += center + lfe + rr + sr;
+             }
+ 
+-            s_mix_buffer[s * 2 + 0] += left;
+-            s_mix_buffer[s * 2 + 1] += right;
++            port_mix[s * 2 + 0] = left;
++            port_mix[s * 2 + 1] = right;
+         }
+ 
++        /* An invalid block can contain clipped/oscillating finite garbage too.
++         * Discard that port's entire block, while consuming it normally and
++         * retaining healthy ports such as movie audio. */
++        if (!audio_scrub_enabled() || !(s_input_nan[p] || s_input_inf[p]))
++            for (u32 s = 0; s < CELL_AUDIO_BLOCK_SAMPLES * 2; s++)
++                s_mix_buffer[s] += port_mix[s];
++
          /* Firmware clears a ring-buffer block after consuming it. Besides
           * preventing stale PCM from replaying when a producer stalls, the
           * cleared block is an observable consumption signal for producers. */
@@ -548,7 +649,7 @@ index b51fb7c4..484c4976 100644
  
          /* Keep the monotonic counter for tags/timestamps, but publish the
           * ring slot to the guest. SurMixer multiplies this value by the block
-@@ -535,10 +717,35 @@ static void audio_notify_event_queues(void)
+@@ -535,10 +787,35 @@ static void audio_notify_event_queues(void)
  }
  
  #ifdef _WIN32
@@ -584,7 +685,7 @@ index b51fb7c4..484c4976 100644
  
      /* Pace to the device clock. The PS3 consumes one block every 5.33 ms;
       * the old Sleep(2)/Sleep(5) loop keyed on a queue depth the 1056-frame
-@@ -549,7 +756,42 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -549,7 +826,42 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
      LARGE_INTEGER qf, q0; QueryPerformanceFrequency(&qf); QueryPerformanceCounter(&q0);
      unsigned long long blocks = 0;
      while (s_mix_thread_running) {
@@ -627,7 +728,7 @@ index b51fb7c4..484c4976 100644
          if (room >= 0 && room < CELL_AUDIO_BLOCK_SAMPLES) { audio_backend_wait(); continue; }
          if (room < 0) {
              LARGE_INTEGER now; QueryPerformanceCounter(&now);
-@@ -562,7 +804,13 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -562,30 +874,109 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
                  q0.QuadPart = now.QuadPart -
                      (long long)(blocks * CELL_AUDIO_BLOCK_SAMPLES * qf.QuadPart / CELL_AUDIO_SAMPLE_RATE);
          }
@@ -640,8 +741,40 @@ index b51fb7c4..484c4976 100644
 +          lt = tn; }
          /* Mix and submit one block */
          audio_mix_one_block();
++        const int scrub_invalid = audio_scrub_enabled();
++        unsigned input_nan = 0, input_inf = 0;
++        for (unsigned p = 0; p < CELL_AUDIO_PORT_MAX; p++) {
++            input_nan += s_input_nan[p]; input_inf += s_input_inf[p];
++        }
++        AudioBlockStats audio_stats = audio_check_block(s_mix_buffer,
++            CELL_AUDIO_BLOCK_SAMPLES * 2, scrub_invalid);
++        if (audio_stats.nan || audio_stats.inf || input_nan || input_inf) {
++            static ULONGLONG next_invalid_log;
++            ULONGLONG now = GetTickCount64();
++            if (!next_invalid_log || now >= next_invalid_log) {
++                fprintf(stderr, "[cellAudio] Invalid PCM: input_nan=%u input_inf=%u mixed_nan=%u mixed_inf=%u scrub=%d\n",
++                        input_nan, input_inf, audio_stats.nan, audio_stats.inf, scrub_invalid);
++                for (unsigned p = 0; p < CELL_AUDIO_PORT_MAX; p++)
++                    if (s_input_nan[p] || s_input_inf[p])
++                        fprintf(stderr, "[audio-input] port=%u nan=%u inf=%u\n", p, s_input_nan[p], s_input_inf[p]);
++                next_invalid_log = now + 5000;
++            }
++        }
          /* AUDIO_PEAK=1: report the mixed block's peak amplitude periodically so
-@@ -579,6 +827,57 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+          * "is any port producing sound" is answerable (LBP Bink movie audio). */
+         { static int _ap = -1; if (_ap < 0) _ap = getenv("AUDIO_PEAK") ? 1 : 0;
+-          if (_ap) { static unsigned _n = 0; float pk = 0.0f;
+-            for (u32 i = 0; i < CELL_AUDIO_BLOCK_SAMPLES * 2; i++) {
+-                float a = s_mix_buffer[i]; if (a < 0) a = -a; if (a > pk) pk = a; }
+-            if ((++_n % 200) == 0 || (pk > 0.001f && _n < 40))
+-                fprintf(stderr, "[audio-peak] block#%u peak=%.4f\n", _n, pk); } }
++          if (_ap) { static unsigned _n = 0;
++            if ((++_n % 200) == 0 || (audio_stats.peak > 0.001f && _n < 40))
++                fprintf(stderr, "[audio-peak] block#%u peak=%.4f nan=%u inf=%u finite_nonzero=%u input_nan=%u input_inf=%u scrub=%d\n",
++                        _n, audio_stats.peak, audio_stats.nan, audio_stats.inf, audio_stats.nonzero, input_nan, input_inf, scrub_invalid); } }
+         /* AUDIO_WAV=<file>: append the final mix as raw f32le stereo 48 kHz
+          * (ffmpeg -f f32le -ar 48000 -ac 2 -i <file>). */
+         { static FILE* _wf = (FILE*)-1;
            if (_wf == (FILE*)-1) { const char* e = getenv("AUDIO_WAV"); _wf = e ? fopen(e, "wb") : NULL; }
            if (_wf) fwrite(s_mix_buffer, sizeof(float), CELL_AUDIO_BLOCK_SAMPLES * 2, _wf); }
          audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
@@ -676,7 +809,7 @@ index b51fb7c4..484c4976 100644
 +          if (on) { static unsigned run, heard; static double t_run; static char map0[40];
 +            LARGE_INTEGER tn; QueryPerformanceCounter(&tn);
 +            double ms = 1000.0 * (double)(tn.QuadPart - q0.QuadPart) / (double)qf.QuadPart;
-+            int nz = 0; for (u32 i = 0; i < CELL_AUDIO_BLOCK_SAMPLES * 2; i++) if (s_mix_buffer[i] != 0.0f) { nz = 1; break; }
++            int nz = audio_stats.nonzero != 0;
 +            if (!nz) {
 +                if (!run++) { t_run = ms;
 +                    AudioPortSlot* pt = &s_ports[0]; u32 nb = (u32)pt->param.nBlock, nc = (u32)pt->param.nChannel, b2 = 0;
@@ -698,16 +831,32 @@ index b51fb7c4..484c4976 100644
 +                run = 0; heard = 1; } } }
          /* AUDIO_RATE=1: blocks mixed vs real time, and frames dropped. */
          { static int on = -1; if (on < 0) on = getenv("AUDIO_RATE") ? 1 : 0;
-           if (on) { static ULONGLONG t0; static unsigned n, z; static unsigned long long d0;
-@@ -586,6 +885,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
-             { int nz = 0; for (u32 i = 0; i < CELL_AUDIO_BLOCK_SAMPLES * 2; i++) if (s_mix_buffer[i] != 0.0f) { nz = 1; break; }
-               if (!nz) z++; }
+-          if (on) { static ULONGLONG t0; static unsigned n, z; static unsigned long long d0;
++          if (on) { static ULONGLONG t0; static unsigned n, z, invalid;
++            static unsigned long long d0, nan_samples, inf_samples, source_nan, source_inf;
+             ULONGLONG now = GetTickCount64(); if (!t0) t0 = now; n++;
+-            { int nz = 0; for (u32 i = 0; i < CELL_AUDIO_BLOCK_SAMPLES * 2; i++) if (s_mix_buffer[i] != 0.0f) { nz = 1; break; }
+-              if (!nz) z++; }
++            if (!audio_stats.nonzero) z++;
++            if (audio_stats.nan || audio_stats.inf || input_nan || input_inf) invalid++;
++            nan_samples += audio_stats.nan; inf_samples += audio_stats.inf;
++            source_nan += input_nan; source_inf += input_inf;
              if (now - t0 >= 5000) {
 +                fprintf(stderr, "[audio-rate] underruns so far %llu; mixer ticks: longest gap %.1f ms, %u over 10 ms%c", g_audio_underruns, g_mix_tick_max, g_mix_tick_late, 10); g_mix_tick_max = 0; g_mix_tick_late = 0;
                  fprintf(stderr, "[audio-rate] %.1f blocks/s (real time 187.5), silent %.1f%%, dropped %.0f frames/s, device buf %u%c",
                          n * 1000.0 / (now - t0), n ? 100.0 * z / n : 0.0, (g_audio_dropped - d0) * 1000.0 / (now - t0),
                  #if AUDIO_BACKEND_WASAPI
-@@ -599,6 +899,9 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -593,12 +984,18 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+ #else
+                         0u, 10);
+ #endif
+-                n = z = 0; d0 = g_audio_dropped; t0 = now; } } }
++                fprintf(stderr, "[audio-rate] invalid %.1f%% blocks, nan %llu samples, inf %llu samples, input_nan %llu input_inf %llu, scrub=%d\n",
++                        n ? 100.0 * invalid / n : 0.0, nan_samples, inf_samples, source_nan, source_inf, scrub_invalid);
++                n = z = invalid = 0; nan_samples = inf_samples = source_nan = source_inf = 0;
++                d0 = g_audio_dropped; t0 = now; } } }
+ 
+         /* Notify event queues */
          audio_notify_event_queues();
      }
  
@@ -717,7 +866,7 @@ index b51fb7c4..484c4976 100644
      printf("[cellAudio] Mixing thread stopped\n");
      return 0;
  }
-@@ -693,10 +996,12 @@ s32 cellAudioInit(void)
+@@ -693,10 +1090,12 @@ s32 cellAudioInit(void)
      memset(s_notify_queues, 0, sizeof(s_notify_queues));
      mutex_init(&s_audio_mutex);
  
@@ -730,7 +879,7 @@ index b51fb7c4..484c4976 100644
  
  
  #ifdef _WIN32
-@@ -724,7 +1029,9 @@ s32 cellAudioQuit(void)
+@@ -724,7 +1123,9 @@ s32 cellAudioQuit(void)
          return CELL_AUDIO_ERROR_NOT_INIT;
  
      audio_stop_mix_thread();
@@ -740,7 +889,7 @@ index b51fb7c4..484c4976 100644
  
      /* Port buffers live in the guest vm_base arena (bump-allocated, not host
       * malloc) -- just drop the references; never free() them. */
-@@ -888,6 +1195,26 @@ s32 cellAudioPortStop(u32 portNum)
+@@ -888,6 +1289,26 @@ s32 cellAudioPortStop(u32 portNum)
      return CELL_OK;
  }
  
@@ -46151,7 +46300,7 @@ index 9cc36701..5ca4416a 100644
          if (s_export_reg[i].nid == nid) {
              s_export_reg[i].guest_addr = guest_addr;
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 0b235d02..94a1a7f6 100644
+index 0b235d02..9b472d74 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
 @@ -1,70 +1,103 @@
@@ -46322,7 +46471,7 @@ index 0b235d02..94a1a7f6 100644
  /* Called after an SPU atomic commits a 128-byte line, with the lock-line lock
   * released. cellSpurs sets it so a PPU blocked in cellSpursEventFlagWait wakes
   * when a task sets the flag, instead of on its next 2 ms poll. */
-@@ -105,2667 +138,3010 @@ void spu_ls_watch_slow(uint32_t lsa, int is_write, const uint8_t* p, uint32_t pc
+@@ -105,2667 +138,3013 @@ void spu_ls_watch_slow(uint32_t lsa, int is_write, const uint8_t* p, uint32_t pc
      }
  }
  
@@ -49042,6 +49191,7 @@ index 0b235d02..94a1a7f6 100644
 +    uint32_t v = value._u32[0];  /* channel writes use the preferred slot */
 +
 +    if (channel_is_mfc(channel)) {
++        if (spu_dma_fast() && mfc_context_write(ctx, channel, v)) return;
 +        /* Atomic line ops (GETLLAR/PUTLLC/...) need real reservation semantics,
 +         * not the plain GET/PUT the DMA engine would do. */
 +        if (channel == MFC_Cmd && spu_mfc_atomic(ctx, v))
@@ -49309,7 +49459,9 @@ index 0b235d02..94a1a7f6 100644
 +            (unsigned long long)s_c[8],(unsigned long long)s_c[9]); } }
 +
 +    if (channel_is_mfc(channel)) {
-+        v = mfc_channel_read(mfc_for(ctx), ctx, channel);
++        /* mfc_channel_read uses only context fields (including its
++         * read-and-clear list status), never the engine. */
++        v = mfc_channel_read(spu_dma_fast() ? NULL : mfc_for(ctx), ctx, channel);
 +        return spu_make_preferred_u32(v);
 +    }
 +
@@ -52776,7 +52928,7 @@ index 8d8e4aac..49da6e60 100644
                  ((ctx)->event_status & (ctx)->event_mask))      \
                  _tf = spu_take_interrupt((ctx), _tf);          \
 diff --git a/runtime/spu/spu_dma.h b/runtime/spu/spu_dma.h
-index 90f3221e..5fee5abf 100644
+index 90f3221e..d693b7fb 100644
 --- a/runtime/spu/spu_dma.h
 +++ b/runtime/spu/spu_dma.h
 @@ -20,6 +20,7 @@
@@ -52787,7 +52939,7 @@ index 90f3221e..5fee5abf 100644
  #include <stdio.h>
  #include "../platform/win32_compat.h"
  
-@@ -165,6 +166,18 @@ static inline int mfc_is_fence(uint32_t cmd)
+@@ -165,6 +166,82 @@ static inline int mfc_is_fence(uint32_t cmd)
   * Execute a single DMA transfer between local store and main memory.
   * Returns 0 on success, -1 on error.
   */
@@ -52803,10 +52955,83 @@ index 90f3221e..5fee5abf 100644
 +#else
 +extern int pad_milestone_reached(const char*);
 +#endif
++/* DMA/channel fast paths, adapted from Ascension-R (MIT), 2c521988.
++ * Startup environment is cached, as with the individual probes below.
++ * SPU_DMA_FAST=0 restores diagnostic dispatch and engine lookups for A/B.
++ * Cache lines are isolated from write-heavy counters. Atomic publication
++ * permits several SPU workers to initialize the same immutable options. */
++#if defined(_MSC_VER)
++#define SPU_DMA_CACHELINE __declspec(align(64))
++#else
++#define SPU_DMA_CACHELINE __attribute__((aligned(64)))
++#endif
++static inline int spu_dma_fast(void)
++{
++    static SPU_DMA_CACHELINE struct { int value; char pad[60]; } cache = { -1, { 0 } };
++    int value = __atomic_load_n(&cache.value, __ATOMIC_ACQUIRE);
++    if (value < 0) {
++        const char* e = getenv("SPU_DMA_FAST");
++        value = !(e && *e == '0');
++        __atomic_store_n(&cache.value, value, __ATOMIC_RELEASE);
++    }
++    return value;
++}
++
++/* Only blocks which are inert without an environment variable use this gate.
++ * When adding a gated probe, add its enabling variable here too. Presence,
++ * including an empty value or "0", enters the original block so that its
++ * original parsing decides. SPU_DMA_DIAG forces all original probe checks.
++ * SPU_DMA_RANGE_HIST works independently of SPU_DMA_RANGE; keep both. */
++static inline int spu_dma_diag(void)
++{
++    static SPU_DMA_CACHELINE struct { int value; char pad[60]; } cache = { -1, { 0 } };
++    int value = __atomic_load_n(&cache.value, __ATOMIC_ACQUIRE);
++    if (value < 0) {
++        static const char* const names[] = {
++            "SPU_DMA_DIAG", "SPU_DMA_WATCH", "SPU_DMA_RANGE", "SPU_DMA_RANGE_HIST",
++            "SPU_JOBDESC", "SPU_SPINDBG", "SPU_DMACHK", "SPU_GETHIST",
++            "SPU_PUTHIST", "SPU_MFC_TRACE", "SPU_STACKEA_WATCH", "SPU_DMATRACE_ALL",
++            "SPU_DUMP_GET", "SPU_OVL_DIAG", "SPU_SMC_WATCH", "SPU_LS_WATCH",
++            "SPU_PUTVAL", "SPU_CMDHIST", "SPU_WATCHEA", "SPU_WATCHLSA",
++            "SPU_ROWCOV", "SPU_VRAMPC", "SPU_H2LSRC", "SPU_PUTEA",
++            "SPU_DMATRACE", "SPU_DMATRACE_RAW", "SPU_TAGPROBE"
++        };
++        value = !spu_dma_fast();
++        for (unsigned i = 0; !value && i < sizeof names / sizeof names[0]; i++)
++            if (getenv(names[i])) value = 1;
++        __atomic_store_n(&cache.value, value, __ATOMIC_RELEASE);
++    }
++    return value;
++}
++
++/* These channel writes only latch context fields. No engine is needed until
++ * a command, tag update, or list acknowledgement actually consumes it. */
++static inline int mfc_context_write(spu_context* spu, uint32_t channel, uint32_t value)
++{
++    switch (channel) {
++    case MFC_LSA:       spu->mfc_lsa = value; return 1;
++    case MFC_EAH:       spu->mfc_eah = value; return 1;
++    case MFC_EAL:       spu->mfc_eal = value; return 1;
++    case MFC_Size:      spu->mfc_size = value; return 1;
++    case MFC_TagID:     spu->mfc_tag = value & 0x1F; return 1;
++    case MFC_WrTagMask: spu->mfc_tag_mask = value; return 1;
++    default:           return 0;
++    }
++}
++
  static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
                                     uint32_t size, uint32_t cmd)
  {
-@@ -186,15 +199,59 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+@@ -173,7 +250,7 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+      * bug, and it is invisible to the sampling traces -- YDKJ had an SPU job
+      * writing over the title's own OPD table at 0x00530D78, which turned
+      * every call through it into "code 0x00000000 not registered". */
+-    { static long s_w = -1; if (s_w < 0) { const char* e = getenv("SPU_DMA_WATCH");
++    if (spu_dma_diag()) { static long s_w = -1; if (s_w < 0) { const char* e = getenv("SPU_DMA_WATCH");
+         s_w = e && *e ? (long)strtoul(e, 0, 16) : 0; }
+       /* Treat the value as the END of a watched window starting at 0x10000:
+        * the whole loaded ELF image. Any SPU DMA into the image is a bug, and
+@@ -186,15 +263,59 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
                        (uint32_t)spu->pc & SPU_LS_MASK, cmd, lsa, (uint32_t)ea, size,
                        (uint32_t)s_w); } }
      /* SPU_DMA_RANGE=<lo>-<hi> (hex EAs): log transfers touching [lo,hi), first
@@ -52815,7 +53040,7 @@ index 90f3221e..5fee5abf 100644
 +     * 64 -- who reads or writes a buffer the RSX shares with the SPUs.
 +     * SPU_DMA_RANGE_AFTER=<milestone> arms it once that screen is read;
 +     * SPU_DMA_RANGE_MAX=<n> changes the 64. */
-+    { static uint32_t s_lo = 1, s_hi; static const char* s_after; static int s_go, s_max = 64;
++    if (spu_dma_diag()) { static uint32_t s_lo = 1, s_hi; static const char* s_after; static int s_go, s_max = 64;
        if (s_lo == 1) { const char* e = getenv("SPU_DMA_RANGE"); s_lo = 0;
 -          if (e) { char* d; s_lo = (uint32_t)strtoul(e, &d, 16); if (*d == '-') s_hi = (uint32_t)strtoul(d + 1, 0, 16); } }
 -      if (s_hi && (uint32_t)ea < s_hi && (uint32_t)ea + size > s_lo) {
@@ -52873,7 +53098,7 @@ index 90f3221e..5fee5abf 100644
            /* ...and every 5 s, the bytes PUT into / GOT from the range. */
            { static volatile long long s_put, s_get; static unsigned long long s_t0;
              extern unsigned long long ps3_ms_now(void);
-@@ -205,6 +262,68 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+@@ -205,6 +326,68 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
                  fprintf(stderr, "[dma-range] %.0f B/s put, %.0f B/s get\n",
                          s_put * 1000.0 / (now - s_t0), s_get * 1000.0 / (now - s_t0));
                  s_put = s_get = 0; s_t0 = now; } } } }
@@ -52883,7 +53108,7 @@ index 90f3221e..5fee5abf 100644
 +     * by the same SPU thread is re-hashed against the bytes as they were when
 +     * the block was read: "[jobdesc] CHANGED" means the source buffer was
 +     * rewritten while the job was still reading it. */
-+    { static uint32_t s_jd = 1;
++    if (spu_dma_diag()) { static uint32_t s_jd = 1;
 +      if (s_jd == 1) { const char* e = getenv("SPU_JOBDESC"); s_jd = e && *e ? (uint32_t)strtoul(e, 0, 16) : 0; }
 +      if (s_jd && (cmd & 0xF0) == 0x40) {
 +          extern uint8_t* vm_base; extern unsigned long long ps3_ms_now(void);
@@ -52922,7 +53147,7 @@ index 90f3221e..5fee5abf 100644
 +     * row (then every 500,000) print where, what it keeps reading, and r5 and
 +     * r12 (the thresholds in GT5 Prologue's ring-space wait, job body
 +     * b01376080 0x4598). */
-+    { static int s_on = -1;
++    if (spu_dma_diag()) { static int s_on = -1;
 +      if (s_on < 0) { const char* e = getenv("SPU_SPINDBG"); s_on = e && e[0] == '1'; }
 +      if (s_on && (cmd & 0xF4) == 0x40) {
 +          static SPU_DMA_TLS uint32_t l_pc, l_ea, l_size; static SPU_DMA_TLS uint64_t l_n;
@@ -52942,7 +53167,115 @@ index 90f3221e..5fee5abf 100644
      /* Malformed transfers are REJECTED, as the hardware MFC does. The rules
       * are the ones the SDK's own dma.h asserts: a non-zero size, at most
       * 16 KB, a multiple of 16 once >= 16 bytes, and LSA/EA sharing 16-byte
-@@ -673,6 +792,29 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+@@ -243,7 +426,7 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+     /* SPU_DMACHK=1: report transfers that break the MFC rules the guest's own
+      * dma.h asserts on -- size 0 or > 16 KB, size not a multiple of 16 for
+      * transfers of 16+ bytes, or LSA/EA not sharing 16-byte alignment. */
+-    { static int s_dc = -1; if (s_dc < 0) s_dc = getenv("SPU_DMACHK") ? 1 : 0;
++    if (spu_dma_diag()) { static int s_dc = -1; if (s_dc < 0) s_dc = getenv("SPU_DMACHK") ? 1 : 0;
+       if (s_dc) { static int _n = 0;
+           int bad = (size == 0) || (size > 0x4000)
+                  || (size >= 16 && (size & 15))
+@@ -257,7 +440,7 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+     /* SPU_GETHIST=1: the same accounting for GETs, on the SOURCE side. A solver
+      * whose inputs read back as zeros produces zeros no matter how many
+      * instructions it runs. */
+-    { static int s_gh = -1; if (s_gh < 0) s_gh = getenv("SPU_GETHIST") ? 1 : 0;
++    if (spu_dma_diag()) { static int s_gh = -1; if (s_gh < 0) s_gh = getenv("SPU_GETHIST") ? 1 : 0;
+       if (s_gh && mfc_is_get(cmd) && vm_base) {
+           static uint32_t seen[48]; static int ns = 0;
+           uint32_t k = (uint32_t)ea & ~0xFFFFu;
+@@ -267,7 +450,7 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+               for (uint32_t i7 = 0; i7 < size && i7 < 0x4000u; i7 += 7) if (q[i7]) nzs++;
+               fprintf(stderr, "[getea] spu=0x%X 0x%08X size=%u srcNonZero=%u%c",
+                       spu->spu_id, (uint32_t)ea, size, nzs, 10); } } }
+-    { static int s_ph = -1; if (s_ph < 0) s_ph = getenv("SPU_PUTHIST") ? 1 : 0;
++    if (spu_dma_diag()) { static int s_ph = -1; if (s_ph < 0) s_ph = getenv("SPU_PUTHIST") ? 1 : 0;
+       if (s_ph) { static unsigned long long ngets, nputs, nother;
+           if (mfc_is_get(cmd)) ngets++; else if (mfc_is_put(cmd)) nputs++; else nother++;
+           if (((ngets + nputs + nother) % 5000) == 0)
+@@ -309,7 +492,7 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+     /* SPU_MFC_TRACE: attribute silent DMA-poll loops (a wedged task whose
+      * host thread samples "in ntdll" because VirtualQuery dominates). Prints
+      * every 64k-th transfer per thread: enough to see the loop's pc/ea. */
+-    { static int s_t = -1; if (s_t < 0) { const char* e = getenv("SPU_MFC_TRACE");
++    if (spu_dma_diag()) { static int s_t = -1; if (s_t < 0) { const char* e = getenv("SPU_MFC_TRACE");
+         s_t = e ? atoi(e) : 0; if (e && !s_t) s_t = 1; }
+       if (s_t) { static _Thread_local unsigned long long _n; ++_n;
+         /* level 2+: also print each thread's first 192 transfers (setup DMAs
+@@ -355,7 +538,7 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+         } } }
+     /* cellAudio port-ring window: log every guest write into it (rare, load-
+      * bearing -- the audio OUTPUT path). Same env gate as the sampler. */
+-    { static int s_pr = -1; if (s_pr < 0) s_pr = getenv("SPU_MFC_TRACE") ? 1 : 0;
++    if (spu_dma_diag()) { static int s_pr = -1; if (s_pr < 0) s_pr = getenv("SPU_MFC_TRACE") ? 1 : 0;
+       if (s_pr && (cmd & 0x20) && !(cmd & 0x40) &&
+           (((uint32_t)ea >= 0x01000000u && (uint32_t)ea < 0x01800000u) ||
+            ((uint32_t)ea >= 0x00927D00u && (uint32_t)ea < 0x00928000u))) {
+@@ -413,7 +596,7 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+      * -- a completion-write attempt -- and (b) any GET payload carrying a
+      * 0xD00Cxxxx dword -- the completion EA arriving in a loaded job buffer.
+      * Answers whether the EA ever reaches / is ever written by the SPU. */
+-    { static int s_se = -1; if (s_se < 0) s_se = getenv("SPU_STACKEA_WATCH") ? 1 : 0;
++    if (spu_dma_diag()) { static int s_se = -1; if (s_se < 0) s_se = getenv("SPU_STACKEA_WATCH") ? 1 : 0;
+       if (s_se) {
+         uint32_t e32 = (uint32_t)ea;
+         if ((e32 & 0xFF000000u) == 0xD0000000u ||   /* DMA targeting the PPU stack */
+@@ -432,7 +615,7 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+         fprintf(stderr, "[spu-dma] %s lsa=0x%05X ea=0x%08X size=%u\n",
+                 mfc_is_get(cmd) ? "GET" : "PUT", lsa, (uint32_t)ea, size); }
+ #endif
+-    { static int s_t = -1; static int s_img = -2;
++    if (spu_dma_diag()) { static int s_t = -1; static int s_img = -2;
+       if (s_t < 0) s_t = getenv("SPU_DMATRACE_ALL") ? 1 : 0;
+       if (s_img == -2) { const char* e = getenv("YDKJ_DMA_IMG"); s_img = e ? atoi(e) : -1; }
+       /* YDKJ_DMA_IMG=N: trace ONLY image N, uncapped (the 300-cap otherwise fills
+@@ -472,7 +655,7 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+     /* SPU_DUMP_GET=<hexEA>: dump the source bytes the first time an SPU fetches
+      * from that address. Fixed BSS structures have the same address in a
+      * reference run, so this is what a dump from real hardware diffs against. */
+-    if (mfc_is_get(cmd) && size && vm_base) {
++    if (spu_dma_diag() && mfc_is_get(cmd) && size && vm_base) {
+         static uint32_t s_dg = 0xFFFFFFFFu;
+         if (s_dg == 0xFFFFFFFFu) { const char* e = getenv("SPU_DUMP_GET");
+                                    s_dg = e ? (uint32_t)strtoul(e, 0, 0) : 0; }
+@@ -536,7 +719,7 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+          * (32B from ~0x94Fxxx) then a large GET from a NULL source = the
+          * overlay never loads. Dump the descriptor content to see where the
+          * real source EA was dropped. */
+-        { static int s_ovl = -1; if (s_ovl < 0) s_ovl = getenv("SPU_OVL_DIAG") ? 1 : 0;
++        if (spu_dma_diag()) { static int s_ovl = -1; if (s_ovl < 0) s_ovl = getenv("SPU_OVL_DIAG") ? 1 : 0;
+           if (s_ovl) {
+               /* overlay-load map: image-6 GET of a code-sized chunk into the
+                * high LS overlay region, with its (now-correct) plugin source.
+@@ -564,7 +747,7 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+         memcpy(ls_ptr, ea_ptr, size);
+         /* SPU_STACKEA_WATCH (b): scan the just-loaded payload for a 0xD00Cxxxx
+          * dword = the completion-word EA arriving in a job buffer. */
+-        { static int s_se = -1; if (s_se < 0) s_se = getenv("SPU_STACKEA_WATCH") ? 1 : 0;
++        if (spu_dma_diag()) { static int s_se = -1; if (s_se < 0) s_se = getenv("SPU_STACKEA_WATCH") ? 1 : 0;
+           if (s_se && size >= 4) { static int _n = 0;
+             for (uint32_t o = 0; o + 4 <= size && _n < 60; o += 4) {
+                 uint32_t w = (ls_ptr[o]<<24)|(ls_ptr[o+1]<<16)|(ls_ptr[o+2]<<8)|ls_ptr[o+3];
+@@ -576,7 +759,7 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+                     fflush(stderr); } } } }
+         /* SPU_SMC_WATCH: a DMA GET that lands inside the image's own code
+          * segment is a code overlay = self-modification. */
+-        { static int s = -2; static uint32_t lo, hi, img;
++        if (spu_dma_diag()) { static int s = -2; static uint32_t lo, hi, img;
+           if (s == -2) { const char* e = getenv("SPU_SMC_WATCH");
+             s = e ? atoi(e) : -1; img = (uint32_t)s;
+             const char* l = getenv("SPU_SMC_LO"); lo = l ? (uint32_t)strtoul(l,0,0) : 0xA00;
+@@ -595,7 +778,7 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+           spu_overlay_note_get(spu, (uint32_t)ea, (const uint8_t*)ls_ptr, size); }
+         /* SPU_LS_WATCH: a DMA GET landing on a watched LS line is how the PPU
+          * delivers commands into the SPU's queue (bypasses spu_ls_write128). */
+-        { int _n; unsigned* _w = spu_ls_watch_list(&_n);
++        if (spu_dma_diag()) { int _n; unsigned* _w = spu_ls_watch_list(&_n);
+           for (int _i = 0; _i < _n; _i++) {
+               if (_w[_i] >= lsa && _w[_i] < lsa + size) {
+                   const uint8_t* q = &spu->ls[_w[_i] & (SPU_LS_MASK & ~0xFu)];
+@@ -673,6 +856,29 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
           * find the pushbuffer; NULL for every title that does not. */
          { extern void (*g_spu_put_hook)(uint32_t ea, uint32_t size);
            if (g_spu_put_hook) g_spu_put_hook((uint32_t)ea, size); }
@@ -52951,7 +53284,7 @@ index 90f3221e..5fee5abf 100644
 +         * which image and PC wrote it. The SPU-side PPU_WVAL, for finding which
 +         * job builds an RSX command block. SPU_PUTVAL_GATE=<file>: only while
 +         * the file exists. First 40 hits. */
-+        { static int s_pv = -1; static uint32_t s_pvv, s_pvlo, s_pvhi; static const char* s_pvg;
++        if (spu_dma_diag()) { static int s_pv = -1; static uint32_t s_pvv, s_pvlo, s_pvhi; static const char* s_pvg;
 +          if (s_pv < 0) { const char* e = getenv("SPU_PUTVAL"); s_pv = e ? 1 : 0;
 +              s_pvlo = 0; s_pvhi = 0xFFFFFFFFu; s_pvg = getenv("SPU_PUTVAL_GATE");
 +              if (e) { char* q; s_pvv = (uint32_t)strtoul(e, &q, 16);
@@ -52972,7 +53305,7 @@ index 90f3221e..5fee5abf 100644
          /* Bink sync-area watch (armed by the PPU barrier probe): log SPU PUTs
           * that touch the per-SPU lane counters. */
          { extern uint32_t g_barrier_sync_watch;
-@@ -767,11 +909,10 @@ static inline int mfc_run_list(spu_context* spu, uint32_t elem_lsa,
+@@ -767,11 +973,10 @@ static inline int mfc_run_list(spu_context* spu, uint32_t elem_lsa,
               * handler sees g_WwsJob_loadJobState still kNone and (correctly)
               * declines the Load->Run advance, and clear-on-read ch25 eats the
               * only stall. See spu_drain.c: g_sn_defer / SPU_SN_DEFER. */
@@ -52987,7 +53320,7 @@ index 90f3221e..5fee5abf 100644
              spu_ch_wake(spu);
              { static int _n = 0; if (_n++ < 16)
                  fprintf(stderr, "[mfc-list] STALL img=%d tag=%u elem@0x%05X "
-@@ -811,7 +952,10 @@ static inline int mfc_list_stall_ack(struct mfc_engine* mfc, spu_context* spu,
+@@ -811,7 +1016,10 @@ static inline int mfc_list_stall_ack(struct mfc_engine* mfc, spu_context* spu,
       * about to land. If the handler was supposed to fill in the claimed job's
       * EA and did not, the elements read back empty and the transfer is a no-op
       * -- which looks identical to "the pipeline never ran" from the PPU side. */
@@ -52999,7 +53332,30 @@ index 90f3221e..5fee5abf 100644
        fprintf(stderr, "[mfc-list] RESUME-ELEMS dest=0x%05X elems\n0x%05X:",
                spu->list_stall_dest_lsa[t], _e);
        for (uint32_t _o = 0; _o < 16 && (_e + _o) + 3 < SPU_LS_SIZE; _o += 4)
-@@ -937,9 +1081,16 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+@@ -868,7 +1076,7 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+     /* SPU_CMDHIST=1: every MFC command that reaches the engine, by opcode and
+      * SPU image. Catches list DMAs (putl/getl) that never reach
+      * mfc_do_transfer's per-element path. */
+-    { static int s_ch = -1; if (s_ch < 0) s_ch = getenv("SPU_CMDHIST") ? 1 : 0;
++    if (spu_dma_diag()) { static int s_ch = -1; if (s_ch < 0) s_ch = getenv("SPU_CMDHIST") ? 1 : 0;
+       if (s_ch) { static unsigned long long h[256][8]; static unsigned long long n;
+           h[cmd & 0xFF][spu->image_id & 7]++;
+           if ((++n % 300) == 0) {
+@@ -897,7 +1105,7 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+      * Nothing in that module's code stores +0x88, so the consumer count is
+      * written from outside -- an SPU DMA is the obvious candidate, and this
+      * says outright whether that is true. Watch 0x002DF008. */
+-    { static int s_we = -2; static uint32_t s_wa;
++    if (spu_dma_diag()) { static int s_we = -2; static uint32_t s_wa;
+       if (s_we == -2) { const char* e = getenv("SPU_WATCHEA");
+                         s_we = e ? 1 : 0;
+                         s_wa = e ? (uint32_t)strtoul(e, 0, 16) : 0u; }
+@@ -933,13 +1141,20 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+      * writes that mirror back to a stale value AFTER the GETLLAR, and a DMA is
+      * the only thing that can do it without going through spu_ls_write128.
+      * Watch LS 0x10800. */
+-    { static int s_wl = -2; static uint32_t s_wlsa;
++    if (spu_dma_diag()) { static int s_wl = -2; static uint32_t s_wlsa;
        if (s_wl == -2) { const char* e7 = getenv("SPU_WATCHLSA");
                          s_wl = e7 ? 1 : 0;
                          s_wlsa = e7 ? (uint32_t)strtoul(e7, 0, 16) : 0u; }
@@ -53018,7 +53374,52 @@ index 90f3221e..5fee5abf 100644
                const uint8_t* q = spu->ls + (s_wlsa & SPU_LS_MASK);
                fprintf(stderr, "[watchlsa] n=%lu spu%u cmd=0x%02X ea=0x%08X"
                                " lsa=0x%05X size=%u pc=0x%05X ->"
-@@ -1176,18 +1327,68 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+@@ -960,7 +1175,7 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+      * covering it. Those cannot both be true as stated. Coverage per block over
+      * a whole row says whether the row is fully written with wrong DATA, or
+      * partly written, and those are completely different bugs. */
+-    { static int s_rc = -2; static uint32_t s_rcb;
++    if (spu_dma_diag()) { static int s_rc = -2; static uint32_t s_rcb;
+       if (s_rc == -2) { const char* e8 = getenv("SPU_ROWCOV");
+                         s_rc = e8 ? 1 : 0;
+                         s_rcb = e8 ? (uint32_t)strtoul(e8, 0, 16) : 0u; }
+@@ -1004,7 +1219,7 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+      * 0x004DC/0x00598 (Host2Local_Body) and none from the DrawRect/DrawEdge
+      * range, which would mean no geometry is rasterised at all -- the missing
+      * 3D. That was noticed from three sampled addresses, so count them all. */
+-    { static int s_vp = -1;
++    if (spu_dma_diag()) { static int s_vp = -1;
+       if (s_vp < 0) s_vp = getenv("SPU_VRAMPC") ? 1 : 0;
+       if (s_vp && mfc_is_put(cmd) &&
+           (uint32_t)ea >= 0x40600000u && (uint32_t)ea < 0x40700000u) {
+@@ -1061,7 +1276,7 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+      *   LS holds real pixels   -> the destination comparison was wrong
+      *
+      * Host2Local_Body is LS 0x00350..0x00757 (from the firmware .symtab). */
+-    { static int s_hs = -1;
++    if (spu_dma_diag()) { static int s_hs = -1;
+       if (s_hs < 0) s_hs = getenv("SPU_H2LSRC") ? 1 : 0;
+       if (s_hs && vm_base && mfc_is_put(cmd) && size >= 16u &&
+           (uint32_t)ea >= 0x40600000u && (uint32_t)ea < 0x40700000u) {
+@@ -1090,7 +1305,7 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+      * (RSX local + 0x400000). Buckets keep only 4 address bits, so that may be
+      * an artifact of where RSX local memory actually sits; the full EA settles
+      * it. */
+-    { static int s_pe = -1; if (s_pe < 0) s_pe = getenv("SPU_PUTEA") ? 1 : 0;
++    if (spu_dma_diag()) { static int s_pe = -1; if (s_pe < 0) s_pe = getenv("SPU_PUTEA") ? 1 : 0;
+       if (s_pe && (cmd & 0xFF) >= 0x20u && (cmd & 0xFF) <= 0x2Fu) {
+           static int shown[8];
+           const unsigned sp2 = spu->spu_id & 7u;
+@@ -1108,7 +1323,7 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+      * of VRAM decodes to correct game art -- so the rasteriser runs and the
+      * asset upload works, and the question is what geometry these transfers
+      * actually have. */
+-    { static int s_ph = -1; if (s_ph < 0) s_ph = getenv("SPU_PUTHIST") ? 1 : 0;
++    if (spu_dma_diag()) { static int s_ph = -1; if (s_ph < 0) s_ph = getenv("SPU_PUTHIST") ? 1 : 0;
+       if (s_ph && (cmd & 0xFF) >= 0x20u && (cmd & 0xFF) <= 0x2Fu) {
+           static unsigned long long n[8][16], byt[8][16], nsz[8][8], tot;
+           const unsigned sp = spu->spu_id & 7u;
+@@ -1176,18 +1391,68 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
       * pages on demand the counter never advanced and a spinning job simply hung
       * the chain walker instead. Count repeats whether or not the transfer
       * succeeds, and halt at a known pc rather than hanging silently. */
@@ -53089,6 +53490,42 @@ index 90f3221e..5fee5abf 100644
                fflush(stderr);
                spu_halt(spu);
            }
+@@ -1207,7 +1472,7 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+     /* DMA trace for the cri task (image 22): log each transfer's LS/EA/size so we
+      * can see the work-fetch GET (func_000040F0) that precedes the branch-to-0 and
+      * whether its source EA holds valid work-queue data. Env SPU_DMATRACE_ALL. */
+-    {
++    if (spu_dma_diag()) {
+         static int64_t dt=-2; if (dt==-2){ const char* e=getenv("SPU_DMATRACE_ALL"); dt=e?1:0; }
+         /* SPU_DMATRACE=<img> traces one image; SPU_DMATRACE_ALL keeps the old
+          * hardcoded pair. Seeing a job's FIRST transfers is how you tell a bad
+@@ -1283,7 +1548,7 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+      * stays empty the task only ever does <=128B control DMAs (stuck in the
+      * SPURS job-queue kernel, never dispatching decode); if plane-sized PUTs
+      * appear we learn where the decoded frame actually lands. Env SPU_DMATRACE_RAW. */
+-    {
++    if (spu_dma_diag()) {
+         static int64_t bt=-2; if (bt==-2){ const char* e=getenv("SPU_DMATRACE_RAW"); bt=e?1:0; }
+         if (bt && spu->image_id==3) {
+             uint32_t ea32 = (uint32_t)ea;
+@@ -1438,7 +1703,7 @@ static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+ 
+     /* After a cri-task GET, dump the bytes it just read (the task context) so we
+      * can tell if eaContext holds valid SPURS work data or garbage. */
+-    {
++    if (spu_dma_diag()) {
+         static int64_t dt2=-2; if (dt2==-2){ const char* e=getenv("SPU_DMATRACE_ALL"); dt2=e?1:0; }
+         if (dt2 && spu->image_id==22 && cmd==0x40 /*GET*/ && size<=0x80) {
+             static int _g=0; if (_g++ < 6) {
+@@ -1539,7 +1804,7 @@ static inline void mfc_channel_write(mfc_engine* mfc, spu_context* spu,
+          * RdTagStat must equal the mask EXACTLY (mask 2 = tag 1 =
+          * kLoadJob_readBuffers). Log the inputs so we can see whether the tag
+          * really is reported complete. Env SPU_TAGPROBE=1. */
+-        { static int s_tp = -1;
++        if (spu_dma_diag()) { static int s_tp = -1;
+           if (s_tp < 0) { const char* e = getenv("SPU_TAGPROBE"); s_tp = e ? 1 : 0; }
+           if (s_tp && spu->image_id == 2) { static int _n = 0; if (_n++ < 40)
+               fprintf(stderr, "[tagprobe] img=%d upd=%u mask=0x%X completed=0x%X -> RdTagStat=0x%X%s\n",
 diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
 index 931d3b34..c10c9956 100644
 --- a/runtime/spu/spu_drain.c

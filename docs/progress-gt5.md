@@ -734,6 +734,143 @@ Open: the heavy menu state (pipelines not resident); the remaining ~120-160 ms f
 (about 115-145 ms of replay with no lookup or texture cost) and the grid (65 ms of texture work).
 Measured on one route, one save, 720p/4x and this machine's GPU only.
 
+## SPU DMA/channel fast paths: live acceptance and A/B (2026-11-13)
+
+Adapted Ascension-R's inactive-diagnostic gate and context-only MFC channel
+paths for GT5. `SPU_DMA_FAST=0` rolls back; `SPU_DMA_DIAG=1` forces original
+probe checks. Existing validation, coherency, copies, hooks and watchdogs stay.
+Native state/diagnostic parity checks and production channel compilation pass.
+
+Built the existing non-PGO Release target and ran one `gt5.exe` at a time,
+with `PS3_VERBOSE=0`, DXC, 720p/2x MSAA and VSync off. Existing shader caches
+were retained; neither shaderstamp checkout was accessed. The audio thread
+waited for the live run slot. Boot/menu, car list, HSR, Eiger rain and the
+opening movie passed short visual checks, with no crash/device-loss/stall
+reports. Not a full playthrough or audio acceptance.
+
+- HSR, on/off/off/on, 60 s each after 20 s: off 51.088/53.016 FPS;
+  on 53.256/53.251. Median 52.052 -> 53.254 (+2.3%); late frames
+  30.1% -> 24.1%, p99 34.23 -> 34.77 ms. The off spread exceeds the
+  median difference, so the exact gain remains preliminary.
+- Eiger rain, one 60 s off/on pair after a separate warmup: 48.427 ->
+  50.925 FPS (+5.2%). Inside Phase 45's ~5 FPS spread; needs repetition.
+- Car list, one 40 s off/on pair: 48.853 -> 48.939 FPS (+0.2%, neutral).
+
+The fast paths remain enabled with rollback. Details, executable hash,
+reproduction and limits: [dma-fastpaths.md](dma-fastpaths.md).
+`gt5boot.ps1` now waits for other games and only stops its own child; it also
+writes precise sample-window JSON. Evidence is ignored under `scratch/pv/dma-*`
+and `scratch/dma-live/`. Pending audio changes are separate.
+
+## Audio live validation: corrupt game PCM contained, movie output restored (2026-11-13)
+
+The reported silence is reproduced. With `PS3_VERBOSE=0`, menu, opening
+movie and High Speed Ring routes all produce NaNs in port 0's guest PCM
+and in mixed output when containment is disabled. The ring advances;
+Windows opens the Razer Barracuda X output, unmuted at 77%, with the GT5
+session unmuted at 100%. Its session meter reads zero with invalid PCM.
+A menu comparison with `GT5P_AUDIO_NATIVE=0` produces the same invalid
+pattern as native audio: this is **not isolated to native FMA**.
+
+The old diagnostics called this 0% silent because `NaN != 0`; peak
+comparisons also ignored NaNs. `AUDIO_RATE` / `AUDIO_PEAK` now report finite
+signal separately from input/mixed NaN and infinity counts, including port
+numbers in bounded error logs. COM, enumerator, default-device and device-ID
+startup failures now include operation/HRESULT, with bounded retries.
+Debug exports include the peak, containment and no-audio switches.
+
+**Containment, not the upstream repair.** Merely replacing individual NaNs
+left a clipped 6 kHz pattern; that version was tested privately and rejected.
+The shipped default excludes a corrupt port's entire block from the sum,
+while still clearing/consuming its ring and notifying the game. Healthy
+ports remain intact. A final output check clears any remaining nonfinite
+results. `AUDIO_NONFINITE_SCRUB=0` restores propagation for diagnosis.
+
+- Menu and race rollback recordings contain NaNs in half the output samples
+  in their final 20 s; the movie rollback does too. RaceStart was reached
+  at 81.2 s in the raw race run, followed by 30 s of capture.
+- Contained menu output is finite silence: 0 NaNs/infinities, peak/RMS 0.
+  **Menu music and race sound are not repaired**; port 0 still produces bad
+  data. Containment prevents that bad data from corrupting other audio.
+- Contained opening-movie output has 0 NaNs/infinities, final-20-s peak 0.732,
+  RMS 0.0773 and near-zero channel means. The live Windows session meter is
+  nonzero (e.g. 0.364). This verifies a healthy movie signal reaching Windows,
+  not a subjective listening assessment or picture-playback acceptance.
+
+All launches waited for the DMA owner's handoff and checked for existing
+`gt5.exe` processes. The runner only stops its own child. Functional runs
+used `PS3_HEADLESS=1`; no shaderstamp tree was modified, and no cache was
+moved or deleted. The private candidate reuses the DMA-validated build
+objects with only its audio object replaced. Final containment candidate
+SHA256: `57AD6D5E7D54396FE4EF76E3D00877F1A37EC0DA6D54A51D7F938E1245B3CAE5`.
+The normal Release executable was then rebuilt from the same audio source
+and updated debug exporter: SHA256
+`90307D9FF504B0164540D24935DA9F16BB32BA2DFAD4B18AE4C3B1BD7CEF8F8E`.
+Its final movie smoke test left `AUDIO_NONFINITE_SCRUB` unset (default on):
+0 output NaNs/infinities, final-20-s peak 0.683 and RMS 0.0764. The contained
+race reached RaceStart at 80.7 s and captured about 30 s thereafter; it too has
+0 output NaNs/infinities, but remains silent because port 0 is corrupt.
+Raw recordings, per-run flags/hashes, logs and meter readings are ignored
+under `scratch/audio-live/` and `scratch/pv/audio-*`.
+
+**Regression checks.** The jitter predicate now inspects every channel and
+sample; its old stride skipped stereo's right channel and seven surround
+channels. `audio_silence.py` passes 5,120 single-sample cases. The real mixer
+in `audio_health.py` preserves healthy ports, drops a corrupt port containing
+both NaNs and finite garbage, checks infinity handling and rollback, and
+verifies startup HRESULTs/rate limiting with fake COM (no device changes).
+The full compatibility patch applies to a private pinned baseline and
+`setup_runtime.py --check` verifies the installed runtime. Debug-export
+integration checks include the new environment fields.
+
+A private arithmetic trace saw reciprocal estimates of zero and invalid
+filter state in image 14 (`jFDFFAAC1`); these observations do not establish
+which operation first corrupts the audible PCM. Some exponent-255 register
+patterns are SPU extended-range intermediates. The next investigation is
+state capture/replay through the output/DSP chain, rather than assuming
+hardware FMA or the Windows device caused it. Details: [audio.md](audio.md).
+
+## Profile-guided release builds (2026-11-13)
+
+`scripts/release/clean_build.py --profile <profdata>` makes the player ZIP
+profile-guided; `release.ini` records `pgo_profile_sha256`. clang now names
+every function the profile has no record of (`pgocc.py` adds
+`-pgo-warn-missing-function`). The build fails if any function with counts
+changed (limit 0) or if more than 2000 have no record. Workflow and limits:
+[pgo.md](pgo.md), "Releases".
+
+- **First test failed, correctly**: 25 hot SPU functions (bodies `b01697100`,
+  `b0196FF40`) lost their counts. This checkout's `generated/` had never had
+  `spu_regpromo.py` / `spu_region.py` applied; the release lift applies them.
+  After applying them, the dev and release lifts were byte-identical.
+  `pgo.py gen`/`use` now refuse a lift that misses a post-lift step.
+- **Second test, from commit 23ccd0b with a new profile**: 0 lost counts.
+  435 functions have no record, all code the race route never runs: launcher
+  186, settings page 171, debug export 22, glyphs 20, cellL10n 19, others 17.
+- **The packaged exe is the fast one**: High Speed Ring frame tests of the ZIP's
+  `gt5.exe` gave 55.1 and 55.7 FPS. The earlier measured PGO build gave 54.9
+  in the same session. These are single runs, not an interleaved A/B, and this
+  session ran about 1.5 FPS below the 2026-11-12 one.
+
+## Profile-guided builds: +6% at High Speed Ring (2026-11-12)
+
+`scripts/pgo/pgo.py` builds an instrumented `gt5.exe` (`build_pgo_gen/`),
+profiles one High Speed Ring race route on it, and builds an optimised exe
+from the profile (`build_pgo_use/`). Clang IR PGO is applied through a
+compiler launcher (`scripts/pgo/pgocc.py`), so `build/` is unchanged. Details,
+commands and timings: [pgo.md](pgo.md).
+
+Interleaved frame tests, 4 rounds, same sources, runtime and lift:
+
+- FPS 53.45 -> 56.65 (+6.0%), with every PGO run above every normal one;
+- late frames 24.1% -> 13.2%;
+- FIFO walk 8.79 -> 7.54 ms/frame;
+- p99 unchanged.
+
+The picture and race state match. The car list, out of sample, is about +2.5%
+(both PGO runs above both normal ones). Release builds: see the 2026-11-13 entry and
+pgo.md, "Releases".
+
 ## Bitdefender "Gen:Variant.Lazy" on gt5.exe: located and changed (2026-11-12)
 
 Release 0.1.2's ZIP had 7/64 VirusTotal detections: Bitdefender

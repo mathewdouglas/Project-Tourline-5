@@ -95,6 +95,16 @@ shaders N / M" badge. `<cache>/gpu-stamp.txt` records GPU and driver; after
 a change, older `pso_*.bin` and the race pack are rebuilt unread and the
 before-start pass runs once (`RSX_PSO_GPU_STAMP=0`,
 `RSX_PSO_GPU_STAMP_PRELOAD=0`). Test: `scripts/test/gpu_stamp.py` (WARP).
+
+**Profile-guided builds.** `scripts/pgo/pgo.py gen|play|merge|use|ab`
+builds `build_pgo_use/gt5.exe` from a High Speed Ring profile: +6% FPS
+there, late frames 24% -> 13%, car list about +2.5%. The profile is
+derived data in `scratch/pgo/`; never commit it. `gt5boot.ps1 -Exe` runs
+another build. Player builds become PGO with `clean_build.py --profile`
+(a profile made from the release's own sources and full post-lift steps;
+the build fails if hot functions lost their counts). `pgo.py gen`/`use`
+refuse a `generated/` missing a post-lift step. See [docs/pgo.md](docs/pgo.md).
+
 **Release 0.1.3** (tag `v0.1.3`) is 0.1.2 plus the antivirus fix
 (runtime env defaults from one table; Bitdefender `Gen:Variant.Lazy`), built
 from the 0.1.2 tag, not from main.

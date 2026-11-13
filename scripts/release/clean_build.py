@@ -16,6 +16,17 @@ reproducible from the tag.
 
     python scripts/release/clean_build.py --private C:/path/to/dev/checkout --work C:/pt5-release/0.1.0
 
+With --profile, the build is profile-guided (docs/pgo.md): every compile goes
+through the tag's scripts/pgo/pgocc.py with that profile, which is one more
+private input. Make it from the same sources as the tag (pgo.py gen, play,
+merge in a development checkout at the tag, with every post-lift step applied).
+The build log is checked: the run fails if any function with counts changed
+(--profile-max-stale) or if more than 2000 compiled functions have no record
+(--profile-max-missing). release.ini records the profile's SHA-256.
+
+    python scripts/release/clean_build.py --private C:/dev --work C:/pt5-release/0.1.4 \
+        --profile C:/dev/scratch/pgo/gt5.profdata
+
 It never launches the game, pushes, tags or publishes.
 """
 import argparse
@@ -70,11 +81,27 @@ def main():
     ap.add_argument('--vc-runtime-dir', type=Path)
     ap.add_argument('--compare-generated', type=Path,
                     help='optional generated/ of an earlier lift: report whether this lift is byte-identical')
+    ap.add_argument('--profile', type=Path,
+                    help='a merged PGO profile (.profdata) made from the same sources: profile-guided build')
+    ap.add_argument('--profile-max-stale', type=int, default=0,
+                    help='functions whose profile counts may be lost to a changed body (default 0)')
+    ap.add_argument('--profile-max-missing', type=int, default=2000,
+                    help='compiled functions the profile may have no record of (default 2000): code the '
+                         'profiling run never loaded, such as the launcher, settings page or debug export; '
+                         'a profile from other sources misses tens of thousands')
     args = ap.parse_args()
     if not 1 <= args.jobs <= 8:
         raise ValueError('--jobs must be 1..8')
     work = args.work.resolve()
     private = args.private.resolve()
+    profile = None
+    if args.profile:
+        profile = args.profile.resolve()
+        if not profile.is_file() or profile.is_symlink():
+            raise ValueError(f'Missing profile or unexpected link: {profile}')
+        with profile.open('rb') as f:
+            if f.read(8) != b'\xfflprofi\x81':
+                raise ValueError(f'Not an indexed LLVM profile (llvm-profdata merge output): {profile}')
     if work.exists() and any(work.iterdir()):
         raise ValueError(f'Work folder must be new or empty: {work}')
     if work == private or private in work.parents or work in private.parents or HERE in work.parents or work in HERE.parents:
@@ -139,12 +166,52 @@ def main():
         same = tree_sha(src / 'generated') == tree_sha(args.compare_generated.resolve())
         print(f'generated/ identical to {args.compare_generated}: {same}', flush=True)
 
-    run('cmd', '/d', '/c', r'scripts\build.cmd', '-DGT5P_TARGET=BCUS98114-v104', cwd=src, env=env)
+    build = ['cmd', '/d', '/c', r'scripts\build.cmd', '-DGT5P_TARGET=BCUS98114-v104']
+    pgo_args = []
+    if profile:
+        pgocc = src / 'scripts/pgo/pgocc.py'
+        if not pgocc.is_file():
+            raise ValueError(f'{ref} has no scripts/pgo/pgocc.py: it predates profile-guided builds')
+        # Outside src/, so the tree stays as the tag has it; named by content.
+        used = work / 'pgo' / f'gt5-{file_sha(profile)[:12]}.profdata'
+        copy(profile, used)
+        launcher = ';'.join(p.as_posix() for p in (Path(py), pgocc)) + ';use;' + used.as_posix()
+        build += [f'-DCMAKE_C_COMPILER_LAUNCHER={launcher}', f'-DCMAKE_CXX_COMPILER_LAUNCHER={launcher}']
+        pgo_args = ['--pgo-profile', used]
+    build_log(build, src, env, work / 'build.log')
+    if profile:
+        log = (work / 'build.log').read_text(encoding='utf-8', errors='replace').splitlines()
+        stale = [l for l in log if 'hash mismatch' in l and 'up to 0 count discarded' not in l]
+        missing = [l for l in log if 'no profile data available for function' in l]
+        print(f'Profile {profile.name}: {len(stale)} compiled function(s) lost their counts (hash mismatch), '
+              f'{len(missing)} have no record (details in {work / "build.log"})', flush=True)
+        for l in stale[:20]:
+            print('   ', l.strip(), flush=True)
+        if len(stale) > args.profile_max_stale:
+            raise ValueError('Functions with counts in the profile have changed: make the profile from the '
+                             'same sources and lift as the tag (docs/pgo.md), or pass --profile-max-stale')
+        if len(missing) > args.profile_max_missing:
+            raise ValueError('Too many functions have no record in the profile: it does not fit these '
+                             'sources (docs/pgo.md), or pass --profile-max-missing')
     out = work / 'out' / f'project-tourline-5-v{version}-windows-x64.zip'
     run(py, 'scripts/release/package_player.py', '--build-dir', src / 'build', '--elf', src / 'input/EMAIN.ELF',
         '--runtime', work / 'ps3recomp', '--third-party', src / 'third_party', '--vc-runtime-dir', vc,
-        '--output', out, cwd=src, env=env)
-    print(f'Player ZIP: {out}  (commit {commit})')
+        '--output', out, *pgo_args, cwd=src, env=env)
+    print(f'Player ZIP: {out}  (commit {commit}{", profile-guided" if profile else ""})')
+
+
+def build_log(args, cwd, env, log):
+    """Run the build, keeping its whole output in log; per-function profile warnings stay out of the console."""
+    print('+', ' '.join(str(a) for a in args), flush=True)
+    with open(log, 'w', encoding='utf-8', errors='replace') as f:
+        p = subprocess.Popen([str(a) for a in args], cwd=cwd, env=env, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, errors='replace')
+        for line in p.stdout:
+            f.write(line)
+            if '[-Wbackend-plugin]' not in line:
+                print(line, end='', flush=True)
+        if p.wait():
+            raise subprocess.CalledProcessError(p.returncode, args)
 
 
 if __name__ == '__main__':
