@@ -4,6 +4,62 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.5: builders at idle priority during races (2026-11-14)
+
+**Player result after the parallel builders** (debug export, process 12008,
+new car and new track): queue refusals 204,364 -> 0, dropped learning
+3,621 -> 0, interpreted draws 445,235 -> 14,436, helpers built 1,120 of
+1,457, and race preparation had 2,454 pipelines ready. One 5 s window was
+left: 26 frames at 42.7 ms of replay each while about 60 jobs were pending,
+during a burst of new fragment programs (about 27 KB of HLSL each).
+
+**What that window is.** The walker waited under 5 ms a frame for replay,
+so most of each ~190 ms frame was the guest's own threads. Earlier records
+already put the frame thread's shader text at about 0.2 s per cold run and
+its driver calls at zero. A burst runs ten below-normal builders (six
+shader-compile workers, the pso-worker, three helpers) beside four PPU CPUs
+and the pinned SPU lanes, and races are SPU-bound.
+
+**Measured** with `RSX_HITCH_LOG` (cold cache per run, an unraced track,
+the player's settings). Stalls are intervals over 50 ms; "other" means the
+renderer's batch was under half the interval. Over 90% of stall time is
+"other", and about half of it has compile or pipeline work pending.
+
+All builders at idle priority (`RSX_SHADER_WORKER_PRIO=idle`), pairs
+base/idle/idle/base:
+
+| Run | Whole run: stalls, excess, worst | Last 65 s (race): stalls, excess, worst |
+| --- | --- | --- |
+| base 1 | 94, 8.68 s, 638 ms | 38, 3.72 s, 638 ms |
+| idle 1 | 209, 12.42 s, 361 ms | 71, 3.69 s, 266 ms |
+| idle 2 | 135, 6.67 s, 223 ms | 56, 2.69 s, 198 ms |
+| base 2 | 96, 8.32 s, 988 ms | 34, 3.08 s, 495 ms |
+
+Idle shortens the worst race frames, but menus and loading collect far more
+hitches: they need their compiles sooner. So only race scope changes it.
+
+**Change.** `RSX_SHADER_WORKER_PRIO_RACE` (default `idle`; `below`,
+`lowest`, or `same` = 0.1.4): shader-compile workers, the pso-worker and
+the helpers take this priority before each job while race scope is on
+(`s_pso_race_active`, race load to the next menu) and the interpreter
+draws for pending shaders. While the frame thread is in its offscreen
+wait (`s_frame_waiting`) they keep the normal priority. Race-preparation
+helpers are unchanged.
+
+| Run | Whole run: stalls, excess, worst | Race: stalls, excess, worst |
+| --- | --- | --- |
+| same 1 | 129, 7.24 s, 332 ms | 55, 3.05 s, 329 ms |
+| race 1 | 101, 9.18 s, 2,359 ms | 53, 2.58 s, 236 ms |
+| race 2 | 112, 5.45 s, 203 ms | 48, 2.13 s, 176 ms |
+| same 2 | 125, 6.22 s, 263 ms | 41, 2.15 s, 191 ms |
+
+Race worst frames are lower in both pairs and race excess is equal or
+lower; FrameTest FPS 45.9/46.3 against 46.4/47.0. The 2,359 ms gap in
+"race 1" is about 20 s after launch (boot and opening movie, an 867 ms
+renderer batch with 33 compiles), before race scope begins, where both
+modes run identically. The gain is modest; the remaining race stalls are
+mostly guest-side with nothing pending.
+
 ## 0.1.5: draw-miss pipelines built in parallel, busiest first (2026-11-14)
 
 **Report.** A player's first race on a new track (0.1.4, debug export from

@@ -13,6 +13,11 @@ versions follow [SemVer](https://semver.org/).
   tests the interpreter stands in for far fewer draws. Switches:
   `RSX_PSO_DEMAND_THREADS=0`, `RSX_PSO_PRIORITY_USES=0`,
   `RSX_PSO_DEMAND_AFFINITY=0`.
+- **Shader compiling gives way to the game during races.** While racing
+  (and while the interpreter draws for new shaders), shader and pipeline
+  building runs at idle priority, so it uses only CPU time the game leaves
+  free: shorter worst frames on a first visit to a track. Menus and loading
+  keep the normal priority. `RSX_SHADER_WORKER_PRIO_RACE=same` turns it off.
 
 ### Fixed
 - Learned pipelines are no longer dropped on a busy first visit, so the next
