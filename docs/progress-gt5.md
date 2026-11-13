@@ -57,11 +57,47 @@ The new trace columns `offwait_us` and `offwaits` count every wait. The
   1.35 s and seen both on and off, are loading-time gaps outside the
   renderer. They are not counted above.
 
+**Fragment HLSL built once per key (`RSX_FP_MEMO`, default on; `=0`
+old).**
+
+`RSX_PSO_TIMING` split a cold run's frame-thread pipeline misses as
+follows:
+
+| Part of the miss | Time over the whole run |
+| --- | --- |
+| HLSL text | about 0.86 s |
+| Bytecode | under 0.1 s |
+| Driver work | under 0.1 s |
+
+The HLSL costs 0.3-0.5 ms a miss. There were about 2,400 misses for about
+500 compiles, because a new pipeline rebuilt the same text at first sight,
+again when its shader finished, and again when its pipeline did.
+
+Now a key that was pending keeps its shader's source hash. When it
+finishes, the key takes the bytecode from the memory cache (the handoff
+above) and goes straight to the pipeline description. This rests on the
+same assumption as the pending table and the pipeline cache: the key
+decides the shader. Two cold runs per side, interleaved:
+
+| Run | Frame-thread HLSL | Rebuilds skipped / fell back | Renderer long frames | Excess | Worst batch |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| on 1 | 0.76 s | 1,649 / 8 | 17 | 2.76 s | 428 ms |
+| off 1 | 2.19 s | - (15,429 rebuilds) | 30 | 4.74 s | 709 ms |
+| on 2 | 0.59 s | 1,634 / 7 | 12 | 1.82 s | 347 ms |
+| off 2 | 1.00 s | - (2,084 rebuilds) | 18 | 2.76 s | 402 ms |
+
+- Every pair improves.
+- Race shots from both "on" runs are correct: mirror, HUD, and the
+  position-list labels drawn into offscreen targets.
+- "Off 1" rebuilt finished keys 15,429 times, so in some runs a key falls
+  through every frame.
+
 **Next.**
-- In the cold long frames that remain, `pre_ms` and `pso_ms` lead (up to
-  about 110 ms each). That is the frame thread generating HLSL text and
-  pipeline keys for new programs. Generating the text in the compile worker
-  instead is the next measured step.
+- What remains is the first build of each new key's HLSL: about 0.6-0.8 s
+  a cold run, in bursts of up to about 300 ms per 5 s while the race
+  loads. Moving that decompile into the compile workers (the draw stays
+  pending meanwhile) is the next step.
+- Offscreen waits still total about 1 s in renderer long frames.
 - The interpreter speed-ups come from the research note
   (`scratch/ubershader-research.md`, untracked). In order:
   - clear only the registers a program uses, and add size-class variants;
