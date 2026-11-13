@@ -4,6 +4,59 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## C: the interpreter as the stand-in for pending draws, cold cache (2026-11-14)
+
+The aim is for mode 1 (`RSX_SHADER_INTERP=1 RSX_SHADER_INTERP_VP=1`: interpret
+only the draws whose specialized pipeline is still pending) to be the
+default. These runs use a cold cache: a fresh `RSX_SHADER_CACHE` per run,
+High Speed Ring route from boot, `RSX_SHADER_INTERP_PSO_ASYNC=1
+RSX_SHADER_INTERP_PSO_DISK=1`, and `frame_hitches.py` over the whole run.
+The 60 s race FrameTest is 55 FPS in every configuration, because race
+loading prepares the race's pipelines; the cold cost is in the menus,
+loading and race start.
+
+| Cold cache | Offscreen waits | Renderer-long frames | Excess | Worst |
+| --- | ---: | ---: | ---: | ---: |
+| Interpreter off (3 runs) | 1.15 / 1.39 / 1.21 s | 11 / 11 / 11 | 1.66 / 1.95 / 2.01 s | 481 / 430 / 453 ms |
+| Mode 1 as it was (2) | - | 11 / 13 | 1.82 / 2.91 s | 522 / 694 ms |
+| + background variant compile (2) | 0.94 / 1.14 s | 11 / 13 | 1.92 / 2.42 s | 559 / 534 ms |
+| + offscreen retry, small targets past the budget (2) | 0.18 / 0.26 s | 10 / 7 | 1.35 / 0.87 s | 329 / 393 ms |
+
+- **Background variant compile (`RSX_SHADER_INTERP_BG_COMPILE=0`: old).**
+  Startup compiled 16 pixel-shader variants on the init thread: 4.6 s on
+  a cold cache. A no-discard variant then compiled on the replay thread
+  the first time a draw needed it, about 270 ms each. Variants now compile
+  on a below-normal thread. A draw whose variant is not ready is left out
+  like a pending draw, which happened 8 times a run. The base variants
+  are still compiled at startup when learned classes will be prepared,
+  where they are cache hits. Startup now waits 0-16 ms.
+- **Per pixel by default.** The interpreter shades once per pixel unless
+  `RSX_SHADER_INTERP_SSAA=1` (follow `RSX_SSAA`, the old default). This
+  halves the variants to compile.
+- **Offscreen waits retry the interpreter (`RSX_SHADER_INTERP_WAIT_RETRY=0`:
+  old).** The biggest cold hitches were offscreen waits, single ones of
+  411-491 ms. In mode 1 they happened when the interpreter could not take
+  the draw yet: its pipeline was still being created, or the GPU budget
+  denied it. The wait now also retries the interpreter, which ended 39-47
+  waits a run (`offwait_interp` in the `[interp] draws` line).
+- **Small targets past the budget (`RSX_SHADER_INTERP_BUDGET_SMALL=1`: old).**
+  Draws into targets smaller than the window are few pixels; the
+  per-frame GPU budget denied them during loading bursts (5,000-7,000
+  denials a run), and they then waited.
+- **A prepared base pipeline beats no-discard.** Startup class preparation
+  makes pipelines for the base (with-discard) variant only; a draw that
+  could use the no-discard variant now takes a prepared base pipeline
+  rather than creating a new one.
+- **Draws left out.** With the interpreter off a cold run left out
+  10,729 fragment-pending and 6,254 vertex-pending draws. Mode 1 now
+  leaves out 8,086-8,995 and 3,086-3,262, about 30% fewer. Most of the
+  rest are window-sized draws that the GPU budget denies during loading
+  bursts.
+- **The hitch log's `pending` column is `g_rsx_shader_busy`** (compiles in
+  flight, interpreter jobs included), not draws left out. Left-out draws
+  are `[interp-pending] replay_fp/replay_vp` with
+  `RSX_SHADER_INTERP_STATS=1`.
+
 ## Branch release/v0.1.4: every open branch merged (2026-11-14)
 
 `release/v0.1.4` starts from `feat/shader-interp` and merges
