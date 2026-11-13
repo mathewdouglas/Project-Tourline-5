@@ -3,18 +3,81 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.1.4] - 2026-11-14
+
+Sound is back, setup needs only your game folder, and the first visit to a
+menu or track stutters far less. Built with the same clean release pipeline,
+now profile-guided. The player ZIP contains no game files; you need your own
+extracted BCUS98114 disc (the folder containing `PS3_GAME`).
+
+### Highlights
+- **Menu music and race sound play again.** Players heard silence outside
+  the opening movie.
+- **Setup takes only your disc folder.** No RPCS3 install, no update
+  download, no clicks: the launcher does the rest.
+- **Far fewer missing details and hitches on first visits**, with a new
+  "Draw while compiling" option, on by default.
+- **Faster:** about +6% FPS from profile-guided builds, faster race starts
+  and about 10% more frames in the Arcade car list.
+
+### Added
+- **Disc-only setup.** Select the extracted disc folder and nothing else.
+  The disc's own `INSDIR/DATA000.PKG` already holds the required 01.04
+  update. Setup downloads one pinned official RPCS3 build (37 MB, SHA-256
+  checked), uses it only to install that package and decrypt its
+  executable, then deletes it. It presses RPCS3's Install button itself; an
+  RPCS3 window opens and closes on its own within seconds. Your own
+  `rpcs3.exe`, or an existing 01.04 installation, can still be used instead.
+  No keys are included. `PT5_RPCS3_DOWNLOAD=0` turns the download off; see
+  [docs/setup.md](docs/setup.md) for the other switches.
+- **RecompLauncher Easy Setup needs only the disc folder.** The RPCS3 and
+  installed-data inputs are now optional.
+- **Draw while compiling** (F1 > Shaders, and in RecompLauncher; on by
+  default; `video.shader_interp`). While a new shader compiles, a general
+  shader-interpreter draws in its place instead of the detail being left
+  out. On a cold shader cache, about 90% fewer draws are left out and the
+  worst frame is about 25% shorter. Off restores the old behaviour.
+- **Problem reports.** After a crash, a freeze of 10 s or more, or an error
+  exit, the launcher offers a ZIP of the logs, settings and basic PC details
+  (user name, profile folder and PC name removed) and a pre-filled GitHub
+  issue. Nothing is sent automatically. `PT5_CRASH_REPORT=0` turns it off.
+- `[io-unmapped]` log lines name textures the game binds from memory with
+  no IO mapping (diagnostic only; none at High Speed Ring).
 
 ### Changed
-- Setup needs only the extracted GT5 disc folder. The launcher fetches the
-  official RPCS3 build itself (pinned, 37 MB), uses it to install the 01.04
-  update already on the disc and decrypt its executable, with no clicks, then
-  deletes it. RecompLauncher's Easy Setup takes just the disc folder. Your
-  own RPCS3 or an existing 01.04 installation can still be supplied.
-- The Arcade car list draws about 10% more frames (GT5 Phase 46): outside
-  races the render lanes of workload 4, which the car list waits on, are
-  pinned to their own cores; in races the pinning is unchanged.
+- **Profile-guided builds.** The player `gt5.exe` is optimised with a
+  profile recorded from a High Speed Ring race: about +6% FPS there, and
+  late frames 24% -> 13% in the measurement.
+- **Race starts and texture streaming** (Prologue renderer ports): a fast
+  pipeline lookup, textures placed in 64 MB heaps, a 64 MB upload ring and
+  LRU texture eviction. Race start 182 -> about 85 ms, starting grid
+  246 -> 125-148 ms; same FPS and memory. Switches: `RSX_PSO_FAST_LOOKUP=0`,
+  `RSX_TEX_PLACED=0`, `RSX_TEX_RING_MB=0`, `RSX_TEX_LRU=0`.
+- **Cold-cache stutter.** Large textures decode in parallel row bands
+  (grid frame decode 21 -> 11 ms), the button-prompt replacer hashes only
+  the texture sizes it can replace (42 -> 0 ms on the first grid frame), and
+  fewer descriptors are rebuilt per draw. Switches:
+  `RSX_TEX_DECODE_THREADS=0`, `RSX_TEX_REPL_SIZES=0`.
+- **Arcade car list about 10% faster.** Outside races, the render lanes the
+  car list waits on are pinned to their own cores; races are unchanged.
   `SPURS_LANE_PIN_SCOPE=0` restores the fixed set.
+- **SPU DMA fast paths**: about +2% at High Speed Ring and up to +5% at Eiger
+  Nordwand in rain (single runs). `SPU_DMA_FAST=0` restores the old path.
+- Unused SPU function names are no longer stored in `gt5.exe` (they matched
+  a public antivirus rule).
+
+### Fixed
+- **No menu music or race sound.** Two arithmetic differences between the
+  PS3's SPU and x86 corrupted the audio DSP's output: `0 x` an extended-range
+  estimate gave NaN instead of 0, and rounding made one 1 Hz filter
+  unstable. Both now follow the SPU. Corrupt audio blocks are also contained
+  so one bad source cannot silence the whole mix (`AUDIO_NONFINITE_SCRUB=0`,
+  `GT5P_AUDIO_ROUND_ZERO=0` for diagnosis).
+
+### Upgrading
+- Existing setups are kept: replace the player folder and launch
+  `tourline5.exe`. Storage, saves, settings and the shader cache stay where
+  they are, and no new setup is needed.
 
 ## [0.1.3] - 2026-11-12
 

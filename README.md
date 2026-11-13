@@ -17,35 +17,56 @@
 
 An unofficial port of **Gran Turismo 5** (PS3, US disc BCUS98114, update 01.04) to Windows x64. It is a static recompilation: the game's own code, translated ahead of time to native x64, then run with a Direct3D 12 renderer. No emulator runs while you play.
 
-> **Status: early.** A source build boots to the main menu, and Arcade can load High Speed Ring and drive. There is no player download yet. The open fault is a race freeze of about 2.5 seconds, about every other race (Phase 32, 2026-10-30). The investigation, with dates and measurements, is in [docs/progress-gt5.md](docs/progress-gt5.md).
+> **Status: early.** The game boots to the main menu with sound, and Arcade races run at around 55 FPS at High Speed Ring. Player builds are on the [Releases](https://github.com/mathewdouglas/Project-Tourline-5/releases) page; what changed in each is in [CHANGELOG.md](CHANGELOG.md). The investigation, with dates and measurements, is in [docs/progress-gt5.md](docs/progress-gt5.md).
 
 This tree continues [Tourline Prologue](https://github.com/mathewdouglas/Tourline-Prologue). Both are built with [ps3recomp](https://github.com/sp00nznet/ps3recomp), from the [sp00nznet/GT5P](https://github.com/sp00nznet/GT5P) port of Gran Turismo 5 Prologue.
 
 ### What you need
 
-- **Your own US disc copy** of Gran Turismo 5, **BCUS98114**. The port runs the **01.04 update** executable from that disc's `INSDIR/DATA000.PKG`, which is what a console and RPCS3 install before the first boot. The disc's own `EBOOT.BIN` is version 01.00 and is a different executable.
-- **Windows 10 or 11, 64-bit**, and a GPU with Direct3D 12.
-- **A decrypted 01.04 `EBOOT.BIN`**, or an installed copy of RPCS3 that can decrypt it. RPCS3, firmware and keys are not included, and the original dump is left unchanged.
-- **The game's own files**, laid out as below. This repository contains none of them.
+- **Your own US disc copy** of Gran Turismo 5, **BCUS98114** (disc version 02.00), extracted to a folder: the one containing `PS3_GAME`, with `PS3_GAME\INSDIR` and the full `USRDIR\GT.VOL`. ISO files must be extracted first. The port runs the **01.04 update** executable from that disc's own `INSDIR/DATA000.PKG`, which is what a console and RPCS3 install before the first boot, so no update download is needed.
+- **Windows 10 or 11, 64-bit**, a GPU with Direct3D 12, and an internet connection during setup (for RPCS3; see below).
+- Nothing else. Setup fetches the official RPCS3 build on its own, uses it only to unpack the update on your disc, and deletes it. No game files, firmware or keys are included, and your disc folder is never modified.
 
 ## Getting started
 
-New source builds provide **build\tourline5.exe**, also opened by **Setup and play.cmd**.
-It asks where to keep saves, settings and shaders, then lets you select your
-GT5 disc dump and installed `rpcs3.exe`. Choose **Prepare from my disc**:
-setup opens the disc's bundled 01.04 package in RPCS3. Click **Install**, wait,
-then close RPCS3; setup automatically decrypts a temporary copy and imports
-the verified data. No update download or GT5 boot in RPCS3 is required.
-Importing an existing 01.04 installation is also supported. Setup is remembered.
+### With the player download
 
-Storage can use `%LOCALAPPDATA%\ProjectTourline5` or an empty folder on another
-drive, including an external SSD. **Change storage.cmd** copies and verifies
-existing storage while keeping the original as a backup.
-[Setup, storage and game-file selection](docs/setup.md) describes the full flow.
+1. Download the latest player ZIP from
+   [Releases](https://github.com/mathewdouglas/Project-Tourline-5/releases)
+   and extract it anywhere, keeping the folder together.
+2. Run **tourline5.exe**. Keep the default storage folder
+   (`%LOCALAPPDATA%\ProjectTourline5`) or choose an empty folder, including
+   one on an external SSD. Saves, settings and shaders live there.
+3. Select your extracted GT5 disc folder (the one containing `PS3_GAME`).
+4. Choose **Prepare from my disc (recommended)**. That is all. Setup
+   downloads RPCS3 (37 MB, the pinned official build), installs the 01.04
+   update from your disc with it, decrypts the executable and copies the
+   verified files into storage. An RPCS3 window opens and closes on its own:
+   leave it alone. It takes under a minute, then RPCS3 is deleted again.
+5. The game starts. Later launches go straight in; setup is remembered.
 
-The earlier [0.1.0 release](https://github.com/mathewdouglas/Project-Tourline-5/releases/tag/v0.1.0)
-has the manual setup described in its own START-HERE.txt. The direct developer
-layout is also still supported:
+To use your own RPCS3 instead of the download, choose **Prepare from my disc
+with my installed RPCS3**; setup presses its Install button and closes it for
+you. Importing an existing 01.04 installation also works.
+
+### With RecompLauncher
+
+Import the player folder, open **Easy Setup**, drop your extracted disc
+folder into the disc input, leave the other inputs empty, and press Play.
+Preparation runs the same steps as above, unattended.
+[RecompLauncher integration](docs/recomplauncher.md) has the details.
+
+### Afterwards
+
+**Change storage.cmd** moves storage to another folder, copying and verifying
+it and keeping the original as a backup. **Change game files.cmd** selects the
+game files again. [Setup, storage and game-file selection](docs/setup.md)
+describes the full flow and its switches. Source builds put the same launcher
+in `build\tourline5.exe`, also opened by **Setup and play.cmd**.
+
+### Developer layout
+
+The direct developer layout is also still supported:
 
 1. Put the extracted disc where the port reads it: `input/pkg/PARAM.SFO` and `input/pkg/USRDIR/`, including `GT.VOL`. The port maps `/dev_bdvd/PS3_GAME/` to `input/pkg/`.
 2. Decrypt the installed update executable, `dev_hdd0/game/BCUS98114/USRDIR/EBOOT.BIN`, to `input/EMAIN.ELF`. RPCS3's **Utilities → Decrypt PS3 Binaries** writes an ELF beside that file. Write `BCUS98114-v104` as the only line of `input/target`.
@@ -64,20 +85,21 @@ in [the port review](docs/prologue-sync-review.md).
 
 `scripts\get_sdl2.ps1` fetches SDL2 for more controllers. `scripts\get_ffmpeg.ps1` fetches FFmpeg for the opening movie. Without FFmpeg the movie stays black. The build copies both beside the executable. Keep `shadercache/`. It belongs to this machine.
 
-Optional **DXC shader compilation** is available under F1 > Shaders after running
-`scripts/get_dxc.py` and rebuilding. FXC remains the default pending GT5 shader
-parity acceptance. [Setup, cache separation and validation](docs/dxc.md).
+**DXC** is the default shader compiler (player builds include it; source
+builds run `scripts/get_dxc.py` and rebuild). FXC stays available under
+F1 > Shaders. [Setup, cache separation and validation](docs/dxc.md).
+F1 > Shaders > **Draw while compiling** (on by default) draws a stand-in
+while a new shader compiles, instead of leaving the detail out.
 
 ## Known problems
 
-- About every other race freezes for about 2.5 seconds, at varying points on the track. It still happens with vsync off. Phase 32 (2026-10-30) found the SPU lanes waiting in the runtime's lock-line lock. What holds that lock for the length of the freeze is still open.
-- A locked 60 frames per second is not guaranteed. Later warm High Speed Ring checks have landed around 45 to 52 frames per second at 720p, and the runs vary. One stretch of each run is slower while the next section's textures stream in. The first visit to a new effect can pause the picture while shaders compile.
+- A locked 60 frames per second is not reached. Warm High Speed Ring races run at about 55 frames per second at 720p, Eiger Nordwand in rain at about 47 to 50, and runs vary. The first visit to a menu, track or effect still has some hitches while shaders compile; later visits use the shader cache.
 - One-frame flashes (a purple road, grass on the road, noise in the mirror) were reported while thousands of shaders compiled. Copies that changed a texture the frame still being drawn had bound are now ordered with that frame. The flashes were not reproduced in the shorter local checks.
 - A split-second blue flicker of the road, about 18 seconds into a race and during the rolling start, was reported. Burst captures after that report did not show it again.
 - Online services are not part of this port.
 - Only the US disc build BCUS98114, update 01.04, is the current target.
 
-The measurement record is [docs/progress-gt5.md](docs/progress-gt5.md). [CHANGELOG.md](CHANGELOG.md) and [ROADMAP.md](ROADMAP.md) still describe the Prologue disc build.
+The measurement record is [docs/progress-gt5.md](docs/progress-gt5.md); release notes are in [CHANGELOG.md](CHANGELOG.md). [ROADMAP.md](ROADMAP.md) still describes the Prologue disc build.
 
 ## Building from source
 

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(gt5p_recompiled
-    VERSION 0.1.3
+    VERSION 0.1.4
     DESCRIPTION "Gran Turismo 5 Prologue - Static Recompilation for PC"
     LANGUAGES C CXX
 )
