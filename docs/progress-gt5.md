@@ -126,9 +126,22 @@ Two cold runs per side, interleaved; "off" sets both switches to 0:
 Moving the decompile itself to the workers would save at most about
 150 ms a cold run, so it is not worth the refactor.
 
-**Next.** Offscreen pipeline waits are now most of the remaining
+**Interpreter for offscreen targets only (`RSX_SHADER_INTERP=offscreen`,
+off by default).** Offscreen pipeline waits are now most of the remaining
 renderer stutter. Those targets are small (labels, probes, reductions), so
 the interpreter is cheap there even at its present per-pixel cost.
+
+The new mode interprets only pending draws into small offscreen targets.
+In two cold runs per side it removed the waits: 0.14/0.09 s against
+1.17/1.02 s. But renderer excess rose to 2.24/2.85 s, against 1.61/1.09 s
+with the mode off.
+
+The cause is the interpreter's own pipelines. Without
+`RSX_SHADER_INTERP_PSO_ASYNC`, each one is created on the frame thread at
+first use: 36 pipelines blocked for 1,172 ms in total (worst 219 ms), and
+in the other run 6 blocked for 120 ms. Every interpreter pipeline must
+therefore be prepared before play (learned classes; the startup prep needs
+paired mode) before this mode can help. It stays off.
 - The interpreter speed-ups come from the research note
   (`scratch/ubershader-research.md`, untracked). In order:
   - clear only the registers a program uses, and add size-class variants;
