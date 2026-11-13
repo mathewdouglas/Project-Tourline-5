@@ -288,10 +288,26 @@ target_link_libraries(gt5p PRIVATE ps3recomp_runtime)
 # Private CPU-specific copies of target-specific audio and profiled render images.
 # Derived aliases and lifted source stay under build/; baseline SSE images remain available.
 string(JSON GT5P_AUDIO_IMAGES ERROR_VARIABLE GT5P_AUDIO_IMAGES_ERR GET "${GT5P_T}" audio_native_images)
+option(GT5P_AUDIO_EXTENDED_ZERO "Fix SPU extended/zero arithmetic in audio images" ON)
 if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_ID MATCHES "Clang")
     string(JSON image_count LENGTH "${GT5P_AUDIO_IMAGES}")
     math(EXPR image_last "${image_count} - 1")
     set(audio_images "")
+    set(audio_math_images "")
+    string(JSON math_images ERROR_VARIABLE math_images_err GET "${GT5P_T}" audio_extended_zero_images)
+    if(NOT math_images_err)
+        string(JSON math_count LENGTH "${math_images}")
+        math(EXPR math_last "${math_count} - 1")
+        foreach(i RANGE ${math_last})
+            string(JSON image GET "${math_images}" ${i})
+            list(APPEND audio_math_images "${image}")
+            set_property(SOURCE "${CMAKE_SOURCE_DIR}/generated/spu_lifted/${image}/spu_recomp.c"
+                APPEND PROPERTY COMPILE_OPTIONS
+                "/FI${CMAKE_SOURCE_DIR}/src/gt5p_spu_audio_math.h")
+            set_property(SOURCE "${CMAKE_SOURCE_DIR}/generated/spu_lifted/${image}/spu_recomp.c"
+                APPEND PROPERTY COMPILE_DEFINITIONS "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>")
+        endforeach()
+    endif()
     set(audio_manifest "/* Target-specific identities; generated from targets.json. */\n")
     foreach(i RANGE ${image_last})
         string(JSON image GET "${GT5P_AUDIO_IMAGES}" ${i} 0)
@@ -342,6 +358,16 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
                 INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu")
             if(NOT GT5P_SPU_PROBES)
                 set_source_files_properties("${native_source}" PROPERTIES COMPILE_DEFINITIONS "SPU_LS_NO_PROBES")
+            endif()
+            if(image IN_LIST audio_math_images)
+                # Both portable and FMA aliases need the same semantics. The
+                # forced include runs before generated relative helper paths.
+                # Render images sharing this native-build loop are excluded.
+                set_property(SOURCE "${native_source}"
+                    APPEND PROPERTY COMPILE_OPTIONS
+                    "/FI${CMAKE_SOURCE_DIR}/src/gt5p_spu_audio_math.h")
+                set_property(SOURCE "${native_source}" APPEND PROPERTY COMPILE_DEFINITIONS
+                    "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>")
             endif()
         endforeach()
         set_source_files_properties(src/gt5p_audio_native.cpp PROPERTIES
