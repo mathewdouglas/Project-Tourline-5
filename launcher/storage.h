@@ -67,6 +67,28 @@ static HRESULT CALLBACK copy_dialog(HWND window, UINT notice, WPARAM button, LPA
     }
     return S_OK;
 }
+// Runs work on a helper thread behind a cancellable progress dialog (inline when
+// setup has no UI). Work reports through state.copied/total/current.
+static void with_progress(const wchar_t* title, const wchar_t* content, CopyState& state, const std::function<void()>& body) {
+    auto work = [&] {
+        try { body(); } catch (...) { state.error = std::current_exception(); }
+        state.done = true;
+    };
+    if (silent_errors || quiet) work();
+    else {
+        std::thread worker(work);
+        TASKDIALOGCONFIG td{}; td.cbSize = sizeof td;
+        td.dwFlags = static_cast<TASKDIALOG_FLAGS>(TDF_CALLBACK_TIMER | TDF_SHOW_PROGRESS_BAR | TDF_ALLOW_DIALOG_CANCELLATION);
+        td.pszWindowTitle = L"Project Tourline 5"; td.pszMainInstruction = title;
+        td.pszContent = content;
+        td.dwCommonButtons = TDCBF_CANCEL_BUTTON; td.pfCallback = copy_dialog; td.lpCallbackData = reinterpret_cast<LONG_PTR>(&state); brand(td);
+        const HRESULT shown = TaskDialogIndirect(&td, nullptr, nullptr, nullptr);
+        if (FAILED(shown)) state.cancel = true;
+        worker.join();
+        if (FAILED(shown)) fail(L"Could not display progress. Your previous setup remains selected.");
+    }
+    if (state.error) std::rethrow_exception(state.error);
+}
 // Always copy into a new staging/empty directory. Never move a source file.
 static void copy_verified(const fs::path& source, const fs::path& destination, const wchar_t* title,
                           bool storage_copy = false) {
@@ -84,43 +106,26 @@ static void copy_verified(const fs::path& source, const fs::path& destination, c
     fs::create_directories(destination);
     if (fs::space(destination).available < state.total + 64 * 1024 * 1024)
         fail(L"Not enough free space in " + destination.wstring() + L". The source remains unchanged.");
-    auto work = [&] {
-        try {
-            for (const auto& item : files) {
-                if (state.cancel) throw Cancelled{};
-                const auto from = source / item.relative, to = destination / item.relative;
-                if (item.directory) { fs::create_directories(to); continue; }
-                fs::create_directories(to.parent_path());
-                {
-                    std::lock_guard<std::mutex> guard(state.mutex);
-                    state.current = L"Copying and verifying " + item.relative.wstring() +
-                        L"\n\nYour source files stay in place. The previous setup remains available until this completes.";
-                }
-                if (!CopyFileExW(from.c_str(), to.c_str(), copy_progress, &state, nullptr, COPY_FILE_FAIL_IF_EXISTS)) {
-                    if (state.cancel) throw Cancelled{};
-                    fail(L"Could not copy " + from.wstring() + L". The source and previous setup are unchanged.");
-                }
-                if (hash(from) != hash(to)) fail(L"Copy verification failed: " + to.wstring());
-                state.completed += item.bytes; state.copied = state.completed;
-            }
+    with_progress(title, L"Copying your selected files. Your original files will not be modified.", state, [&] {
+        for (const auto& item : files) {
             if (state.cancel) throw Cancelled{};
-        } catch (...) { state.error = std::current_exception(); }
-        state.done = true;
-    };
-    if (silent_errors || quiet) work();
-    else {
-        std::thread worker(work);
-        TASKDIALOGCONFIG td{}; td.cbSize = sizeof td;
-        td.dwFlags = static_cast<TASKDIALOG_FLAGS>(TDF_CALLBACK_TIMER | TDF_SHOW_PROGRESS_BAR | TDF_ALLOW_DIALOG_CANCELLATION);
-        td.pszWindowTitle = L"Project Tourline 5"; td.pszMainInstruction = title;
-        td.pszContent = L"Copying your selected files. Your original files will not be modified.";
-        td.dwCommonButtons = TDCBF_CANCEL_BUTTON; td.pfCallback = copy_dialog; td.lpCallbackData = reinterpret_cast<LONG_PTR>(&state); brand(td);
-        const HRESULT shown = TaskDialogIndirect(&td, nullptr, nullptr, nullptr);
-        if (FAILED(shown)) state.cancel = true;
-        worker.join();
-        if (FAILED(shown)) fail(L"Could not display copy progress. Your previous setup remains selected.");
-    }
-    if (state.error) std::rethrow_exception(state.error);
+            const auto from = source / item.relative, to = destination / item.relative;
+            if (item.directory) { fs::create_directories(to); continue; }
+            fs::create_directories(to.parent_path());
+            {
+                std::lock_guard<std::mutex> guard(state.mutex);
+                state.current = L"Copying and verifying " + item.relative.wstring() +
+                    L"\n\nYour source files stay in place. The previous setup remains available until this completes.";
+            }
+            if (!CopyFileExW(from.c_str(), to.c_str(), copy_progress, &state, nullptr, COPY_FILE_FAIL_IF_EXISTS)) {
+                if (state.cancel) throw Cancelled{};
+                fail(L"Could not copy " + from.wstring() + L". The source and previous setup are unchanged.");
+            }
+            if (hash(from) != hash(to)) fail(L"Copy verification failed: " + to.wstring());
+            state.completed += item.bytes; state.copied = state.completed;
+        }
+        if (state.cancel) throw Cancelled{};
+    });
 }
 // A launcher-owned temporary directory, confined to this storage's imports.
 struct Import {

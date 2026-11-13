@@ -15,12 +15,17 @@ still open the built-in storage/game-file dialogs when setup is needed.
 Drop the following into RecompLauncher's Easy Setup inputs:
 
 1. The extracted **BCUS98114 v02.00 disc folder**, or its `PS3_GAME` folder.
-2. Your installed **rpcs3.exe** in **RPCS3 / Executable**.
-3. Leave **Installed data** empty to prepare from the disc. Close other RPCS3
-   windows first. Setup opens the bundled package in RPCS3: click **Install**,
-   wait for completion, then **close RPCS3**. Setup then finds the files,
-   decrypts a temporary copy and imports verified data. No GT5 boot is needed.
+   That is all: leave the other two inputs empty.
 
+Preparation then downloads one pinned official RPCS3 build into
+`<storage>\tools\rpcs3`, installs the disc's bundled 01.04 package with it
+(pressing Install itself; an RPCS3 window opens and closes on its own),
+decrypts a temporary copy of the executable, imports verified data and
+deletes the tool. Measured on the real disc: 24 s, no clicks. See
+[setup](setup.md) for the switches.
+
+Your own **rpcs3.exe** in **RPCS3 / Executable** is used instead of the
+download; setup presses Install and closes it for you.
 Alternatively provide existing **01.04 installed data** (or its RPCS3 folder)
 in the optional input, plus a decrypted **01.04 EBOOT.elf** or `rpcs3.exe` if
 not found there. This route supports custom RPCS3 game-data locations.
@@ -40,8 +45,9 @@ same staged copy, executable hash and commit/rollback checks as built-in
 setup. It uses default or remembered storage without a picker, emits
 `progress` lines while importing/verifying and exits without starting the
 game. Missing or invalid inputs fail with stderr and `logs/setup.err`;
-they never open another launcher setup dialog. RPCS3's own package installer
-requires the Install click and closing RPCS3 afterward. The preparation timeout is two hours
+they never open another launcher setup dialog. RPCS3 installs packages only
+through its window, so setup answers that window with UI Automation and closes
+RPCS3 when the package's files are all present. The preparation timeout is two hours
 to allow large imports on slower drives. No shared key or file destinations
 are declared in the manifest: RecompLauncher passes selected paths directly.
 

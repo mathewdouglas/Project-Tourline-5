@@ -18,8 +18,18 @@ WORK = Path(tempfile.mkdtemp(prefix='player-setup-', dir=ROOT / 'scratch'))
 ELF = b'\x7fELF synthetic executable for setup tests only\n'
 SHA = hashlib.sha256(ELF).hexdigest()
 PKG = b'synthetic package'
-(WORK / 'pt5_launcher_config.h').write_text(f'#define PT5_ELF_SHA256 L"{SHA}"\n#define PT5_ELF_BYTES {len(ELF)}ull\n'
-    f'#define PT5_DISC_PKG_SHA256 L"{hashlib.sha256(PKG).hexdigest()}"\n#define PT5_DISC_PKG_BYTES {len(PKG)}ull\n')
+def write_config(rpcs3_sha='0' * 64, rpcs3_bytes=0):
+    # The setup-owned RPCS3 is pinned to a local fixture archive; tests never download.
+    (WORK / 'pt5_launcher_config.h').write_text(f'#define PT5_ELF_SHA256 L"{SHA}"\n#define PT5_ELF_BYTES {len(ELF)}ull\n'
+        f'#define PT5_DISC_PKG_SHA256 L"{hashlib.sha256(PKG).hexdigest()}"\n#define PT5_DISC_PKG_BYTES {len(PKG)}ull\n'
+        '#define PT5_DISC_PKG_INSTALLED_FILES 0ull\n#define PT5_DISC_PKG_INSTALLED_BYTES 0ull\n'
+        '#define PT5_RPCS3_URL L"https://invalid.example/rpcs3.7z"\n'
+        f'#define PT5_RPCS3_SHA256 L"{rpcs3_sha}"\n#define PT5_RPCS3_BYTES {rpcs3_bytes}ull\n'
+        '#define PT5_SEVENZIP_URL L"https://invalid.example/7zr.exe"\n'
+        f'#define PT5_SEVENZIP_SHA256 L"{"0" * 64}"\n#define PT5_SEVENZIP_BYTES 0ull\n')
+
+
+write_config()
 # Compile the fixture's resources here too; never use or rebuild shared build/ outputs.
 resource = (ROOT/'launcher/launcher.rc.in').read_text().replace('@CMAKE_SOURCE_DIR@', ROOT.as_posix())
 for key, value in {'PROJECT_VERSION': '0.1.0', 'PROJECT_VERSION_MAJOR': '0',
@@ -34,6 +44,10 @@ for key, value in {'PROJECT_VERSION': '0.1.0', 'PROJECT_VERSION_MAJOR': '0',
 #include <fstream>
 #include "pt5_restart.h"
 int main(int argc, char** argv) {
+    if (argc > 1 && !strcmp(argv[1], "--allow-any-location")) {
+        if (const char* log=getenv("PT5_TEST_ANY_LOCATION_LOG")) std::ofstream(log,std::ios::app)<<argv[2]<<"\n";
+        --argc; ++argv;
+    }
     if (argc == 3 && !strcmp(argv[1], "--installpkg")) {
         if (const char* log=getenv("PT5_TEST_INSTALL_LOG")) std::ofstream(log)<<argv[2];
         if (getenv("PT5_TEST_INSTALL_FAIL")) return 8;
@@ -113,13 +127,23 @@ call "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary
 if errorlevel 1 exit /b 1
 rc /nologo /fo "{WORK}/launcher.res" "{WORK}/launcher.rc"
 if errorlevel 1 exit /b 1
-"C:\\Program Files\\LLVM\\bin\\clang-cl.exe" /nologo /std:c++20 /EHsc /O2 /MD /utf-8 /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /I"{WORK}" /Fo"{WORK}/launcher.obj" /Fe"{WORK}/tourline5.exe" "{ROOT}/launcher/launcher.cpp" /link "{WORK}/launcher.res" /SUBSYSTEM:WINDOWS /MANIFEST:NO shell32.lib ole32.lib comctl32.lib bcrypt.lib uuid.lib user32.lib
+"C:\\Program Files\\LLVM\\bin\\clang-cl.exe" /nologo /std:c++20 /EHsc /O2 /MD /utf-8 /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /I"{WORK}" /Fo"{WORK}/launcher.obj" /Fe"{WORK}/tourline5.exe" "{ROOT}/launcher/launcher.cpp" /link "{WORK}/launcher.res" /SUBSYSTEM:WINDOWS /MANIFEST:NO shell32.lib ole32.lib oleaut32.lib comctl32.lib bcrypt.lib uuid.lib user32.lib winhttp.lib
 if errorlevel 1 exit /b 1
 "C:\\Program Files\\LLVM\\bin\\clang-cl.exe" /nologo /std:c++20 /EHsc /O2 /MD /D_CRT_SECURE_NO_WARNINGS /I"{ROOT}/src" /Fo"{WORK}/engine.obj" /Fe"{WORK}/gt5.exe" "{WORK}/engine.cpp"
 if errorlevel 1 exit /b 1
-"C:\\Program Files\\LLVM\\bin\\clang-cl.exe" /nologo /std:c++20 /EHsc /O2 /MD /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /I"{WORK}" /Fo"{WORK}/decryption.obj" /Fe"{WORK}/decryption.exe" "{WORK}/decryption.cpp" /link shell32.lib ole32.lib comctl32.lib bcrypt.lib uuid.lib user32.lib
+"C:\\Program Files\\LLVM\\bin\\clang-cl.exe" /nologo /std:c++20 /EHsc /O2 /MD /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /I"{WORK}" /Fo"{WORK}/decryption.obj" /Fe"{WORK}/decryption.exe" "{WORK}/decryption.cpp" /link shell32.lib ole32.lib oleaut32.lib comctl32.lib bcrypt.lib uuid.lib user32.lib winhttp.lib
 ''')
 subprocess.run(['cmd', '/c', str(WORK / 'build.cmd')], check=True)
+# Setup-owned RPCS3 fixture: an archive holding the fixture engine as rpcs3.exe.
+# Rebuild only the launcher with that archive pinned (the engine's hash must not change).
+rpcs3_archive = WORK / 'pinned rpcs3.zip'
+with tempfile.TemporaryDirectory(dir=WORK) as packing:
+    shutil.copyfile(WORK / 'gt5.exe', Path(packing) / 'rpcs3.exe')
+    shutil.make_archive(str(rpcs3_archive.with_suffix('')), 'zip', root_dir=packing, base_dir='rpcs3.exe')
+write_config(hashlib.sha256(rpcs3_archive.read_bytes()).hexdigest(), rpcs3_archive.stat().st_size)
+build_lines = (WORK / 'build.cmd').read_text().splitlines()
+(WORK / 'build_launcher.cmd').write_text('\n'.join(build_lines[:4] + [l for l in build_lines if 'launcher.cpp' in l]) + '\n')
+subprocess.run(['cmd', '/c', str(WORK / 'build_launcher.cmd')], check=True)
 (WORK / 'pt5-release.ini').write_text('[game]\ntarget=BCUS98114-v104\nengine_sha256=' + hashlib.sha256((WORK / 'gt5.exe').read_bytes()).hexdigest() + '\n')
 (WORK / 'assets/glyphs').mkdir(parents=True)
 (WORK / 'assets/glyphs/fixture.txt').write_text('fixture asset')
@@ -146,7 +170,8 @@ sfo(installed / 'PARAM.SFO', TITLE_ID='BCUS98114', APP_VER='01.04')
 (installed / 'USRDIR/EBOOT.BIN').write_bytes(b'synthetic signed input')
 executable = WORK / 'my executable.elf'; executable.write_bytes(ELF)
 home = WORK / 'launcher home'; home.mkdir()
-base_env = {**os.environ, 'PT5_LAUNCHER_HOME': str(home), 'PT5_SETUP_UI': '0'}
+# PT5_RPCS3_DOWNLOAD=0 keeps the explicit-input checks below; the setup-owned route is tested separately.
+base_env = {**os.environ, 'PT5_LAUNCHER_HOME': str(home), 'PT5_SETUP_UI': '0', 'PT5_RPCS3_DOWNLOAD': '0'}
 for key in ('PT5_USER_DIR', 'PT5_STORAGE_LINK', 'GT5P_ROOT', 'GT5P_GAME_DIR', 'GT5P_SETTINGS', 'RSX_SHADER_CACHE', 'GT5P_NO_SETTINGS'):
     base_env.pop(key, None)
 count = WORK / 'child-count.txt'; base_env['PT5_TEST_COUNT'] = str(count)
@@ -261,6 +286,35 @@ run('--check', extra=easy_env)
 assert install_log.exists()
 install_log.unlink()
 shutil.rmtree(disc_rpc_game)
+# Disc only: setup unpacks its own pinned RPCS3, installs, decrypts, imports, then removes it.
+any_location = WORK/'any-location.txt'
+managed_env = {**disc_env, 'PT5_RPCS3_DOWNLOAD': '1', 'PT5_RPCS3_ARCHIVE': str(rpcs3_archive),
+               'PT5_TEST_ANY_LOCATION_LOG': str(any_location)}
+kept_settings = easy_settings.read_text(); easy_settings.write_text('[video]\nmsaa=8\n')
+prepare(update=None, extra=managed_env)
+assert os.path.samefile(install_log.read_text(), package)
+assert any_location.read_text().split() == ['--installpkg', '--decrypt'], any_location.read_text()
+assert (easy_home/'input/EMAIN.ELF').read_bytes() == ELF and not (easy_home/'tools').exists()
+assert easy_settings.read_text() == '[video]\nmsaa=8\n'
+install_log.unlink(); any_location.unlink()
+# A kept tool is reused without unpacking again; a changed archive is refused before RPCS3 starts.
+prepare(update=None, extra={**managed_env, 'PT5_KEEP_RPCS3': '1'})
+assert (easy_home/'tools/rpcs3/rpcs3.exe').exists()
+(easy_home/'logs/unpack-rpcs3.out').unlink()
+shutil.rmtree(easy_home/'tools/rpcs3/dev_hdd0')
+prepare(update=None, extra={**managed_env, 'PT5_KEEP_RPCS3': '1'})
+assert not (easy_home/'logs/unpack-rpcs3.out').exists()
+shutil.rmtree(easy_home/'tools'); install_log.unlink()
+wrong_archive = WORK/'wrong rpcs3.zip'; wrong_archive.write_bytes(b'not the pinned build')
+assert b'not the pinned RPCS3' in prepare(update=None, success=False,
+    extra={**managed_env, 'PT5_RPCS3_ARCHIVE': str(wrong_archive)}).stderr
+assert not install_log.exists()
+# The command-line route takes the disc alone too.
+run('--configure', '--game', disc.parent, extra={**easy_env, **managed_env})
+run('--check', extra=easy_env)
+assert not (easy_home/'tools').exists()
+install_log.unlink(); easy_settings.write_text(kept_settings)
+print('PASS: disc-only setup with a setup-owned pinned RPCS3, reuse, mismatch refusal and removal')
 package.unlink()
 missing_package = prepare(update=None, optional=disc_rpc_exe, success=False, extra=disc_env)
 assert b'INSDIR' in missing_package.stderr and not install_log.exists()

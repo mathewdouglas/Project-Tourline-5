@@ -7,7 +7,10 @@
 #include <shobjidl.h>
 #include <commctrl.h>
 #include <bcrypt.h>
+#include <winhttp.h>
+#include <uiautomation.h>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <vector>
@@ -217,7 +220,9 @@ static std::wstring quote(const fs::path& p) {
 
 #include "storage.h"
 
-static DWORD run(const fs::path& exe, const std::wstring& args, const fs::path& cwd, const wchar_t* tag) {
+// Starts a child in a kill-on-close job with its output in logs/<tag>.*.
+static void start_child(const fs::path& exe, const std::wstring& args, const fs::path& cwd, const wchar_t* tag,
+                        Handle& job_out, Handle& process_out, DWORD* pid = nullptr) {
     fs::create_directories(data / L"logs");
     SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
     Handle out(CreateFileW((data/L"logs"/(std::wstring(tag)+L".out")).c_str(), GENERIC_WRITE,
@@ -244,6 +249,12 @@ static DWORD run(const fs::path& exe, const std::wstring& args, const fs::path& 
         fail(L"Could not attach the launched application to its process group.");
     }
     if (ResumeThread(thread.h) == static_cast<DWORD>(-1)) fail(L"Could not resume the launched application.");
+    if (pid) *pid = pi.dwProcessId;
+    std::swap(job_out.h, job.h); std::swap(process_out.h, process.h);
+}
+static DWORD run(const fs::path& exe, const std::wstring& args, const fs::path& cwd, const wchar_t* tag) {
+    Handle job(INVALID_HANDLE_VALUE), process(INVALID_HANDLE_VALUE);
+    start_child(exe, args, cwd, tag, job, process);
     for (;;) {
         const DWORD waited = MsgWaitForMultipleObjects(1, &process.h, FALSE, INFINITE, QS_ALLINPUT);
         if (waited == WAIT_OBJECT_0) break;
@@ -297,11 +308,230 @@ static bool offer_report(DWORD code) {
         ShellExecuteW(nullptr, L"open", crash_report::widen(r.url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     return true;
 }
-static fs::path decrypt_executable(const fs::path& installed, const fs::path& temporary, const fs::path& rpcs3) {
+// ---- Setup-owned RPCS3 -----------------------------------------------------
+// When the player supplies only the disc, setup downloads one pinned official
+// RPCS3 build into <storage>/tools/rpcs3, uses it to install the disc's bundled
+// package and decrypt its executable, then removes it. RPCS3 holds the keys;
+// none are in this launcher. PT5_RPCS3_DOWNLOAD=0 turns this off,
+// PT5_RPCS3_ARCHIVE=<file> uses a local copy of the pinned archive instead of
+// downloading it, PT5_KEEP_RPCS3=1 keeps the tool after setup.
+static bool managed_rpcs3_enabled() { return env(L"PT5_RPCS3_DOWNLOAD") != L"0"; }
+static fs::path tools_root() { return data / L"tools"; }
+static void remove_tools() {
+    const auto root = tools_root();
+    if (!fs::exists(root)) return;
+    if (GetFileAttributesW(root.c_str()) & FILE_ATTRIBUTE_REPARSE_POINT)
+        fail(L"The setup tools folder is a link; remove it by hand: " + root.wstring());
+    for (const auto& entry : fs::recursive_directory_iterator(root))
+        if (GetFileAttributesW(entry.path().c_str()) & FILE_ATTRIBUTE_REPARSE_POINT)
+            fail(L"The setup tools folder contains a link; remove it by hand: " + root.wstring());
+    fs::remove_all(root);
+}
+struct Internet {
+    HINTERNET h = nullptr;
+    explicit Internet(HINTERNET v) : h(v) {}
+    ~Internet() { if (h) WinHttpCloseHandle(h); }
+    Internet(const Internet&) = delete;
+};
+// HTTPS GET into a file. Follows redirects; progress through state.
+static void http_download(const std::wstring& url, const fs::path& destination, CopyState& state) {
+    URL_COMPONENTS parts{}; parts.dwStructSize = sizeof parts;
+    std::wstring host(256, L'\0'), path(2048, L'\0');
+    parts.lpszHostName = host.data(); parts.dwHostNameLength = static_cast<DWORD>(host.size());
+    parts.lpszUrlPath = path.data(); parts.dwUrlPathLength = static_cast<DWORD>(path.size());
+    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts) || parts.nScheme != INTERNET_SCHEME_HTTPS)
+        fail(L"Invalid download address: " + url);
+    host.resize(parts.dwHostNameLength); path.resize(parts.dwUrlPathLength);
+#ifndef WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY
+#define WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY 4
+#endif
+    Internet session(WinHttpOpen(L"ProjectTourline5-setup", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                 WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+    if (!session.h) session.h = WinHttpOpen(L"ProjectTourline5-setup", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                            WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    Internet connection(session.h ? WinHttpConnect(session.h, host.c_str(), parts.nPort, 0) : nullptr);
+    Internet request(connection.h ? WinHttpOpenRequest(connection.h, L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE) : nullptr);
+    const std::wstring offline = L"Could not download " + url +
+        L"\n\nCheck your internet connection, then run setup again. Windows error ";
+    if (!request.h || !WinHttpSendRequest(request.h, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(request.h, nullptr))
+        fail(offline + std::to_wstring(GetLastError()) + L".");
+    DWORD status = 0, size = sizeof status;
+    WinHttpQueryHeaders(request.h, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
+                        &status, &size, WINHTTP_NO_HEADER_INDEX);
+    if (status != 200) fail(L"Could not download " + url + L" (server answered " + std::to_wstring(status) + L"). Run setup again later.");
+    std::ofstream out(destination, std::ios::binary | std::ios::trunc);
+    if (!out) fail(L"Could not write " + destination.wstring());
+    std::vector<char> buffer(1 << 16);
+    ULONGLONG last = 0;
+    for (;;) {
+        if (state.cancel) throw Cancelled{};
+        DWORD got = 0;
+        if (!WinHttpReadData(request.h, buffer.data(), static_cast<DWORD>(buffer.size()), &got))
+            fail(offline + std::to_wstring(GetLastError()) + L".");
+        if (!got) break;
+        out.write(buffer.data(), got);
+        if (!out) fail(L"Could not write " + destination.wstring() + L". Check free space.");
+        state.copied += got;
+        if (easy_setup && GetTickCount64() - last >= 250) {
+            last = GetTickCount64();
+            setup_progress(0.03 + 0.02 * state.copied / std::max<uint64_t>(state.total, 1), "Downloading RPCS3 (used only to unpack your disc's update)");
+        }
+    }
+}
+// Download (or take PT5_RPCS3_ARCHIVE / an earlier download) and check the pinned identity.
+static fs::path pinned_file(const std::wstring& url, const fs::path& destination, const std::wstring& sha256,
+                            uint64_t bytes, const std::wstring& local_override, const wchar_t* what) {
+    const fs::path local = local_override.empty() ? destination : fs::absolute(local_override);
+    if (!fs::is_regular_file(local) || fs::file_size(local) != bytes || hash(local) != sha256) {
+        if (!local_override.empty())
+            fail(local.wstring() + L" is not the pinned " + what + L" this launcher was built for. Remove the override or supply the matching file.");
+        CopyState state; state.total = bytes;
+        {
+            std::lock_guard<std::mutex> guard(state.mutex);
+            state.current = std::wstring(L"Downloading the official ") + what +
+                L" build that setup uses to unpack the update on your disc. It is removed when setup finishes.";
+        }
+        with_progress(L"Preparing Gran Turismo 5", state.current.c_str(), state, [&] { http_download(url, destination, state); });
+        if (fs::file_size(destination) != bytes || hash(destination) != sha256) {
+            std::error_code ignored; fs::remove(destination, ignored);
+            fail(std::wstring(L"The ") + what + L" download was incomplete or changed. Run setup again.");
+        }
+    }
+    return local;
+}
+static fs::path managed_rpcs3() {
+    const auto dir = tools_root() / L"rpcs3", exe = dir / L"rpcs3.exe", stamp = dir / L"pt5-rpcs3.txt";
+    if (fs::is_regular_file(exe) && fs::is_regular_file(stamp)) {
+        std::wifstream in(stamp); std::wstring pinned; std::getline(in, pinned);
+        if (pinned == PT5_RPCS3_SHA256) return exe;
+    }
+    setup_progress(0.03, "Downloading RPCS3 (used only to unpack your disc's update)");
+    if (fs::exists(dir)) remove_tools();
+    fs::create_directories(dir);
+    const auto archive = pinned_file(PT5_RPCS3_URL, tools_root() / L"rpcs3.7z", PT5_RPCS3_SHA256, PT5_RPCS3_BYTES,
+                                     env(L"PT5_RPCS3_ARCHIVE"), L"RPCS3");
+    setup_progress(0.05, "Unpacking RPCS3");
+    std::array<wchar_t, MAX_PATH> system{};
+    const UINT length = GetSystemDirectoryW(system.data(), static_cast<UINT>(system.size()));
+    const fs::path tar = length ? fs::path(system.data()) / L"tar.exe" : fs::path{};
+    // Windows 11's tar reads 7z; older Windows uses 7-Zip's own pinned extractor.
+    if (!tar.empty() && fs::is_regular_file(tar) && env(L"PT5_RPCS3_NO_TAR") != L"1")
+        run(tar, L"-xf " + quote(archive) + L" -C " + quote(dir), dir, L"unpack-rpcs3");
+    if (!fs::is_regular_file(exe)) {
+        const auto sevenzip = pinned_file(PT5_SEVENZIP_URL, tools_root() / L"7zr.exe", PT5_SEVENZIP_SHA256,
+                                          PT5_SEVENZIP_BYTES, env(L"PT5_SEVENZIP_EXE"), L"7-Zip extractor");
+        run(sevenzip, L"x -y " + quote(L"-o" + dir.wstring()) + L" " + quote(archive), dir, L"unpack-rpcs3");
+    }
+    if (!fs::is_regular_file(exe)) fail(L"RPCS3 could not be unpacked. See logs\\unpack-rpcs3.err, then run setup again.");
+    std::error_code ignored;
+    if (archive == tools_root() / L"rpcs3.7z") fs::remove(archive, ignored);
+    // Nothing but the install dialog setup answers: no welcome or notice boxes.
+    fs::create_directories(dir / L"GuiConfigs");
+    std::ofstream(dir / L"GuiConfigs/CurrentSettings.ini", std::ios::binary)
+        << "[main_window]\r\ninfoBoxEnabledWelcome=false\r\ninfoBoxEnabledInstallPUP=false\r\ninfoBoxEnabledInstallPKG=false\r\n";
+    std::wofstream(stamp) << PT5_RPCS3_SHA256 << L'\n';
+    return exe;
+}
+// ---- Answering RPCS3's package dialog --------------------------------------
+template <class T> struct Com {
+    T* p = nullptr;
+    ~Com() { if (p) p->Release(); }
+    T** put() { if (p) { p->Release(); p = nullptr; } return &p; }
+    T* operator->() const { return p; }
+};
+static Com<IUIAutomationElement> find_named(IUIAutomation* uia, IUIAutomationElement* root, CONTROLTYPEID type, const wchar_t* name) {
+    Com<IUIAutomationElement> found;
+    VARIANT t{}; t.vt = VT_I4; t.lVal = type;
+    VARIANT n{}; n.vt = VT_BSTR; n.bstrVal = SysAllocString(name);
+    Com<IUIAutomationCondition> by_type, by_name, both;
+    if (SUCCEEDED(uia->CreatePropertyCondition(UIA_ControlTypePropertyId, t, by_type.put())) &&
+        SUCCEEDED(uia->CreatePropertyCondition(UIA_NamePropertyId, n, by_name.put())) &&
+        SUCCEEDED(uia->CreateAndCondition(by_type.p, by_name.p, both.put())))
+        root->FindFirst(TreeScope_Descendants, both.p, found.put());
+    VariantClear(&n);
+    return found;
+}
+// RPCS3's "PKG Installation" dialog: untick "Precompile caches" (which would
+// compile the whole game in RPCS3) and press Install. True once pressed.
+static bool press_install(IUIAutomation* uia, DWORD pid) {
+    Com<IUIAutomationElement> root; Com<IUIAutomationCondition> mine; Com<IUIAutomationElementArray> windows;
+    VARIANT v{}; v.vt = VT_I4; v.lVal = static_cast<LONG>(pid);
+    if (FAILED(uia->GetRootElement(root.put())) || FAILED(uia->CreatePropertyCondition(UIA_ProcessIdPropertyId, v, mine.put())) ||
+        FAILED(root->FindAll(TreeScope_Children, mine.p, windows.put())) || !windows.p) return false;
+    int count = 0; windows->get_Length(&count);
+    for (int i = 0; i < count; ++i) {
+        Com<IUIAutomationElement> window;
+        if (FAILED(windows->GetElement(i, window.put()))) continue;
+        auto install_button = find_named(uia, window.p, UIA_ButtonControlTypeId, L"Install");
+        if (!install_button.p) continue;
+        auto precompile = find_named(uia, window.p, UIA_CheckBoxControlTypeId, L"Precompile caches");
+        Com<IUIAutomationTogglePattern> toggle;
+        if (precompile.p && SUCCEEDED(precompile->GetCurrentPatternAs(UIA_TogglePatternId, IID_PPV_ARGS(toggle.put()))) && toggle.p) {
+            ToggleState state = ToggleState_Off;
+            if (SUCCEEDED(toggle->get_CurrentToggleState(&state)) && state == ToggleState_On) toggle->Toggle();
+        }
+        Com<IUIAutomationInvokePattern> invoke;
+        if (SUCCEEDED(install_button->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(invoke.put()))) && invoke.p &&
+            SUCCEEDED(invoke->Invoke())) return true;
+    }
+    return false;
+}
+// The package's files are all present: the pinned count and total size.
+static bool package_installed(const fs::path& game) {
+    if (!fs::is_regular_file(game / L"PARAM.SFO")) return false;
+    uint64_t files = 0, bytes = 0; std::error_code error;
+    for (fs::recursive_directory_iterator it(game, error), end; !error && it != end; it.increment(error))
+        if (it->is_regular_file(error)) { ++files; bytes += it->file_size(error); }
+    return !error && files == PT5_DISC_PKG_INSTALLED_FILES && bytes == PT5_DISC_PKG_INSTALLED_BYTES;
+}
+static BOOL CALLBACK close_window(HWND window, LPARAM pid) {
+    DWORD owner = 0; GetWindowThreadProcessId(window, &owner);
+    if (owner == static_cast<DWORD>(pid) && IsWindowVisible(window) && !GetWindow(window, GW_OWNER))
+        PostMessageW(window, WM_CLOSE, 0, 0);
+    return TRUE;
+}
+// Opens RPCS3's installer, answers it, and closes RPCS3 once every file is in
+// place. A player can also click Install themselves (PT5_RPCS3_AUTOCLICK=0).
+static DWORD install_package(const fs::path& rpcs3, const std::wstring& args, const fs::path& game) {
+    Handle job(INVALID_HANDLE_VALUE), process(INVALID_HANDLE_VALUE); DWORD pid = 0;
+    start_child(rpcs3, args, rpcs3.parent_path(), L"install-package", job, process, &pid);
+    Com<IUIAutomation> uia;
+    if (env(L"PT5_RPCS3_AUTOCLICK") != L"0")
+        CoCreateInstance(__uuidof(CUIAutomation), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(uia.put()));
+    bool pressed = false, complete = false; int stable = 0;
+    const ULONGLONG deadline = GetTickCount64() + 15ull * 60 * 1000;
+    for (;;) {
+        const DWORD waited = MsgWaitForMultipleObjects(1, &process.h, FALSE, 500, QS_ALLINPUT);
+        if (waited == WAIT_OBJECT_0) break;
+        MSG msg;
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+        if (!pressed && uia.p) {
+            pressed = press_install(uia.p, pid);
+            if (pressed) setup_progress(0.07, "RPCS3 is installing the update from your disc");
+        }
+        stable = package_installed(game) ? stable + 1 : 0;
+        if (stable >= 3) { complete = true; break; }
+        if (GetTickCount64() > deadline) break;
+    }
+    if (complete) {
+        EnumWindows(close_window, static_cast<LPARAM>(pid));
+        if (WaitForSingleObject(process.h, 20000) != WAIT_OBJECT_0) TerminateJobObject(job.h, 0); // Only our RPCS3.
+        return 0;
+    }
+    if (WaitForSingleObject(process.h, 0) != WAIT_OBJECT_0) {
+        TerminateJobObject(job.h, 1);
+        fail(L"RPCS3 did not finish installing the package from your disc within 15 minutes. See logs\\install-package.err, then run setup again.");
+    }
+    DWORD code = 1; GetExitCodeProcess(process.h, &code); return code;
+}
+static fs::path decrypt_executable(const fs::path& installed, const fs::path& temporary, const fs::path& rpcs3, bool managed = false) {
     const auto original = installed / L"USRDIR/EBOOT.BIN";
     if (!fs::is_regular_file(original)) fail(L"The installed update is missing USRDIR\\EBOOT.BIN. Select your decrypted update 1.04 ELF instead.");
     fs::copy_file(original, temporary / L"EBOOT.BIN");
-    if (run(rpcs3, L"--decrypt " + quote(temporary / L"EBOOT.BIN"), rpcs3.parent_path(), L"decrypt") != 0)
+    if (run(rpcs3, std::wstring(managed ? L"--allow-any-location " : L"") + L"--decrypt " + quote(temporary / L"EBOOT.BIN"),
+            rpcs3.parent_path(), L"decrypt") != 0)
         fail(L"RPCS3 decryption failed. See logs\\decrypt.err, or use RPCS3's Decrypt PS3 Binaries menu and select the resulting ELF.");
     const auto result = temporary / L"EBOOT.elf";
     if (!fs::is_regular_file(result)) fail(L"RPCS3 did not produce EBOOT.elf. Decrypt update 1.04 in RPCS3 and select the ELF.");
@@ -333,13 +563,14 @@ static fs::path executable_for(const fs::path& installed, const fs::path& tempor
 }
 // Install the package supplied on the supported disc, without booting the game
 // or asking the player to locate an update download. RPCS3 owns PKG decryption.
-static fs::path disc_update(const fs::path& disc, const fs::path& rpcs3) {
+static fs::path disc_update(const fs::path& disc, const fs::path& rpcs3, bool managed = false) {
     if (_wcsicmp(rpcs3.filename().c_str(), L"rpcs3.exe") || !fs::is_regular_file(rpcs3))
         fail(L"Select your installed rpcs3.exe to prepare the game from your disc.");
     const auto root = rpcs3.parent_path();
     // A custom VFS can redirect installation to an unrelated game directory.
     // Leave it to the explicit existing-installation route, rather than guess.
-    if (fs::exists(root/L"config/vfs.yml") || fs::exists(root/L"vfs.yml"))
+    // Setup's own copy writes a default vfs.yml on its first start.
+    if (!managed && (fs::exists(root/L"config/vfs.yml") || fs::exists(root/L"vfs.yml")))
         fail(L"This RPCS3 folder has a custom virtual-filesystem configuration. Import your existing 01.04 game-data folder, or use a separate RPCS3 folder with default paths for disc preparation.");
     const auto game = root/L"dev_hdd0/game/BCUS98114";
     // Never replace another version of the player's RPCS3 game data.
@@ -355,22 +586,22 @@ static fs::path disc_update(const fs::path& disc, const fs::path& rpcs3) {
         fail(L"Your disc dump is missing PS3_GAME\\INSDIR\\DATA000.PKG, which contains the required 01.04 files. Restore the INSDIR folder from your supported BCUS98114 v02.00 disc, or import an existing 01.04 installation. No separate update download is needed for this disc.");
     if (fs::file_size(package) != PT5_DISC_PKG_BYTES || hash(package) != PT5_DISC_PKG_SHA256)
         fail(L"The disc's DATA000.PKG does not match the supported BCUS98114 v02.00 package. Check your dump, or import matching installed 01.04 data. RPCS3 has not been started.");
-    if (!silent_errors) {
+    if (!silent_errors && !managed) {
         TASKDIALOGCONFIG td{}; td.cbSize = sizeof td;
         td.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION;
         td.pszWindowTitle = L"Project Tourline 5 - prepare from disc";
         td.pszMainInstruction = L"Install the files already on your disc";
-        td.pszContent = L"Close any running RPCS3 window first. Setup will open your disc's bundled package in RPCS3. Click Install there, wait for it to finish, then close RPCS3 to continue setup. You do not need to boot GT5 or download an update.\n\nRPCS3 installs the package into its own game-data folder. Setup then imports a verified copy and decrypts a temporary copy of its executable.";
+        td.pszContent = L"Close any running RPCS3 window first. Setup will open your disc's bundled package in your RPCS3, press Install, and close RPCS3 when the files are in place. Leave its window alone until it closes. You do not need to boot GT5 or download an update.\n\nRPCS3 installs the package into its own game-data folder. Setup then imports a verified copy and decrypts a temporary copy of its executable.";
         td.dwCommonButtons = TDCBF_OK_BUTTON | TDCBF_CANCEL_BUTTON; brand(td);
         int choice = IDCANCEL;
         if (FAILED(TaskDialogIndirect(&td, &choice, nullptr, nullptr))) fail(L"Could not open disc preparation instructions.");
         if (choice != IDOK) throw Cancelled{};
     }
-    setup_progress(0.06, "In RPCS3: click Install, wait for completion, then close RPCS3 to continue");
-    if (run(rpcs3, L"--installpkg " + quote(package), root, L"install-package") != 0)
+    setup_progress(0.06, "Installing the update from your disc with RPCS3 (its window opens and closes by itself)");
+    if (install_package(rpcs3, std::wstring(managed ? L"--allow-any-location " : L"") + L"--installpkg " + quote(package), game) != 0)
         fail(L"RPCS3 could not install the package from your disc. See logs\\install-package.err. Close other RPCS3 windows and retry.");
     if (!fs::is_regular_file(game/L"PARAM.SFO"))
-        fail(L"The disc package was not found in RPCS3's standard game-data folder after installation. Close other RPCS3 windows and retry; click Install and close RPCS3 when finished. If you use a custom dev_hdd0 location, select that installed 01.04 folder in the optional Installed data input instead.");
+        fail(L"The disc package was not found in RPCS3's standard game-data folder after installation. Close other RPCS3 windows and retry; if RPCS3 asks, click Install and close RPCS3 when finished. If you use a custom dev_hdd0 location, select that installed 01.04 folder in the optional Installed data input instead.");
     return installed_folder(game);
 }
 static void configure(fs::path disc, fs::path installed, fs::path executable) {
@@ -378,26 +609,36 @@ static void configure(fs::path disc, fs::path installed, fs::path executable) {
     if (disc.empty()) disc = pick(true, L"Select your extracted Gran Turismo 5 disc or PS3_GAME folder");
     if (disc.empty()) throw Cancelled{};
     disc = game_folder(disc);
-    if (installed.empty() && !easy_setup && executable.empty()) {
+    bool managed = false;
+    if (installed.empty() && !easy_setup && executable.empty() && !silent_errors) {
+        const bool automatic = managed_rpcs3_enabled();
         TASKDIALOG_BUTTON buttons[] = {
-            {100, L"Prepare from my disc (recommended)\nSelect rpcs3.exe. The required files are already on your supported disc."},
+            {100, L"Prepare from my disc (recommended)\nNothing else to select. Setup downloads the official RPCS3 build (37 MB) only to unpack the update already on your disc, then removes it."},
+            {102, L"Prepare from my disc with my installed RPCS3\nSelect rpcs3.exe. Setup presses its Install button and closes it for you."},
             {101, L"Import an existing 01.04 installation\nSelect installed GT5 data or an RPCS3 folder."}};
         TASKDIALOGCONFIG td{}; td.cbSize = sizeof td;
         td.dwFlags = static_cast<TASKDIALOG_FLAGS>(TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION);
         td.pszWindowTitle = L"Project Tourline 5 - game setup";
         td.pszMainInstruction = L"Prepare Gran Turismo 5";
-        td.cButtons = 2; td.pButtons = buttons; td.dwCommonButtons = TDCBF_CANCEL_BUTTON; brand(td);
+        td.cButtons = automatic ? 3 : 2; td.pButtons = automatic ? buttons : buttons + 1;
+        td.dwCommonButtons = TDCBF_CANCEL_BUTTON; brand(td);
         int choice = IDCANCEL;
         if (FAILED(TaskDialogIndirect(&td, &choice, nullptr, nullptr))) fail(L"Could not open game setup.");
         if (choice == IDCANCEL) throw Cancelled{};
-        if (choice == 100) executable = pick(false, L"Select your installed RPCS3", L"RPCS3 executable", L"rpcs3.exe");
+        if (choice == 100) managed = true;
+        else if (choice == 102) executable = pick(false, L"Select your installed RPCS3", L"RPCS3 executable", L"rpcs3.exe");
         else installed = pick(true, L"Select your GT5 1.04 installed data or RPCS3 folder");
-        if (installed.empty() && executable.empty()) throw Cancelled{};
+        if (installed.empty() && executable.empty() && !managed) throw Cancelled{};
     }
     if (installed.empty()) {
-        if (executable.empty() || _wcsicmp(executable.filename().c_str(), L"rpcs3.exe"))
-            fail(L"Select rpcs3.exe in the RPCS3 / Executable input to prepare from your disc, or supply an existing 01.04 installation in Installed data. You do not need to find an update download.");
-        installed = disc_update(disc, executable);
+        if (executable.empty()) {
+            if (!managed_rpcs3_enabled())
+                fail(L"Select rpcs3.exe in the RPCS3 / Executable input to prepare from your disc, or supply an existing 01.04 installation in Installed data. You do not need to find an update download.");
+            managed = true;
+            executable = managed_rpcs3();
+        } else if (_wcsicmp(executable.filename().c_str(), L"rpcs3.exe"))
+            fail(L"Select rpcs3.exe in the RPCS3 / Executable input to prepare from your disc, leave it empty to let setup fetch RPCS3, or supply an existing 01.04 installation in Installed data. You do not need to find an update download.");
+        installed = disc_update(disc, executable, managed);
     }
     const auto selected_update = installed;
     installed = installed_folder(installed);
@@ -420,8 +661,8 @@ static void configure(fs::path disc, fs::path installed, fs::path executable) {
         if (_wcsicmp(executable.extension().c_str(), L".exe") == 0) {
             if (_wcsicmp(executable.filename().c_str(), L"rpcs3.exe") != 0 || !fs::is_regular_file(executable))
                 fail(L"Select your installed rpcs3.exe or the decrypted GT5 update 01.04 EBOOT.elf.");
-            setup_progress(0.12, "Decrypting a temporary copy with your RPCS3");
-            executable = decrypt_executable(installed, staging.path, executable);
+            setup_progress(0.12, managed ? "Decrypting a temporary copy with RPCS3" : "Decrypting a temporary copy with your RPCS3");
+            executable = decrypt_executable(installed, staging.path, executable, managed);
         }
     } else if (executable.empty()) executable = executable_for(installed, staging.path);
     if (executable.empty()) throw Cancelled{};
@@ -452,6 +693,11 @@ static void configure(fs::path disc, fs::path installed, fs::path executable) {
         if (new_game) fs::rename(game, staging.path/L"game");
         if (old_game) fs::rename(backup/L"game", game);
         throw;
+    }
+    // Setup's RPCS3 and its install have served their purpose; a failed setup keeps them for the retry.
+    if (managed && env(L"PT5_KEEP_RPCS3") != L"1") {
+        setup_progress(0.97, "Removing setup's temporary RPCS3");
+        try { remove_tools(); } catch (...) {} // Leftovers are harmless and reused next time.
     }
 }
 static fs::path storage_picker() {
@@ -529,15 +775,15 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 else if (arg == L"--game") disc = value;
                 else if (arg == L"--game-data") installed = value;
                 else elf = value;
-            } else fail(L"Supported options: --setup, --check, --open-data, --choose-storage, --set-storage <empty folder>, --configure --game <dump> [--game-data <installation>] --elf <ELF or rpcs3.exe>, --recomplauncher-prepare --game <dump> [--game-data=<installation>] [--executable=<ELF or rpcs3.exe>].");
+            } else fail(L"Supported options: --setup, --check, --open-data, --choose-storage, --set-storage <empty folder>, --configure --game <dump> [--elf <ELF or rpcs3.exe>] [--game-data <installation> --elf <ELF or rpcs3.exe>], --recomplauncher-prepare --game <dump> [--game-data=<installation>] [--executable=<ELF or rpcs3.exe>].");
         }
         if ((quiet && (force || open || change_storage || !storage.empty())) ||
             (open && (force || change_storage || !storage.empty())) ||
             (force && (change_storage || !storage.empty())) ||
             (change_storage && !storage.empty()) ||
-            (configure_only && (disc.empty() || (!easy_setup && elf.empty()))) ||
+            (configure_only && (disc.empty() || (!easy_setup && elf.empty() && !installed.empty()))) ||
             (!configure_only && (!disc.empty() || !installed.empty() || !elf.empty())))
-            fail(L"Use --configure with --game and --elf (plus --game-data when importing existing data), or --setup for the file pickers. --check cannot change setup or storage.");
+            fail(L"Use --configure with --game (setup fetches RPCS3), optionally --elf, and --game-data with --elf when importing existing data, or --setup for the file pickers. --check cannot change setup or storage.");
         if (FAILED(com)) fail(L"Windows COM initialization failed.");
         std::array<wchar_t, 32768> module{};
         const DWORD length = GetModuleFileNameW(nullptr, module.data(), static_cast<DWORD>(module.size()));

@@ -1,12 +1,13 @@
 Project Tourline 5 - setup and play
 
 Using RecompLauncher: open Easy Setup and select your extracted disc folder
-and installed rpcs3.exe. Leave Installed data empty. Close other RPCS3 windows.
-If RPCS3 opens, click Install, wait for completion, then close RPCS3. Setup
-automatically finds, decrypts, imports and verifies the required files.
-The supported disc already contains the required 01.04 package: no separate
-update download and no game boot in RPCS3 are needed. Extract ISO files first,
-including PS3_GAME\INSDIR (not just USRDIR).
+(the one containing PS3_GAME). Leave the other inputs empty. Setup downloads
+the official RPCS3 build (37 MB), uses it only to unpack the 01.04 update
+already on your disc and decrypt its executable, then removes it. An RPCS3
+window opens and closes by itself; leave it alone. Setup then imports and
+verifies the required files. No separate update download, firmware or game
+boot in RPCS3 is needed. Extract ISO files first, including PS3_GAME\INSDIR
+(not just USRDIR).
 
 Without RecompLauncher, use the built-in setup:
 
@@ -14,11 +15,12 @@ Without RecompLauncher, use the built-in setup:
    folder on another drive (including an external SSD).
 2. Select your extracted Gran Turismo 5 US disc dump (BCUS98114, version 02.00),
    or its PS3_GAME folder. ISO files must be extracted first.
-3. Choose Prepare from my disc, then select your installed rpcs3.exe.
-   Close other RPCS3 windows first. Click Install in RPCS3, wait for it to
-   finish, then close RPCS3 to continue setup. No GT5 boot is required there.
-4. Setup finds the files and decrypts a temporary copy automatically. You can
-   alternatively import an existing 01.04 installation and decrypted ELF.
+3. Choose Prepare from my disc. Setup downloads RPCS3 as described above,
+   installs the update from your disc, decrypts a temporary copy of its
+   executable and removes RPCS3 again. Nothing else to select or click.
+4. Alternatively prepare with your own installed rpcs3.exe (setup presses
+   its Install button and closes it), or import an existing 01.04
+   installation and decrypted ELF.
 5. Setup is remembered. Use tourline5.exe for every launch. F1 opens settings.
 
 Your original disc dump stays where it is. Disc preparation installs the
@@ -26,7 +28,9 @@ bundled package into RPCS3, then imports a verified copy into your storage.
 An existing newer GT5 installation is not replaced: use a separate RPCS3
 folder or import matching 01.04 data. For custom RPCS3 game-data locations,
 use the existing-installation route. Keep the disc folder available to play.
-No game data, decryption keys, firmware or RPCS3 are included.
+No game data, decryption keys, firmware or RPCS3 are included; setup's
+temporary RPCS3 is the unmodified official build, checked against a pinned
+SHA-256, and is deleted after a successful setup.
 
 Saves, settings, shaders, installed data and logs use the selected storage.
 Default: %LOCALAPPDATA%\ProjectTourline5

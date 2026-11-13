@@ -4,6 +4,46 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Launcher: setup from the disc folder alone (2026-11-14)
+
+The player now supplies only the extracted disc folder; RPCS3 is no longer a
+player input. Measured first:
+
+- RPCS3 refuses `--installpkg` without its GUI ("Cannot perform installation
+  in no-gui mode"), and refuses to run from a Temp folder unless given
+  `--allow-any-location`. Its GUI install dialog ("PKG Installation", with a
+  "Precompile caches" box ticked by default) is answerable through Windows UI
+  Automation, as MormonFTP-hub/gt5-recomp does for firmware.
+- A fresh, firmware-less official build (0.0.43-20583-9b8974d3) installs
+  this disc's `DATA000.PKG` in about 2 s: 1,335 files, 201,114,668 bytes in
+  `dev_hdd0/game/BCUS98114`, with no welcome or success box once
+  `GuiConfigs/CurrentSettings.ini` disables the info boxes. `--decrypt` of
+  its `EBOOT.BIN` gives the pinned 01.04 ELF (`1b0ebcd6...`).
+- Windows 11's `tar` extracts the RPCS3 7z; 7-Zip's `7zr.exe` 26.06 is the
+  pinned fallback for older Windows.
+
+Implementation (`launcher/launcher.cpp`): with no RPCS3/ELF/installed-data
+input, setup downloads the pinned archive over WinHTTP (URL, SHA-256, size
+in `config/pt5-player.json`), unpacks it to `<storage>/tools/rpcs3`, starts
+`--allow-any-location --installpkg`, unticks Precompile caches and invokes
+Install via UI Automation, waits until the pinned file count and size are
+present and stable, closes RPCS3, decrypts, imports and verifies as before,
+then deletes `tools/`. A failed setup keeps the tool for the retry. A
+player-supplied `rpcs3.exe` gets the same automatic Install/close (no
+`--allow-any-location`, since older builds lack it). Switches:
+`PT5_RPCS3_DOWNLOAD=0`, `PT5_RPCS3_ARCHIVE`, `PT5_KEEP_RPCS3=1`,
+`PT5_RPCS3_AUTOCLICK=0`, `PT5_RPCS3_NO_TAR=1`. No keys are in the launcher.
+
+Validation: real disc, isolated profile, `--recomplauncher-prepare --game
+<disc>` only: exit 0 in 24 s with no clicks, imported ELF hash correct,
+1,335 files imported, `--check` passes, no RPCS3 process or tools folder
+left. `player_setup.py` (new disc-only block with a pinned fixture archive:
+reuse, mismatch refusal, removal, `--configure --game` alone),
+`recomplauncher_manifest.py` and `player_package.py` pass. Not yet done:
+the built-in GUI route clicked through by hand, and Windows 10's 7zr path
+on a real Windows 10 machine (exercised here only as a direct extraction).
+ISO files still need extracting first.
+
 ## Menu and race sound restored: SPU arithmetic in the audio DSP (2026-11-14)
 
 Users reported no sound; the user confirmed movie audio but silent menus and

@@ -6,5 +6,13 @@
   "elf_sha256": "1b0ebcd676bf4bb782fa598e97fa594c0e772249d4cb0a570ee984b5af1264d1",
   "elf_bytes": 26705632,
   "disc_pkg_sha256": "cba10faf7283361ec067fb4559869c41967884a4a9cd8f915578fb21ee9952bf",
-  "disc_pkg_bytes": 201251408
+  "disc_pkg_bytes": 201251408,
+  "disc_pkg_installed_files": 1335,
+  "disc_pkg_installed_bytes": 201114668,
+  "rpcs3_url": "https://github.com/RPCS3/rpcs3-binaries-win/releases/download/build-9b8974d32e73c897a5fcd6bdf69413ca7e436b01/rpcs3-v0.0.43-20583-9b8974d3_win64_msvc.7z",
+  "rpcs3_sha256": "67c7df344e82bcd4c77ac0d92a7a5f0b6036aa788e470bf81c1204f8e7e4e454",
+  "rpcs3_bytes": 37216199,
+  "sevenzip_url": "https://github.com/ip7z/7zip/releases/download/26.06/7zr.exe",
+  "sevenzip_sha256": "e80db2dad715a6c5adabe292d31ed54e11f4e9b99ca349827b50573b175891bc",
+  "sevenzip_bytes": 600064
 }

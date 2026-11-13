@@ -553,7 +553,7 @@
   "inputs": [
     {
       "id": "disc",
-      "label": "GT5 US disc BCUS98114 v02.00 (extracted folder or PS3_GAME)",
+      "label": "GT5 US disc BCUS98114 v02.00: the extracted game folder (the one containing PS3_GAME)",
       "role": "disc",
       "formats": [
         {
@@ -563,7 +563,7 @@
     },
     {
       "id": "update",
-      "label": "Installed data (optional): existing GT5 01.04 / RPCS3 folder",
+      "label": "Installed data (optional, advanced): existing GT5 01.04 / RPCS3 folder",
       "optional": true,
       "role": "update",
       "formats": [
@@ -574,7 +574,7 @@
     },
     {
       "id": "executable",
-      "label": "RPCS3 / Executable: rpcs3.exe (recommended), or existing 01.04 EBOOT.elf",
+      "label": "RPCS3 / Executable (optional): leave empty and setup fetches RPCS3 itself; or your rpcs3.exe / a decrypted 01.04 EBOOT.elf",
       "optional": true,
       "formats": [
         {
@@ -598,7 +598,7 @@
       "--game-data={input:update}",
       "--executable={input:executable}"
     ],
-    "label": "Preparing GT5 (if RPCS3 opens: click Install, then close it when finished)",
+    "label": "Preparing GT5 (an RPCS3 window opens and closes by itself)",
     "timeout": 7200
   }
 }

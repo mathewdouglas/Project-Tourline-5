@@ -388,6 +388,14 @@ if(WIN32)
         string(JSON PT5_ELF_BYTES GET "${PT5_PLAYER}" elf_bytes)
         string(JSON PT5_DISC_PKG_SHA256 GET "${PT5_PLAYER}" disc_pkg_sha256)
         string(JSON PT5_DISC_PKG_BYTES GET "${PT5_PLAYER}" disc_pkg_bytes)
+        string(JSON PT5_DISC_PKG_INSTALLED_FILES GET "${PT5_PLAYER}" disc_pkg_installed_files)
+        string(JSON PT5_DISC_PKG_INSTALLED_BYTES GET "${PT5_PLAYER}" disc_pkg_installed_bytes)
+        string(JSON PT5_RPCS3_URL GET "${PT5_PLAYER}" rpcs3_url)
+        string(JSON PT5_RPCS3_SHA256 GET "${PT5_PLAYER}" rpcs3_sha256)
+        string(JSON PT5_RPCS3_BYTES GET "${PT5_PLAYER}" rpcs3_bytes)
+        string(JSON PT5_SEVENZIP_URL GET "${PT5_PLAYER}" sevenzip_url)
+        string(JSON PT5_SEVENZIP_SHA256 GET "${PT5_PLAYER}" sevenzip_sha256)
+        string(JSON PT5_SEVENZIP_BYTES GET "${PT5_PLAYER}" sevenzip_bytes)
         # Where the launcher's crash report opens a new issue (launcher/crash_report.h).
         set(PT5_ISSUES_URL "https://github.com/mathewdouglas/Project-Tourline-5/issues/new"
             CACHE STRING "New-issue page the crash report opens")
@@ -401,7 +409,7 @@ if(WIN32)
         target_compile_definitions(pt5_launcher PRIVATE UNICODE _UNICODE _WIN32_WINNT=0x0601 _CRT_SECURE_NO_WARNINGS)
         target_compile_options(pt5_launcher PRIVATE /EHsc /utf-8)
         target_link_options(pt5_launcher PRIVATE /MANIFEST:NO)
-        target_link_libraries(pt5_launcher PRIVATE shell32 ole32 comctl32 bcrypt uuid user32)
+        target_link_libraries(pt5_launcher PRIVATE shell32 ole32 oleaut32 comctl32 bcrypt uuid user32 winhttp)
         add_custom_target(pt5_player_files ALL
             COMMAND ${CMAKE_COMMAND} "-DPT5_ENGINE=$<TARGET_FILE:gt5p>" "-DPT5_DEST=$<TARGET_FILE_DIR:gt5p>"
                 "-DPT5_SOURCE=${CMAKE_SOURCE_DIR}" -P "${CMAKE_SOURCE_DIR}/scripts/stage_player.cmake"

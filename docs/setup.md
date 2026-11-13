@@ -8,24 +8,32 @@ folder. Setup follows Tourline Prologue's storage and file-selection flow:
    including an external SSD. Default: `%LOCALAPPDATA%\ProjectTourline5`.
 2. Select the extracted **GT5 US disc, BCUS98114, disc version 02.00**, or its
    `PS3_GAME` folder. The disc stays in place; `GT.VOL` is not copied.
-3. Choose **Prepare from my disc**, then select your installed **rpcs3.exe**.
-   Close any running RPCS3 window first. Setup opens the disc's bundled
-   `INSDIR\DATA000.PKG` in RPCS3. Click **Install**, wait for completion,
-   then **close RPCS3** to let setup continue. No update download or GT5 boot
-   in RPCS3 is required. An existing standard-layout 01.04 install is reused.
-4. Setup finds the installed files, decrypts a temporary copy of `EBOOT.BIN`
-   using RPCS3, and copies/verifies the required data into your chosen storage.
+3. Choose **Prepare from my disc**. Nothing else is selected or clicked:
+   setup downloads one pinned official RPCS3 build (37 MB, SHA-256 checked)
+   into `<storage>\tools\rpcs3`, opens the disc's bundled
+   `INSDIR\DATA000.PKG` in it, presses **Install** with "Precompile caches"
+   unticked (Windows UI Automation), and closes RPCS3 once the package's
+   1,335 files are all present. No update download, firmware or GT5 boot in
+   RPCS3 is required.
+4. Setup decrypts a temporary copy of `EBOOT.BIN` with that RPCS3, copies and
+   verifies the required data into your chosen storage, and deletes the
+   tools folder. A failed setup keeps it, so a retry does not download again.
+
+**Prepare from my disc with my installed RPCS3** does the same with your own
+`rpcs3.exe` (no download). Close other RPCS3 windows first; setup presses
+Install and closes it for you. An existing standard-layout 01.04 install in
+that RPCS3 is reused, and a different GT5 version or custom VFS there is left
+unchanged.
 
 Alternatively choose **Import an existing 01.04 installation** and select
 your RPCS3 folder or `dev_hdd0\game\BCUS98114`, then the decrypted update's
 `EBOOT.elf` or your installed RPCS3. This also supports completed game installs
 and custom RPCS3 game-data locations. Existing source files are retained.
 
-In **RecompLauncher**, drop the extracted disc folder and **rpcs3.exe** into
-Easy Setup. Leave **Installed data** empty for disc preparation. If RPCS3
-opens, click **Install**, wait, then close it; preparation continues with
-decryption and verified import. The progress text reminds you of this step.
-You can instead supply an existing 01.04 installation and optional `EBOOT.elf`.
+In **RecompLauncher**, drop only the extracted disc folder into Easy Setup
+and leave the other inputs empty: preparation runs the route above unattended.
+You can instead supply your own `rpcs3.exe`, or an existing 01.04 installation
+and optional `EBOOT.elf`.
 Play uses the same native launcher. Direct launches keep the built-in prompts.
 See [RecompLauncher integration](recomplauncher.md).
 
@@ -33,7 +41,10 @@ The supported disc already contains the required 01.04 package. Its INSDIR
 folder must be present; a dump containing only USRDIR is incomplete for this
 setup route. The disc executable and newer updates are different builds. Setup checks
 title/version metadata when available and the executable's exact SHA-256.
-No game files, keys, firmware or RPCS3 are downloaded or included. An incomplete
+No game files, keys or firmware are downloaded or included. RPCS3 is not
+included either: the only download is the pinned official build above
+(`rpcs3_url`/`rpcs3_sha256` in `config/pt5-player.json`), and on Windows
+without a 7z-capable `tar` also 7-Zip's pinned `7zr.exe`. An incomplete
 GT5 install finishes in the game on first boot; a completed install can also
 be imported.
 
@@ -87,8 +98,17 @@ the corresponding storage locations before playing. Keep the source backup.
 setup, with no game launch:
 
 ```powershell
+build\tourline5.exe --configure --game "D:\GT5"
 build\tourline5.exe --configure --game "D:\GT5\PS3_GAME" --game-data "D:\RPCS3" --elf "D:\GT5-update\EBOOT.elf"
 ```
+
+The first form uses setup's own RPCS3. Switches for it:
+`PT5_RPCS3_DOWNLOAD=0` (no download: an rpcs3.exe or existing installation
+is required, as before), `PT5_RPCS3_ARCHIVE=<file>` (a local copy of the
+pinned archive, for offline setup; still hash-checked), `PT5_KEEP_RPCS3=1`
+(keep `<storage>\tools` after setup), `PT5_RPCS3_AUTOCLICK=0` (the player
+clicks Install), `PT5_RPCS3_NO_TAR=1` (always use `7zr.exe`). To move to a
+newer RPCS3, update the pinned URL, SHA-256 and size and rebuild.
 
 `PT5_LAUNCHER_HOME` overrides the locator home. `PT5_USER_DIR` selects a profile
 without changing the locator; remembered storage changes are then refused.

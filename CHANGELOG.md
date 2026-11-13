@@ -6,6 +6,11 @@ versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- Setup needs only the extracted GT5 disc folder. The launcher fetches the
+  official RPCS3 build itself (pinned, 37 MB), uses it to install the 01.04
+  update already on the disc and decrypt its executable, with no clicks, then
+  deletes it. RecompLauncher's Easy Setup takes just the disc folder. Your
+  own RPCS3 or an existing 01.04 installation can still be supplied.
 - The Arcade car list draws about 10% more frames (GT5 Phase 46): outside
   races the render lanes of workload 4, which the car list waits on, are
   pinned to their own cores; in races the pinning is unchanged.

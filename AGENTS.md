@@ -222,6 +222,12 @@ live: see Phase 36. `PAD_FILE_LOG=2` logs every file stat/open, for finding a
 screen's marker file. A private test build can be linked from another
 checkout's objects without rebuilding the lifted code: Phase 36 notes.
 
+**Disc-only setup (2026-11-14).** With only the disc folder, the launcher
+downloads the pinned official RPCS3 (`rpcs3_*` in `config/pt5-player.json`)
+to `<storage>/tools`, installs `INSDIR/DATA000.PKG` by pressing Install through
+UI Automation, decrypts, imports, then deletes the tool (`PT5_RPCS3_DOWNLOAD=0`
+old behaviour). Never put PS3 keys in the launcher. See progress-gt5.md.
+
 **Player setup (GT5 Phase 37).** `build/tourline5.exe` selects storage, a GT5
 disc dump and the 01.04 installed data/executable. RPCS3 can decrypt a temporary
 copy. The disc stays in place; installed data is copied/verified into storage.
