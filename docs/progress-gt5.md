@@ -4,6 +4,30 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Branch release/v0.1.4: every open branch merged (2026-11-14)
+
+`release/v0.1.4` starts from `feat/shader-interp` and merges
+`feat/pgo-build` (profile-guided builds, SPU DMA fast paths, corrupt
+audio containment), `feat/crash-report`, `feat/io-unmapped-log`,
+`fix/spu-registration-metadata` and `perf/carlist-render-region`. `main`
+and the other branches were already contained.
+
+- **Runtime patch.** Four branches changed
+  `patches/ps3recomp-5244db9-local.patch`. A file section only one side
+  changed was taken verbatim. The two sections both sides changed were
+  merged at the source level: `rsx_d3d12_backend.c` (shader interpreter,
+  the unmapped-IO log, car-list lane scope) went through `git merge-file`,
+  with no conflicts, and its section was regenerated from the merged
+  runtime. The patch applies to clean 5244db9 and reverses cleanly from
+  the merged runtime.
+- **Smoke test, default settings, warm cache.** High Speed Ring
+  FrameTest: 55.5 FPS, p99 27.7 ms, 16.7% late. The race renders
+  correctly.
+- **Still open (from `feat/pgo-build`).** Game audio from the menu and
+  races still arrives as invalid samples. The containment keeps movie
+  sound clean, but menu and race sound stay silent until the producer is
+  found; see `docs/audio.md`.
+
 ## Interpreter GPU cost: 22.6 -> 43 FPS with every draw interpreted; per-draw GPU timing (2026-11-13)
 
 Same test as the next section (forced interpreter, both stages,
