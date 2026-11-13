@@ -4,6 +4,130 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Cold stutter: textures, interpreter pairing, and what is left (2026-11-14)
+
+**F1 setting.** SHADERS > Draw while compiling (`video.shader_interp`, default
+on) sets `RSX_SHADER_INTERP` and `_VP`; the launcher manifest
+(`launcher/recomplauncher.json`, `shader_interp`) has the same choice. Off
+boots with no interpreter, on boots in mode 1; `settings_test.ps1` and
+`recomplauncher_manifest.py` cover it.
+
+**Method.** Cold High Speed Ring route (empty `RSX_SHADER_CACHE` per run,
+`gt5boot.ps1 -Route race -Settle 40`), hitch CSV split per milestone phase
+(`scratch/phase.py`, `cls.py`: intervals >= 50 ms; "render" when the
+renderer's own batch is at least half the interval, "other" when it waited).
+Run-to-run spread on the same build is large: 6.2-9.6 s of >= 50 ms
+intervals for identical cold runs, 3.5-4.4 s warm. The menu background's
+scene is chosen by the game; one variant (about 1,550 draws) is far heavier.
+
+**Fixed (renderer side), each with a switch:**
+
+| Change | Measured |
+| --- | --- |
+| The button-prompt replacer's content hash (byte-wise FNV over every texture up to 1024x1024) runs only for sizes the port lists (`rsx_tex_set_replace_sizes`; `RSX_TEX_REPL_SIZES=0` old) | Race grid's first frame: hashing 42-44 -> 0 ms |
+| Large texture decodes split in row bands over 3 helpers (`RSX_TEX_DECODE_THREADS`, `0` old; `RSX_TEX_DECODE_PAR_KB`) | Grid frame decode 21-23 -> 10.8 ms; texture work 77 -> 21 ms with the hash change. Byte-identical: `scripts/test/tex_decode_bands.py` |
+| Every fragment-interpreted draw pairs with the vertex interpreter (`RSX_SHADER_INTERP_PAIR_ANY`, `0` old), so its pipeline depends on state only | Interpreter pipelines 315-432 -> 87-105, draws left out 1,558-4,229 -> 591-741, offscreen waits 0.18-0.22 -> 0.03-0.08 s (3 runs each) |
+
+**What is left is mostly not the renderer.** After those, cold runs keep
+about 0.8-1.2 s of renderer-bound long frames (warm: 0.7-1.4 s, the game's
+own loading transitions) and 5-7 s of "other" (warm: 2.9-3.7 s). In the
+"other" frames the renderer batch is 13-35 ms, the GPU 15-25 ms, and the
+walker waits for neither replay nor GPU; they coincide with shader compiles.
+
+- Synthetic CPU load (six below-normal spinners) and synthetic file creation
+  (50 files/s, as a cold cache writes about 40/s) on a warm run: no change.
+  NVIDIA's own threads used under 0.5 s CPU in a whole cold run.
+- The cold menu's worst case (frames of 0.7-1.1 s at about 198 s, in every
+  cold menu run) was traced with `PS3_TIMELINE`: GT5's render thread used
+  8 ms of CPU in 714 ms of wall time, blocked in no syscall, after calls to
+  `sys_ppu_thread_set_priority`. Guest threads are confined to 4 logical CPUs
+  (`PS3_PPU_CORES=topo-ht`) and guest priorities 800+ run below normal,
+  lowest or idle; six below-normal compile workers on the same CPUs starve
+  them.
+- Keeping the builder threads off those CPUs (`RSX_SHADER_WORKER_AFFINITY=1`)
+  ends the menu case (max frame 1,080 -> 309 ms, frames over 200 ms 10-13 ->
+  5) but cold races get worse (8.1-12.3 s against 6.6 s): the workers then
+  share physical cores with the pinned SPU lanes, and races are SPU-bound.
+  Idle-priority workers (`RSX_SHADER_WORKER_PRIO=idle`): menu max 429 ms,
+  races 9.0-9.3 s. Fewer workers (`RSX_SHADER_WORKERS=2/3`): no gain. All
+  three stay opt-in; defaults unchanged.
+
+**Warm acceptance completed.** The two pending default runs (`scratch/v2.log`,
+`v2-warm-ft-a` / `-b`, 60 s HSR FrameTest, existing learned cache) finished:
+56.1 / 56.0 FPS, p99 27.5 / 27.6 ms, late (>20 ms) 15.1% / 14.6%,
+walk 8.04 / 8.08 ms per frame. These establish the current warm result;
+there is no same-session old-build pair to isolate a regression.
+
+**Continuation: worker cooldown, exploratory only.** `RSX_SHADER_WORKER_DUTY`
+(default 100, unchanged; experiment 50) gives each async guest-shader worker
+an idle gap after publishing its result. The gap uses that thread's kernel
+plus user CPU time, rather than time spent descheduled, and is capped at
+250 ms. Invalid settings use 100. It does not delay interpreter variants,
+synchronous/offline compilation, or publication of a completed shader.
+
+Four fresh-cache HSR routes, order 50 / 100 / 100 / 50, same executable
+SHA256 `f1325ceddb9ad63de6f7a2d2745bde7e1053b05a02f8829da61f35bcac515816`:
+
+| Worker duty | Sum of present intervals >=50 ms | Count | Worst interval |
+| --- | ---: | ---: | ---: |
+| 50, A | 7,307 ms | 76 | 315 ms |
+| 100, A | 8,351 ms | 88 | 381 ms |
+| 100, B | 11,444 ms | 112 | 941 ms |
+| 50, B | 6,086 ms | 62 | 242 ms |
+
+These are whole long intervals, not time exceeding a frame budget. The
+cooldown looks promising for menus, but the menu workload varied: the
+100-B run interpreted 66,268 draws, versus 16,886 in 100-A. In the first
+50 run, intervals after RaceStart totalled 1,747 ms, versus 851 / 1,147 ms
+in the two 100 runs. **Do not enable it by default from this sample.**
+Evidence, runner, hashes and flags: `scratch/duty-gpu-20261114/` and
+`scratch/duty-gpu-runs.ps1`. The earlier `duty-*` and `duty-render-*` trials
+are excluded: this program tests whether `PS3_HEADLESS` exists, so both
+`=1` and `=0` skip the backend; render measurements require it to be absent.
+The scratch phase reader now uses the next *available* milestone: a missing
+RaceGrid previously made RaceAssets include RaceStart again. Whole-run
+totals and the renderer/other classification were unaffected.
+
+**Descriptor recording.** With the interpreter's CPU descriptor mirror
+present, `srv_write_pair` now creates each changed view once in the CPU heap
+and copies it into the shader-visible heap. Previously it created the same
+view twice. The same view description, slot cache and resource references
+are retained; the no-mirror path still creates one view. This also covers
+rendered cube views. `RSX_SRV_MIRROR_COPY=0` restores the two-create path.
+On the local hardware device, an isolated benchmark of 16,384 descriptor
+pairs (18 measured repetitions after two warmups) takes a median 3.764 ms
+for two creates and 1.952 ms for create plus copy. This is an API-cost
+measurement, not a game FPS claim. Source/build/output are under
+`scratch/srv-bench*`.
+
+Live rollback/on checks (`scratch/srv-copy-runs.ps1`, 15 s after RaceStart,
+two separate copies of the same learned cache) both reached HSR. The copy
+path's race screenshot shows the track, cars, bridge, stands and shadows;
+neither log reports device loss/removal. Both runs recorded 4,920 batches.
+Cumulative SRV-prepass time was 8.10 / 7.41 s, but draw-recording time was
+3.89 / 4.27 s: different work and scheduling remain, so this pair does not
+establish a game-level speedup. Executable SHA256:
+`3625b5ee59135c4957c6cca0e4dfee3a20816dca2c9bba3f68b9fb0088a57f9e`.
+The API benchmark supports the narrower reduction in descriptor creation
+cost. Broader visual coverage (including cockpit mirrors and Eiger) remains
+open; the existing no-mirror path is structurally unchanged.
+
+The previously measured affinity experiment is now also included in the
+saved runtime patch. Only the backend and interpreter integration sections
+were refreshed, preserving all other patch bytes. The complete patch passes
+clean application on a fresh pinned 5244db9 checkout; `setup_runtime.py
+--check` passes against `../ps3recomp-shaderstamp`. Texture decoder parity
+still passes 300 cases with zero mismatches. The launcher manifest check
+passes for all 17 settings. Separate launcher/setup changes are outside
+these shader measurements.
+
+Next: the trade-off between guest PPU time and SPU lane time during a
+compile burst is the remaining cold cost. Candidates: a compile budget that
+backs off while the guest's frame is late (the interpreter covers the
+draws), or workers that leave the PPU CPUs only while guest threads wait
+there. The warm grid frame still spends 47 ms in first-time shader lookups
+and 38 ms recording (`pso_ms`, `record_ms`).
+
 ## C: the interpreter stands in for pending draws by default; cold cache, 90% fewer draws left out (2026-11-14)
 
 The aim is for mode 1 (`RSX_SHADER_INTERP=1 RSX_SHADER_INTERP_VP=1`: interpret
