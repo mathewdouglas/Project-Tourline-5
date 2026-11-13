@@ -17,7 +17,9 @@ ROOT = Path(__file__).resolve().parents[2]
 WORK = Path(tempfile.mkdtemp(prefix='player-setup-', dir=ROOT / 'scratch'))
 ELF = b'\x7fELF synthetic executable for setup tests only\n'
 SHA = hashlib.sha256(ELF).hexdigest()
-(WORK / 'pt5_launcher_config.h').write_text(f'#define PT5_ELF_SHA256 L"{SHA}"\n#define PT5_ELF_BYTES {len(ELF)}ull\n')
+PKG = b'synthetic package'
+(WORK / 'pt5_launcher_config.h').write_text(f'#define PT5_ELF_SHA256 L"{SHA}"\n#define PT5_ELF_BYTES {len(ELF)}ull\n'
+    f'#define PT5_DISC_PKG_SHA256 L"{hashlib.sha256(PKG).hexdigest()}"\n#define PT5_DISC_PKG_BYTES {len(PKG)}ull\n')
 # Compile the fixture's resources here too; never use or rebuild shared build/ outputs.
 resource = (ROOT/'launcher/launcher.rc.in').read_text().replace('@CMAKE_SOURCE_DIR@', ROOT.as_posix())
 for key, value in {'PROJECT_VERSION': '0.1.0', 'PROJECT_VERSION_MAJOR': '0',
@@ -32,6 +34,16 @@ for key, value in {'PROJECT_VERSION': '0.1.0', 'PROJECT_VERSION_MAJOR': '0',
 #include <fstream>
 #include "pt5_restart.h"
 int main(int argc, char** argv) {
+    if (argc == 3 && !strcmp(argv[1], "--installpkg")) {
+        if (const char* log=getenv("PT5_TEST_INSTALL_LOG")) std::ofstream(log)<<argv[2];
+        if (getenv("PT5_TEST_INSTALL_FAIL")) return 8;
+        if (!getenv("PT5_TEST_INSTALL_CANCEL")) {
+            auto target=std::filesystem::current_path()/"dev_hdd0/game/BCUS98114";
+            std::filesystem::create_directories(target.parent_path());
+            std::filesystem::copy(getenv("PT5_TEST_INSTALL_SOURCE"),target,std::filesystem::copy_options::recursive);
+        }
+        return 0;
+    }
     if (argc == 3 && !strcmp(argv[1], "--decrypt")) {
         if (getenv("PT5_TEST_DECRYPT_FAIL")) return 7;
         if (!getenv("PT5_TEST_DECRYPT_NO_OUTPUT")) {
@@ -166,7 +178,9 @@ easy_env = {'PT5_LAUNCHER_HOME': str(easy_home), 'PT5_SETUP_UI': '1'}
 
 
 def prepare(update=installed.parents[2], optional=None, success=True, extra=None, source=disc.parent):
-    selected = {'disc': str(source), 'update': str(update)}
+    selected = {'disc': str(source)}
+    if update is not None:
+        selected['update'] = str(update)
     if optional is not None:
         selected['executable'] = str(optional)
     args = []
@@ -208,6 +222,51 @@ prepare(optional=fake_rpcs3, success=False,
         extra={'PT5_TEST_DECRYPT_SOURCE': str(executable), 'PT5_TEST_DECRYPT_NO_OUTPUT': '1'})
 wrong_easy = WORK/'wrong easy executable.elf'; wrong_easy.write_bytes(b'wrong build')
 prepare(optional=wrong_easy, success=False)
+
+# Disc + RPCS3: no installed-data picker, update download or game boot.
+disc_rpc = WORK/'fresh RPCS3 & spaces'; disc_rpc.mkdir()
+disc_rpc_exe = disc_rpc/'rpcs3.exe'; shutil.copyfile(WORK/'gt5.exe', disc_rpc_exe)
+package = disc/'INSDIR/DATA000.PKG'; package.parent.mkdir(); package.write_bytes(PKG)
+install_log = WORK/'package-argument.txt'
+disc_env = {'PT5_TEST_INSTALL_SOURCE':str(installed), 'PT5_TEST_DECRYPT_SOURCE':str(executable),
+            'PT5_TEST_INSTALL_LOG':str(install_log)}
+prepare(update=None, optional=disc_rpc_exe, success=False, extra={**disc_env, 'PT5_TEST_INSTALL_FAIL':'1'})
+prepare(update=None, optional=disc_rpc_exe, success=False, extra={**disc_env, 'PT5_TEST_INSTALL_CANCEL':'1'})
+assert (easy_home/'setup.ini').read_bytes() == before_setup
+prepare(update=None, optional=disc_rpc_exe, extra=disc_env)
+assert os.path.samefile(install_log.read_text(), package)
+assert (easy_home/'input/EMAIN.ELF').read_bytes() == ELF
+install_log.unlink()
+prepare(update=None, optional=disc_rpc_exe, extra=disc_env)  # reuse 01.04; do not reinstall
+assert not install_log.exists()
+disc_rpc_game = disc_rpc/'dev_hdd0/game/BCUS98114'
+sfo(disc_rpc_game/'PARAM.SFO', TITLE_ID='BCUS98114', APP_VER='02.00')
+newer_before = snapshot(disc_rpc_game)
+prepare(update=None, optional=disc_rpc_exe, success=False, extra=disc_env)
+assert snapshot(disc_rpc_game) == newer_before and not install_log.exists()
+shutil.rmtree(disc_rpc_game)
+package.write_bytes(b'corrupt package!!')
+prepare(update=None, optional=disc_rpc_exe, success=False, extra=disc_env)
+assert not install_log.exists()
+package.write_bytes(PKG)
+(disc_rpc/'config').mkdir()
+(disc_rpc/'config/vfs.yml').write_text('/dev_hdd0/: another folder\n')
+prepare(update=None, optional=disc_rpc_exe, success=False, extra=disc_env)
+assert not install_log.exists()
+(disc_rpc/'config/vfs.yml').unlink()
+# The built-in launcher's command-line route accepts the same two inputs.
+run('--configure', '--game', disc.parent, '--elf', disc_rpc_exe,
+    extra={**easy_env, **disc_env})
+run('--check', extra=easy_env)
+assert install_log.exists()
+install_log.unlink()
+shutil.rmtree(disc_rpc_game)
+package.unlink()
+missing_package = prepare(update=None, optional=disc_rpc_exe, success=False, extra=disc_env)
+assert b'INSDIR' in missing_package.stderr and not install_log.exists()
+prepare(update=None, success=False)
+prepare(update=None, optional=executable, success=False)
+print('PASS: disc package handoff, automatic decrypt/import, reuse, cancel/failure, missing package and newer-version protection')
 assert b'does not match GT5' in prepare(optional=fake_rpcs3, success=False,
         extra={'PT5_TEST_DECRYPT_SOURCE': str(wrong_easy)}).stderr
 fake_rpcs3.unlink()

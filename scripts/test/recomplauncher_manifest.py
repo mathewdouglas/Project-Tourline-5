@@ -204,16 +204,16 @@ def main():
     inputs = {item['id']: item for item in doc['inputs']}
     assert set(inputs) == {'disc', 'update', 'executable'}
     for name in ('disc', 'update'):
-        assert not inputs[name].get('optional')
+        assert bool(inputs[name].get('optional')) == (name == 'update')
         assert inputs[name]['formats'] == [{'type': 'folder'}], 'ISO import is unsupported'
     assert inputs['executable']['optional']
     assert inputs['executable']['formats'] == [{'type': 'file', 'extensions': ['elf', 'exe']}]
     assert all('destination' not in item for item in inputs.values()), 'keep sources outside the install'
     assert doc['prepare']['program'] == ['tourline5.exe']
     assert doc['prepare']['args'] == ['--recomplauncher-prepare', '--game', '{input:disc}',
-                                      '--game-data', '{input:update}', '--executable={input:executable}']
+                                      '--game-data={input:update}', '--executable={input:executable}']
     assert doc['prepare']['timeout'] >= 3600
-    print('Easy Setup: disc/update folders and optional ELF/RPCS3, noninteractive prepare')
+    print('Easy Setup: disc required; optional installed data; RPCS3/ELF; disc package preparation')
     print('start: tourline5.exe')
 
     (config,) = doc['config']

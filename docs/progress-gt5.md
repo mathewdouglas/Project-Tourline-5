@@ -4,6 +4,35 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Launcher: prepare the supported disc's bundled 01.04 data (2026-11-14)
+
+Built-in setup and RecompLauncher Easy Setup can now take the supported disc
+and `rpcs3.exe` without a separate installed-data input. The launcher checks
+`PS3_GAME/INSDIR/DATA000.PKG` against the size and SHA-256 in
+`config/pt5-player.json`, opens it with RPCS3's `--installpkg`, then locates
+the 01.04 installation and uses the existing temporary-copy decryption and
+verified import. The player clicks Install in RPCS3 and closes it afterward;
+no GT5 boot in RPCS3 or separate update download is needed. Existing 01.04
+data can still be imported directly. See [setup](setup.md) and
+[RecompLauncher integration](recomplauncher.md).
+
+A different/incomplete GT5 installation, a VFS configuration requiring
+explicit paths, a missing/corrupt package, cancellation or a failed process
+stops setup. Existing playable storage survives failed imports. Reusing a
+matching installation skips package installation. The supported local disc's
+package size and hash were measured again and match the pinned metadata.
+
+Validation: production `gt5.exe` / `tourline5.exe` build passes;
+`scripts/test/player_setup.py` passes the synthetic installer/decryptor,
+quoted paths, package rejection, reuse, version/config protection,
+transaction rollback, storage migration, restart ownership and crash-report
+checks. `scripts/test/recomplauncher_manifest.py` passes all 17 settings and
+the optional installed-data input/prepare arguments. These integration tests
+use a fixture process; they do not install into the player's RPCS3 folder or
+constitute a real RPCS3 GUI acceptance test. Evidence:
+`scratch/finish-player-setup.log`, `scratch/player-setup-l60pezfq/` and
+`scratch/finish-build.log`.
+
 ## Cold stutter: textures, interpreter pairing, and what is left (2026-11-14)
 
 **F1 setting.** SHADERS > Draw while compiling (`video.shader_interp`, default

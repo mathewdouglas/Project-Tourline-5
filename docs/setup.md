@@ -8,27 +8,39 @@ folder. Setup follows Tourline Prologue's storage and file-selection flow:
    including an external SSD. Default: `%LOCALAPPDATA%\ProjectTourline5`.
 2. Select the extracted **GT5 US disc, BCUS98114, disc version 02.00**, or its
    `PS3_GAME` folder. The disc stays in place; `GT.VOL` is not copied.
-3. Select **01.04 installed game data**: your RPCS3 folder or
-   `dev_hdd0\game\BCUS98114`. This installation is copied and verified into
-   storage. Close RPCS3 before importing. Source files are left unchanged.
-4. Select the decrypted update's `EBOOT.elf`, or let your installed RPCS3
-   decrypt a temporary copy of `EBOOT.BIN`. A matching ELF already beside the
-   installed update is detected automatically.
+3. Choose **Prepare from my disc**, then select your installed **rpcs3.exe**.
+   Close any running RPCS3 window first. Setup opens the disc's bundled
+   `INSDIR\DATA000.PKG` in RPCS3. Click **Install**, wait for completion,
+   then **close RPCS3** to let setup continue. No update download or GT5 boot
+   in RPCS3 is required. An existing standard-layout 01.04 install is reused.
+4. Setup finds the installed files, decrypts a temporary copy of `EBOOT.BIN`
+   using RPCS3, and copies/verifies the required data into your chosen storage.
 
-In **RecompLauncher**, use Easy Setup instead: drop the extracted disc folder
-and the installed 01.04 update/RPCS3 folder into their inputs. Add an update
-`EBOOT.elf` or `rpcs3.exe` in the optional executable input if not found there.
-Preparation imports/verifies the files without additional dialogs, then Play
-uses the same native launcher. Direct launches keep the built-in prompts.
+Alternatively choose **Import an existing 01.04 installation** and select
+your RPCS3 folder or `dev_hdd0\game\BCUS98114`, then the decrypted update's
+`EBOOT.elf` or your installed RPCS3. This also supports completed game installs
+and custom RPCS3 game-data locations. Existing source files are retained.
+
+In **RecompLauncher**, drop the extracted disc folder and **rpcs3.exe** into
+Easy Setup. Leave **Installed data** empty for disc preparation. If RPCS3
+opens, click **Install**, wait, then close it; preparation continues with
+decryption and verified import. The progress text reminds you of this step.
+You can instead supply an existing 01.04 installation and optional `EBOOT.elf`.
+Play uses the same native launcher. Direct launches keep the built-in prompts.
 See [RecompLauncher integration](recomplauncher.md).
 
-GT5 needs the installed update as well as the disc. In RPCS3, first boot
-installs the disc's `INSDIR\DATA000.PKG` (01.04). Select that installation;
-the disc executable and newer updates are different builds. Setup checks
+The supported disc already contains the required 01.04 package. Its INSDIR
+folder must be present; a dump containing only USRDIR is incomplete for this
+setup route. The disc executable and newer updates are different builds. Setup checks
 title/version metadata when available and the executable's exact SHA-256.
 No game files, keys, firmware or RPCS3 are downloaded or included. An incomplete
 GT5 install finishes in the game on first boot; a completed install can also
 be imported.
+
+If RPCS3 already contains another GT5 version, disc preparation stops before
+installing over it. Use a separate RPCS3 folder or import matching 01.04 data.
+With a custom RPCS3 `dev_hdd0` location, import that installation explicitly.
+Package-installation logs are saved as `logs/install-package.out` and `.err`.
 
 Later launches use the remembered setup. **F1** opens settings; Restart goes
 through the launcher while keeping storage locked. New profiles use 720p/2x

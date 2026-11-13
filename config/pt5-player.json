@@ -4,5 +4,7 @@
   "disc_version": "02.00",
   "update_version": "01.04",
   "elf_sha256": "1b0ebcd676bf4bb782fa598e97fa594c0e772249d4cb0a570ee984b5af1264d1",
-  "elf_bytes": 26705632
+  "elf_bytes": 26705632,
+  "disc_pkg_sha256": "cba10faf7283361ec067fb4559869c41967884a4a9cd8f915578fb21ee9952bf",
+  "disc_pkg_bytes": 201251408
 }

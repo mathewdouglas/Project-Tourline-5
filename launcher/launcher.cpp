@@ -331,17 +331,78 @@ static fs::path executable_for(const fs::path& installed, const fs::path& tempor
     if (rpcs3.empty()) throw Cancelled{};
     return decrypt_executable(installed, temporary, rpcs3);
 }
+// Install the package supplied on the supported disc, without booting the game
+// or asking the player to locate an update download. RPCS3 owns PKG decryption.
+static fs::path disc_update(const fs::path& disc, const fs::path& rpcs3) {
+    if (_wcsicmp(rpcs3.filename().c_str(), L"rpcs3.exe") || !fs::is_regular_file(rpcs3))
+        fail(L"Select your installed rpcs3.exe to prepare the game from your disc.");
+    const auto root = rpcs3.parent_path();
+    // A custom VFS can redirect installation to an unrelated game directory.
+    // Leave it to the explicit existing-installation route, rather than guess.
+    if (fs::exists(root/L"config/vfs.yml") || fs::exists(root/L"vfs.yml"))
+        fail(L"This RPCS3 folder has a custom virtual-filesystem configuration. Import your existing 01.04 game-data folder, or use a separate RPCS3 folder with default paths for disc preparation.");
+    const auto game = root/L"dev_hdd0/game/BCUS98114";
+    // Never replace another version of the player's RPCS3 game data.
+    if (fs::exists(game)) {
+        if (!fs::is_regular_file(game/L"PARAM.SFO") ||
+            sfo_value(game/L"PARAM.SFO", "TITLE_ID") != "BCUS98114" ||
+            sfo_value(game/L"PARAM.SFO", "APP_VER") != "01.04")
+            fail(L"This RPCS3 folder already contains another GT5 version or an incomplete installation. To keep it unchanged, use a separate RPCS3 folder for setup, or import an existing 01.04 installation.");
+        return installed_folder(game);
+    }
+    const auto package = disc/L"INSDIR/DATA000.PKG";
+    if (!fs::is_regular_file(package) || !fs::file_size(package))
+        fail(L"Your disc dump is missing PS3_GAME\\INSDIR\\DATA000.PKG, which contains the required 01.04 files. Restore the INSDIR folder from your supported BCUS98114 v02.00 disc, or import an existing 01.04 installation. No separate update download is needed for this disc.");
+    if (fs::file_size(package) != PT5_DISC_PKG_BYTES || hash(package) != PT5_DISC_PKG_SHA256)
+        fail(L"The disc's DATA000.PKG does not match the supported BCUS98114 v02.00 package. Check your dump, or import matching installed 01.04 data. RPCS3 has not been started.");
+    if (!silent_errors) {
+        TASKDIALOGCONFIG td{}; td.cbSize = sizeof td;
+        td.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION;
+        td.pszWindowTitle = L"Project Tourline 5 - prepare from disc";
+        td.pszMainInstruction = L"Install the files already on your disc";
+        td.pszContent = L"Close any running RPCS3 window first. Setup will open your disc's bundled package in RPCS3. Click Install there, wait for it to finish, then close RPCS3 to continue setup. You do not need to boot GT5 or download an update.\n\nRPCS3 installs the package into its own game-data folder. Setup then imports a verified copy and decrypts a temporary copy of its executable.";
+        td.dwCommonButtons = TDCBF_OK_BUTTON | TDCBF_CANCEL_BUTTON; brand(td);
+        int choice = IDCANCEL;
+        if (FAILED(TaskDialogIndirect(&td, &choice, nullptr, nullptr))) fail(L"Could not open disc preparation instructions.");
+        if (choice != IDOK) throw Cancelled{};
+    }
+    setup_progress(0.06, "In RPCS3: click Install, wait for completion, then close RPCS3 to continue");
+    if (run(rpcs3, L"--installpkg " + quote(package), root, L"install-package") != 0)
+        fail(L"RPCS3 could not install the package from your disc. See logs\\install-package.err. Close other RPCS3 windows and retry.");
+    if (!fs::is_regular_file(game/L"PARAM.SFO"))
+        fail(L"The disc package was not found in RPCS3's standard game-data folder after installation. Close other RPCS3 windows and retry; click Install and close RPCS3 when finished. If you use a custom dev_hdd0 location, select that installed 01.04 folder in the optional Installed data input instead.");
+    return installed_folder(game);
+}
 static void configure(fs::path disc, fs::path installed, fs::path executable) {
     setup_progress(0.02, "Checking GT5 disc and update folders");
     if (disc.empty()) disc = pick(true, L"Select your extracted Gran Turismo 5 disc or PS3_GAME folder");
     if (disc.empty()) throw Cancelled{};
     disc = game_folder(disc);
-    if (installed.empty()) installed = pick(true, L"Select your GT5 1.04 installed data or RPCS3 folder");
-    if (installed.empty()) throw Cancelled{};
+    if (installed.empty() && !easy_setup && executable.empty()) {
+        TASKDIALOG_BUTTON buttons[] = {
+            {100, L"Prepare from my disc (recommended)\nSelect rpcs3.exe. The required files are already on your supported disc."},
+            {101, L"Import an existing 01.04 installation\nSelect installed GT5 data or an RPCS3 folder."}};
+        TASKDIALOGCONFIG td{}; td.cbSize = sizeof td;
+        td.dwFlags = static_cast<TASKDIALOG_FLAGS>(TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION);
+        td.pszWindowTitle = L"Project Tourline 5 - game setup";
+        td.pszMainInstruction = L"Prepare Gran Turismo 5";
+        td.cButtons = 2; td.pButtons = buttons; td.dwCommonButtons = TDCBF_CANCEL_BUTTON; brand(td);
+        int choice = IDCANCEL;
+        if (FAILED(TaskDialogIndirect(&td, &choice, nullptr, nullptr))) fail(L"Could not open game setup.");
+        if (choice == IDCANCEL) throw Cancelled{};
+        if (choice == 100) executable = pick(false, L"Select your installed RPCS3", L"RPCS3 executable", L"rpcs3.exe");
+        else installed = pick(true, L"Select your GT5 1.04 installed data or RPCS3 folder");
+        if (installed.empty() && executable.empty()) throw Cancelled{};
+    }
+    if (installed.empty()) {
+        if (executable.empty() || _wcsicmp(executable.filename().c_str(), L"rpcs3.exe"))
+            fail(L"Select rpcs3.exe in the RPCS3 / Executable input to prepare from your disc, or supply an existing 01.04 installation in Installed data. You do not need to find an update download.");
+        installed = disc_update(disc, executable);
+    }
     const auto selected_update = installed;
     installed = installed_folder(installed);
     Import staging;
-    if (easy_setup) {
+    if (easy_setup || (!executable.empty() && _wcsicmp(executable.extension().c_str(), L".exe") == 0)) {
         setup_progress(0.10, "Checking the update executable");
         if (executable.empty()) executable = installed_executable(installed);
         if (executable.empty()) {
@@ -458,21 +519,25 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 if (arg.size() == 13) fail(L"The Executable / RPCS3 input is empty.");
                 elf = fs::absolute(arg.substr(13));
             }
+            else if (arg.rfind(L"--game-data=", 0) == 0) {
+                if (arg.size() == 12) fail(L"The Installed data input is empty.");
+                installed = fs::absolute(arg.substr(12));
+            }
             else if ((arg == L"--set-storage" || arg == L"--game" || arg == L"--game-data" || arg == L"--elf") && i+1 < argc) {
                 const fs::path value = fs::absolute(argv[++i]);
                 if (arg == L"--set-storage") { storage = value; silent_errors = true; }
                 else if (arg == L"--game") disc = value;
                 else if (arg == L"--game-data") installed = value;
                 else elf = value;
-            } else fail(L"Supported options: --setup, --check, --open-data, --choose-storage, --set-storage <empty folder>, --configure --game <dump> --game-data <installation> --elf <decrypted file>, --recomplauncher-prepare --game <dump> --game-data <installation> [--executable=<ELF or rpcs3.exe>].");
+            } else fail(L"Supported options: --setup, --check, --open-data, --choose-storage, --set-storage <empty folder>, --configure --game <dump> [--game-data <installation>] --elf <ELF or rpcs3.exe>, --recomplauncher-prepare --game <dump> [--game-data=<installation>] [--executable=<ELF or rpcs3.exe>].");
         }
         if ((quiet && (force || open || change_storage || !storage.empty())) ||
             (open && (force || change_storage || !storage.empty())) ||
             (force && (change_storage || !storage.empty())) ||
             (change_storage && !storage.empty()) ||
-            (configure_only && (disc.empty() || installed.empty() || (!easy_setup && elf.empty()))) ||
+            (configure_only && (disc.empty() || (!easy_setup && elf.empty()))) ||
             (!configure_only && (!disc.empty() || !installed.empty() || !elf.empty())))
-            fail(L"Use --configure with all three game-file paths, or --setup for the file pickers. --check cannot change setup or storage.");
+            fail(L"Use --configure with --game and --elf (plus --game-data when importing existing data), or --setup for the file pickers. --check cannot change setup or storage.");
         if (FAILED(com)) fail(L"Windows COM initialization failed.");
         std::array<wchar_t, 32768> module{};
         const DWORD length = GetModuleFileNameW(nullptr, module.data(), static_cast<DWORD>(module.size()));

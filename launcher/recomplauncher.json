@@ -563,7 +563,8 @@
     },
     {
       "id": "update",
-      "label": "Installed GT5 01.04 data (RPCS3 folder or dev_hdd0/game/BCUS98114)",
+      "label": "Installed data (optional): existing GT5 01.04 / RPCS3 folder",
+      "optional": true,
       "role": "update",
       "formats": [
         {
@@ -573,7 +574,7 @@
     },
     {
       "id": "executable",
-      "label": "Executable / RPCS3: update 01.04 EBOOT.elf or rpcs3.exe (if not found in update folder)",
+      "label": "RPCS3 / Executable: rpcs3.exe (recommended), or existing 01.04 EBOOT.elf",
       "optional": true,
       "formats": [
         {
@@ -594,11 +595,10 @@
       "--recomplauncher-prepare",
       "--game",
       "{input:disc}",
-      "--game-data",
-      "{input:update}",
+      "--game-data={input:update}",
       "--executable={input:executable}"
     ],
-    "label": "Importing and verifying GT5 01.04 data",
+    "label": "Preparing GT5 (if RPCS3 opens: click Install, then close it when finished)",
     "timeout": 7200
   }
 }

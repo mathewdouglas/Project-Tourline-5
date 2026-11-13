@@ -7,7 +7,7 @@ See RecompLauncher's [developer guide](https://github.com/elripalda/RecompLaunch
 
 Play starts **tourline5.exe**, preserving GT5's disc/update selection, identity
 checks, storage locks and managed F1 restarts. Easy Setup uses named `inputs`
-and a noninteractive `prepare` hook. Direct launches without RecompLauncher
+and a `prepare` hook. Direct launches without RecompLauncher
 still open the built-in storage/game-file dialogs when setup is needed.
 
 ## Easy Setup
@@ -15,25 +15,33 @@ still open the built-in storage/game-file dialogs when setup is needed.
 Drop the following into RecompLauncher's Easy Setup inputs:
 
 1. The extracted **BCUS98114 v02.00 disc folder**, or its `PS3_GAME` folder.
-2. The **01.04 installed data** folder, or the RPCS3 folder containing it.
-3. If it cannot be found there, the optional **update 01.04 EBOOT.elf or
-   installed rpcs3.exe**. A matching ELF inside the selected update is found
-   automatically. For a standard RPCS3 layout, `rpcs3.exe` alongside
-   `dev_hdd0` is also found automatically and decrypts a temporary copy.
+2. Your installed **rpcs3.exe** in **RPCS3 / Executable**.
+3. Leave **Installed data** empty to prepare from the disc. Close other RPCS3
+   windows first. Setup opens the bundled package in RPCS3: click **Install**,
+   wait for completion, then **close RPCS3**. Setup then finds the files,
+   decrypts a temporary copy and imports verified data. No GT5 boot is needed.
 
-The disc alone is insufficient: this port uses the installed update's data
-and executable. ISO files must be extracted first. Newer updates, other
+Alternatively provide existing **01.04 installed data** (or its RPCS3 folder)
+in the optional input, plus a decrypted **01.04 EBOOT.elf** or `rpcs3.exe` if
+not found there. This route supports custom RPCS3 game-data locations.
+
+The supported disc includes the required 01.04 package at
+`PS3_GAME/INSDIR/DATA000.PKG`; no separate update download is required.
+ISO files must be extracted with INSDIR included. Newer updates, other
 regions and the original disc executable are refused by native setup.
-Sources stay in place; only installed data and the verified ELF are imported.
+Disc preparation installs that package into RPCS3 before importing its data
+and verified ELF. An existing different GT5 version or VFS configuration is
+left unchanged; use a separate default-layout RPCS3 folder or explicit import.
 Keep the disc folder available for play.
 
 RecompLauncher runs `tourline5.exe --recomplauncher-prepare --game DISC
---game-data UPDATE [--executable=ELF_OR_RPCS3]` before Play. This uses the
+[--game-data=UPDATE] [--executable=ELF_OR_RPCS3]` before Play. This uses the
 same staged copy, executable hash and commit/rollback checks as built-in
 setup. It uses default or remembered storage without a picker, emits
 `progress` lines while importing/verifying and exits without starting the
 game. Missing or invalid inputs fail with stderr and `logs/setup.err`;
-they never open another setup dialog. The preparation timeout is two hours
+they never open another launcher setup dialog. RPCS3's own package installer
+requires the Install click and closing RPCS3 afterward. The preparation timeout is two hours
 to allow large imports on slower drives. No shared key or file destinations
 are declared in the manifest: RecompLauncher passes selected paths directly.
 

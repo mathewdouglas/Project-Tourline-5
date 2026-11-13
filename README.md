@@ -32,9 +32,11 @@ This tree continues [Tourline Prologue](https://github.com/mathewdouglas/Tourlin
 
 New source builds provide **build\tourline5.exe**, also opened by **Setup and play.cmd**.
 It asks where to keep saves, settings and shaders, then lets you select your
-GT5 disc dump, 01.04 installed data and decrypted update executable. It can
-use your installed RPCS3 to decrypt a temporary copy. Setup is remembered;
-your source game files stay unchanged.
+GT5 disc dump and installed `rpcs3.exe`. Choose **Prepare from my disc**:
+setup opens the disc's bundled 01.04 package in RPCS3. Click **Install**, wait,
+then close RPCS3; setup automatically decrypts a temporary copy and imports
+the verified data. No update download or GT5 boot in RPCS3 is required.
+Importing an existing 01.04 installation is also supported. Setup is remembered.
 
 Storage can use `%LOCALAPPDATA%\ProjectTourline5` or an empty folder on another
 drive, including an external SSD. **Change storage.cmd** copies and verifies
