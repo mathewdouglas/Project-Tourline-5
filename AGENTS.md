@@ -110,6 +110,10 @@ error exit, `tourline5.exe` offers a scrubbed ZIP under
 `<storage>/logs/reports` and a pre-filled GitHub issue
 (`launcher/crash_report.h`; `PT5_CRASH_REPORT=0` off). `GT5P_CRASH_TEST=<ms>`
 crashes the game on purpose. Test: `scripts/test/player_setup.py` (end).
+
+**Unmapped texture reads are logged.** `[io-unmapped]` lines name a MAIN
+texture bound at an offset with no IO mapping (the backend then reads VRAM
+instead); `RSX_IO_UNMAPPED=0` off, `=2` check mode. None at High Speed Ring.
 See progress-gt5.md, 2026-11-12.
 
 **Release 0.1.3** (tag `v0.1.3`) is 0.1.2 plus the antivirus fix
