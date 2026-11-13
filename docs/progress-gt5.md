@@ -4,7 +4,7 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
-## Interpreter GPU cost halved: 22.6 -> 37.9 FPS with every draw interpreted (2026-11-13)
+## Interpreter GPU cost: 22.6 -> 42 FPS with every draw interpreted; per-draw GPU timing (2026-11-13)
 
 Same test as the next section (forced interpreter, both stages,
 `RSX_SHADER_INTERP_SSAA=0`, High Speed Ring FrameTest, 1080p 2x MSAA,
@@ -14,7 +14,6 @@ warm private cache). Each pair ran in one build, one after the other.
 | --- | ---: | ---: | ---: |
 | `RSX_SHADER_INTERP_LEGACY=1` (old layout) | 22.6 | 32.6 ms | 7.3 ms |
 | New layout | 36.4 | 16.8 ms | 9.0 ms |
-| New layout, `RSX_SHADER_INTERP_SHORT=0` | 35.5 | 15.8 ms | 8.9 ms |
 | New layout with short paths (default) | 37.9 | 15.8 ms | 8.9 ms |
 
 FXC output of the old shader (offline, `scratch/gen/metrics.sh`) showed
@@ -43,8 +42,69 @@ instruction.
   - Texture opcodes are tested before the ALU chain; they used to sit
     about 40 compares down.
 
-  GPU medians were equal and FPS was 2.4 higher, which is within noise,
-  so this is kept as harmless rather than proven.
+  Measured with per-draw timing below: 11.7 ms of interpreted draw
+  time per frame, against 12.5 ms with `SHORT=0`.
+
+**A measurement bug, corrected.** The rollback switches were first read
+in a loop over names from one `getenv` call site. The backend's
+`getenv_cache.h` caches one value per call site, so only the first name
+(`RSX_SHADER_INTERP_LEGACY`) ever took effect. The first `SHORT=0`, `FLAT`
+and `WMASK` comparisons, and the first probe runs, all ran the default
+shader; the log showed the same 47,700-byte blob in each. Each switch now
+has its own call site, and the backend logs `[interp] variant defines:`
+when any is set. Check that line, or the `[interp] ps` size, before
+trusting a variant run.
+
+**Where the interpreter's GPU time goes.** `RSX_GPU_DRAWTIME=1` (new,
+measurement) puts a GPU timestamp around every replayed draw and prints
+`[drawtime]` every 600 frames: totals by path (specialized or
+interpreted; depth-only, smaller target, window-sized target) and the 16
+costliest fragment programs. Spans overlap, so they rank draws rather
+than add up to the frame. `RSX_SHADER_INTERP_PROBE=1..7` (new,
+measurement only, renders wrong) compiles the interpreter with parts
+removed. Same race, fragment interpreter forced on every draw:
+
+| Run | Draw time per frame | GPU frame |
+| --- | ---: | ---: |
+| Specialized shaders | 2.8 ms | 5.2 ms |
+| Interpreter (default) | 11.7 ms | 13.9 ms |
+| `SHORT=0` | 12.5 ms | 15.0 ms |
+| Probe 1: texture fetches return 0.5 | 10.7 ms | 14.1 ms |
+| Probe 2: no instruction interpreted | 3.9 ms | 5.4 ms |
+| Probe 5: return at once | 1.0 ms | 3.9 ms |
+
+The instruction loop is about 7.8 ms of the 11.7, per-pixel setup
+(header loads from the program buffer, register clear, epilogue) about
+2.9 ms, and texture sampling about 1 ms. Per draw, interpreted draws are
+2.5-6x their specialized cost; the full-screen pass `0581D681` goes from
+121 to 780 µs. `RSX_SHADER_INTERP_FORCE_ONLY=zonly|small|main`
+(measurement) forces only one class of draw: window-sized targets carry
+most of the cost (10.2 ms GPU, against 5.1 and 5.4 ms for depth-only and
+smaller targets).
+
+| Change, measured against its rollback | Draw time | GPU frame | FPS |
+| --- | ---: | ---: | ---: |
+| Flat register array + masked writes (`FLAT=1 WMASK=1`, opt-in) | 11.5 ms (11.7) | 13.4 ms | 41.6 |
+| No register clear: a 96-bit written mask (`NOCLEAR=0` old) | 11.4 ms (11.5) | 13.5 ms (13.9) | 41.7 (40.6) |
+| Probe 3: no `discard` anywhere (renders wrong) | 9.0 ms | 11.5 ms | 44.1 |
+| No-discard variant where legal (`NODISC=0` old) | 11.1 ms (11.4) | 13.1 ms (13.5) | 42.1 (41.8) |
+
+- **No-discard variant (`RSX_SHADER_INTERP_NODISC=0`: old).** A shader that
+  can discard is depth-tested after it runs, so hidden pixels ran the
+  whole interpreter. The probe puts that at 2 ms a frame. A program with
+  no KIL drawn with the alpha test off now gets a variant compiled
+  without `discard`. Most race draws have the alpha test on, so only 2
+  variants were used and the gain is 0.4 ms. Specialized shaders also
+  always contain the alpha-test `discard`, but they are cheap enough that
+  it costs little there.
+- **No register clear (`RSX_SHADER_INTERP_NOCLEAR=0`: old).** The clear
+  was not the cost the probes suggested; probe 2 still had `discard`.
+  Kept, as it is no slower.
+- Race screenshots with every draw interpreted are correct after both.
+
+**Next.** The interpreter loop is about 7.8 ms of interpreted draw time
+a frame: per-instruction decode and the opcode chain. Alpha-tested draws
+with depth writes off could use early depth testing even with `discard`.
 
 Specialized shaders take 5.1 ms GPU; the interpreter is now about 3x that
 when it draws everything.

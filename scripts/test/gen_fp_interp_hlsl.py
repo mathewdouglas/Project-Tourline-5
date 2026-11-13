@@ -19,6 +19,11 @@ def texture_block():
     lines = [
         "// RSX_INTERP_SHORT (default 1; RSX_SHADER_INTERP_SHORT=0 off): plain samples go through the biased",
         "// sample site with bias 0, identity swizzles and unmodified operands skip that work.",
+        "// RSX_INTERP_NODISC: the host picks this variant for a program without KIL drawn with the alpha test",
+        "// off; it has no discard, so the GPU can depth-test before running it.",
+        "#ifndef RSX_INTERP_NODISC",
+        "#define RSX_INTERP_NODISC 0",
+        "#endif",
         "#ifndef RSX_INTERP_SHORT",
         "#define RSX_INTERP_SHORT 1",
         "#endif",
@@ -309,7 +314,9 @@ void rsx_i_atest(float a) {
         else if (f == 4) p = a > r;
         else if (f == 5) p = a != r;
         else if (f == 6) p = a >= r;
+#if RSX_INTERP_PROBE < 3 && !RSX_INTERP_NODISC
         if (!p) discard;
+#endif
     }
 }
 
@@ -333,12 +340,61 @@ float4 rsx_i_nan0(float4 v) {
 #ifndef RSX_INTERP_LEGACY
 #define RSX_INTERP_LEGACY 0
 #endif
+// RSX_INTERP_WMASK (default 0; RSX_SHADER_INTERP_WMASK=1 on): masked register writes, see the write path.
+// Measured: interpreted draw time 11.5 ms/frame with both, 11.6 with WMASK alone, 11.7 with neither;
+// within run-to-run spread, so both stay opt-in.
+#ifndef RSX_INTERP_WMASK
+#define RSX_INTERP_WMASK 0
+#endif
+// RSX_INTERP_FLAT (default 0; RSX_SHADER_INTERP_FLAT=1 on): the register file as one float array.
+#ifndef RSX_INTERP_FLAT
+#define RSX_INTERP_FLAT 0
+#endif
+// RSX_INTERP_NOCLEAR (default 1; RSX_SHADER_INTERP_NOCLEAR=0 off): instead of zero-filling the register
+// file for every pixel, a 96-bit mask in registers records which entries were written; an unwritten
+// entry reads as zero. The clear was about 2.7 ms of a 13.9 ms frame with every draw interpreted.
+// Not combined with RSX_INTERP_FLAT (that layout keeps the clear).
+#ifndef RSX_INTERP_NOCLEAR
+#define RSX_INTERP_NOCLEAR 1
+#endif
+#if RSX_INTERP_FLAT || RSX_INTERP_LEGACY
+#undef RSX_INTERP_NOCLEAR
+#define RSX_INTERP_NOCLEAR 0
+#endif
+bool rsx_wb_test(uint3 w, uint ri) {
+    uint x = ri < 32u ? w.x : ri < 64u ? w.y : w.z;
+    return ((x >> (ri & 31u)) & 1u) != 0u;
+}
+uint3 rsx_wb_set(uint3 w, uint ri) {
+    uint b = 1u << (ri & 31u);
+    if (ri < 32u) w.x |= b; else if (ri < 64u) w.y |= b; else w.z |= b;
+    return w;
+}
 #if RSX_INTERP_LEGACY
 #define RSX_IR(s, i) ((s) != 0u ? h[i] : r[i])
 #define RSX_IW(s, i, val) { if ((s) != 0u) h[i] = (val); else r[i] = (val); }
 #else
+#if RSX_INTERP_FLAT
+// One float per component: element ((register * 2 + half) * 4 + component). A temp source applies
+// its swizzle as the load index and a masked write is one store per enabled component.
+#define RSX_IRB(b) float4(rff[(b)], rff[(b) + 1u], rff[(b) + 2u], rff[(b) + 3u])
+#define RSX_IR(s, i) RSX_IRB(((i) * 2u + (s)) * 4u)
+#define RSX_IWC(ri, c, val) { rff[(ri) * 4u + (c)] = (val); }
+#define RSX_IW(s, i, val) { uint wb_ = ((i) * 2u + (s)) * 4u; rff[wb_] = (val).x; rff[wb_ + 1u] = (val).y; \
+                            rff[wb_ + 2u] = (val).z; rff[wb_ + 3u] = (val).w; }
+#elif RSX_INTERP_NOCLEAR
+#define RSX_IR(s, i) (rsx_wb_test(wb, (i) * 2u + (s)) ? rf[(i) * 2u + (s)] : (float4)0)
+// A component write to an entry not yet written zeroes the entry first.
+#define RSX_IWC(ri, c, val) { if (!rsx_wb_test(wb, ri)) { rf[ri] = (float4)0; wb = rsx_wb_set(wb, ri); } \
+                              if ((c) == 0u) rf[ri].x = (val); else if ((c) == 1u) rf[ri].y = (val); \
+                              else if ((c) == 2u) rf[ri].z = (val); else rf[ri].w = (val); }
+#define RSX_IW(s, i, val) { rf[(i) * 2u + (s)] = (val); wb = rsx_wb_set(wb, (i) * 2u + (s)); }
+#else
 #define RSX_IR(s, i) rf[(i) * 2u + (s)]
+#define RSX_IWC(ri, c, val) { if ((c) == 0u) rf[ri].x = (val); else if ((c) == 1u) rf[ri].y = (val); \
+                              else if ((c) == 2u) rf[ri].z = (val); else rf[ri].w = (val); }
 #define RSX_IW(s, i, val) { rf[(i) * 2u + (s)] = (val); }
+#endif
 #endif
 
 uint rsx_i_expidx(uint half, uint target) {
@@ -355,6 +411,10 @@ uint rsx_i_expidx(uint half, uint target) {
     return min(idx, RSX_INTERP_REGM);
 }
 
+// Probe 7 (measurement only): the entry point below is replaced by one whose only input is SV_POSITION.
+#if defined(RSX_INTERP_PROBE) && RSX_INTERP_PROBE == 7
+#define main rsx_i_main_unused
+#endif
 #if RSX_INTERP_MRT
 struct RSXInterpOut {
     float4 c0 : SV_TARGET0;
@@ -376,17 +436,36 @@ float4 main(RSXInterpIn input) : SV_TARGET {
     float4 r[RSX_INTERP_REGS];
     float4 h[RSX_INTERP_REGS];
 #else
+#if RSX_INTERP_FLAT
+    float rff[RSX_INTERP_REGS * 8];
+#else
     float4 rf[RSX_INTERP_REGS * 2];
 #endif
+    uint3 wb = 0;
+#endif
     float4 cc0 = 0, cc1 = 0;
+#if defined(RSX_INTERP_PROBE) && RSX_INTERP_PROBE == 5
+#if RSX_INTERP_MRT
+    { RSXInterpOut po = (RSXInterpOut)0; return po; }
+#else
+    return (float4)0;
+#endif
+#endif
     uint hdr = rsx_ip_hdr;
     // Header word 11: how many registers the program can read (0 = all 48).
     uint nregs = rsx_iprog.Load(hdr + 44u);
     if (nregs == 0u || nregs > (uint)RSX_INTERP_REGS) nregs = (uint)RSX_INTERP_REGS;
+#if defined(RSX_INTERP_PROBE) && RSX_INTERP_PROBE == 6
+    nregs = 0u;
+#endif
 #if RSX_INTERP_LEGACY
     [loop] for (uint zi = 0u; zi < nregs; zi++) { r[zi] = 0; h[zi] = 0; }
 #else
+#if RSX_INTERP_FLAT
+    [loop] for (uint zi = 0u; zi < nregs * 8u; zi++) rff[zi] = 0;
+#elif !RSX_INTERP_NOCLEAR
     [loop] for (uint zi = 0u; zi < nregs * 2u; zi++) rf[zi] = 0;
+#endif
 #endif
     uint instr_off = rsx_iprog.Load(hdr + 0u);
     uint instr_count = rsx_iprog.Load(hdr + 4u);
@@ -401,6 +480,15 @@ float4 main(RSXInterpIn input) : SV_TARGET {
     uint mipmask = rsx_iprog.Load(hdr + 40u);   // bits 0-3 stacked-mip units
     uint half = flags & 1u;
     uint lg2abs = (flags & 256u) != 0u;
+    // RSX_SHADER_INTERP_PROBE (measurement only, renders wrong): 1 = texture fetches return 0.5,
+    // 2 = no instruction is interpreted (fixed cost of an interpreted pixel), 3 = no discard, 4 = 2 and 3,
+    // 5 = return at once (pipeline and draw cost only), 6 = 4 without the register clear.
+#ifndef RSX_INTERP_PROBE
+#define RSX_INTERP_PROBE 0
+#endif
+#if RSX_INTERP_PROBE == 2 || RSX_INTERP_PROBE == 4 || RSX_INTERP_PROBE == 6
+    instr_count = 0u;
+#endif
     float4 wpos = input.position;
     if ((flags & 64u) != 0u)
         wpos *= float4(rsx_fogstate.w > 0.0 ? rsx_fogstate.w : 1.0,
@@ -568,7 +656,17 @@ float4 main(RSXInterpIn input) : SV_TARGET {
                 uint pr = (pk >> 11) & 7u;
                 uint sw = (pk >> 14) & 255u;
                 float4 vv = 0;
+#if RSX_INTERP_FLAT && !RSX_INTERP_LEGACY
+                bool swz_done = false;
+                if (ty == 0u) {
+                    uint rb = (min(ix, RSX_INTERP_REGM) * 2u + sh) * 4u;
+                    vv = float4(rff[rb + (sw & 3u)], rff[rb + ((sw >> 2) & 3u)],
+                                rff[rb + ((sw >> 4) & 3u)], rff[rb + ((sw >> 6) & 3u)]);
+                    swz_done = true;
+                }
+#else
                 if (ty == 0u) vv = RSX_IR(sh, min(ix, RSX_INTERP_REGM));
+#endif
                 else if (ty == 1u) {
                     uint id = in_src;
                     if (id == 0u) vv = wpos;
@@ -579,7 +677,9 @@ float4 main(RSXInterpIn input) : SV_TARGET {
                     else if (id == 14u) vv = face;
                     if (persp != 0u && id >= 4u && id <= 13u) vv *= (1.0 / input.position.w);
                 } else vv = fp_constants[kslot];
-#if RSX_INTERP_SHORT
+#if RSX_INTERP_FLAT && !RSX_INTERP_LEGACY
+                [branch] if (!swz_done && sw != 228u) vv = rsx_i_swz(vv, sw);
+#elif RSX_INTERP_SHORT
                 [branch] if (sw != 228u) vv = rsx_i_swz(vv, sw);
 #else
                 vv = rsx_i_swz(vv, sw);
@@ -681,6 +781,9 @@ float4 main(RSXInterpIn input) : SV_TARGET {
                     float thr = texu < 4u ? 0.015625 : 0.001953125;
                     if (inv >= thr) { v = float4(0.5, 0.5, 0.5, 0.5); gd = 1u; }
                 }
+#if RSX_INTERP_PROBE == 1
+                v = (float4)0.5; gd = 1u;
+#endif
                 if (gd == 0u) {
                     coord = rsx_i_unnorm(coord, texu, shp, unnorm);
                     uint sm = texu < 8u ? (samp0 >> (texu * 4u)) & 15u : (samp1 >> ((texu - 8u) * 4u)) & 15u;
@@ -705,6 +808,41 @@ float4 main(RSXInterpIn input) : SV_TARGET {
             else if (scale == 7u) v /= 8.0;
             if (osat != 0u) v = saturate(v);
             uint di = min(dest, RSX_INTERP_REGM);
+#if RSX_INTERP_WMASK && !RSX_INTERP_LEGACY
+            // Store only the enabled, passing components; read the old value only for a predicated
+            // condition-code write (DXC splits the register file into one array per component).
+            float4 pm = 1;
+            if (pred == 1u) pm = 0;
+            else if (pred == 2u) {
+                float4 cv = rsx_i_swz(ccread != 0u ? cc1 : cc0, (iw.z >> 22) & 255u);
+                pm = rsx_i_cmp4(cv, cmpop);
+            }
+            float4 cur = 0;
+            [branch] if (setcond != 0u && pred != 0u) cur = RSX_IR(dhalf, di);
+            if (nowrite == 0u && pred != 1u) {
+                uint wm = mask;
+                if (pred == 2u) wm &= (pm.x != 0.0 ? 1u : 0u) | (pm.y != 0.0 ? 2u : 0u)
+                                    | (pm.z != 0.0 ? 4u : 0u) | (pm.w != 0.0 ? 8u : 0u);
+                uint ri = di * 2u + dhalf;
+                if ((wm & 1u) != 0u) RSX_IWC(ri, 0u, v.x)
+                if ((wm & 2u) != 0u) RSX_IWC(ri, 1u, v.y)
+                if ((wm & 4u) != 0u) RSX_IWC(ri, 2u, v.z)
+                if ((wm & 8u) != 0u) RSX_IWC(ri, 3u, v.w)
+            }
+            if (setcond != 0u) {
+                float4 srcv = v;
+                if (nowrite == 0u && pred == 1u) srcv = cur;
+                else if (nowrite == 0u && pred == 2u)
+                    srcv = float4(pm.x != 0.0 ? v.x : cur.x, pm.y != 0.0 ? v.y : cur.y,
+                                  pm.z != 0.0 ? v.z : cur.z, pm.w != 0.0 ? v.w : cur.w);
+                float4 cd = ccwrite != 0u ? cc1 : cc0;
+                if ((mask & 1u) != 0u) cd.x = srcv.x;
+                if ((mask & 2u) != 0u) cd.y = srcv.y;
+                if ((mask & 4u) != 0u) cd.z = srcv.z;
+                if ((mask & 8u) != 0u) cd.w = srcv.w;
+                if (ccwrite != 0u) cc1 = cd; else cc0 = cd;
+            }
+#else
             float4 cur = RSX_IR(dhalf, di);
             float4 nxt = cur;
             float4 pm = 1;
@@ -729,10 +867,13 @@ float4 main(RSXInterpIn input) : SV_TARGET {
                 if ((mask & 8u) != 0u) cd.w = srcv.w;
                 if (ccwrite != 0u) cc1 = cd; else cc0 = cd;
             }
+#endif
         }
         pc = next;
     }
+#if RSX_INTERP_PROBE < 3 && !RSX_INTERP_NODISC
     if (killed != 0u) discard;
+#endif
     float4 o0 = (steps >= RSX_FP_INTERP_STEPS && pc < instr_count) ? (float4)0 : RSX_IR(half, rsx_i_expidx(half, 0u));
     if ((flags & 2048u) != 0u) o0 = (float4)1;   // redirected stencil-mask pass: colour forced to 1 (FP_ONE)
     if ((flags & 16u) != 0u) rsx_i_atest(o0.a);
@@ -840,6 +981,18 @@ def tex_first(body: str) -> str:
     return body[:a] + new + body[e:]
 
 
+PROBE7 = """
+#if defined(RSX_INTERP_PROBE) && RSX_INTERP_PROBE == 7
+#undef main
+#if RSX_INTERP_MRT
+RSXInterpOut main(float4 position : SV_POSITION) { RSXInterpOut po = (RSXInterpOut)0; return po; }
+#else
+float4 main(float4 position : SV_POSITION) : SV_TARGET { return (float4)0; }
+#endif
+#endif
+"""
+
+
 def c_string(text: str) -> str:
     parts = []
     chunk = []
@@ -868,7 +1021,7 @@ def c_string(text: str) -> str:
 def main():
     body = tex_first(fix_mrt(BODY.replace(chr(13), '')))
     # Drop the unused helper that referenced a dummy dither body.
-    text = texture_block() + "\n" + body
+    text = texture_block() + "\n" + body + PROBE7
     OUT.parent.mkdir(parents=True, exist_ok=True)
     inc = (
         "/* Generated by scripts/test/gen_fp_interp_hlsl.py. Do not edit. */\n"
