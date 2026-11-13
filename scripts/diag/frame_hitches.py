@@ -19,7 +19,8 @@ TEXTURE_COUNTERS = ('tex_alloc_ms', 'tex_decode_ms', 'tex_allocs', 'up_allocs',
                     'uploads', 'upload_bytes', 'tex_hash_ms', 'tex_map_ms',
                     'tex_copy_ms', 'tex_srv_ms',
                     # Frame (replay) thread only; the totals above include helpers.
-                    'rt_cache_us', 'rt_cache_reads', 'rt_driver_us', 'rt_driver_calls')
+                    'rt_cache_us', 'rt_cache_reads', 'rt_driver_us', 'rt_driver_calls',
+                    'offwait_us', 'offwaits')
 
 
 class TraceRows(list):
