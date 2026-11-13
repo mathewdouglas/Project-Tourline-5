@@ -4,6 +4,69 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Shader interpreter ported; what a cold frame actually waits on (2026-11-13)
+
+Goal: make shader compilation and pipeline creation stop causing stutter,
+with interpreter shaders ("ubershaders") so that new content never waits.
+
+**Port.** GT5 Prologue's interpreter overlay (origin/main, Phase 224) is now
+in GT5's runtime patch. It covers fragment and vertex stages, paired
+pipelines, the per-frame budget, and disk/async interpreter pipelines.
+- New files: `libs/video/rsx_fp_interp*`, `rsx_vp_interp*`. Four backend
+  hunks were merged by hand.
+- GT5's offscreen pipeline wait (`RSX_PSO_WAIT_OFFSCREEN_MS`) now runs only
+  when the interpreter has not drawn the draw.
+- The interpreter's `ps_5_1`/`vs_5_1` shaders go through DXC when DXC is on,
+  because one pipeline cannot mix DXBC and DXIL.
+- New for GT5: paired interpreter classes (native state only) are learned in
+  play into `warmup-v1/interp-classes-v1.txt` and prepared at the next start
+  (`interp_prewarm`; `RSX_SHADER_INTERP_LEARN=0` off). Prologue embedded its
+  starter's classes instead.
+- Everything stays off unless `RSX_SHADER_INTERP` / `RSX_SHADER_INTERP_VP` are
+  set (`1` while a shader is pending, `force` for every draw).
+
+**Measured.** High Speed Ring `-FrameTest`, 1080p defaults, DXC, a private
+cache. The trace is `RSX_HITCH_LOG` over the whole run. "Excess" is the time
+above 50 ms summed over frames longer than 50 ms. The NVIDIA driver's own
+shader cache was warm from earlier runs on this route, so "cold" is cold for
+our cache only.
+
+| Run | FPS | p99 | Max | Frames > 50 ms | Excess | GPU in those frames |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Cold, interpreter off | 53.6 | 33.1 | 649* | 59 | 4.5 s | 1.1 s |
+| Warm, interpreter off | 54.0 | 33.2 | 403* | 61 | 2.0 s | 0.7 s |
+| Cold, interpreter for pending (both stages, paired, async) | 54.1 | 31.2 | 433* | 58 | 3.9 s | 2.5 s |
+| Interpreter forced on every draw | 6.2 | 236 | 244 | 1,085 | | |
+
+\* Over the whole trace; the FrameTest window's own maxima were 149, 71 and
+114 ms.
+
+What it says:
+- **Cold content adds about 2.5 s of excess on this route, almost all
+  render-thread CPU work, not waiting for the background compiler.** Over
+  the long frames, cold minus warm is:
+  - draw recording (shader key and HLSL work): +1.5 s;
+  - reading freshly compiled bytecode back from disk: +0.6 s;
+  - driver calls on that thread: +0.15 s.
+- **Warm still has 2.0 s of excess.** Much of it is texture uploads and
+  creation (about 130 MB and 1,200 allocations inside the long frames). The
+  placed-texture/ring work on `perf/prologue-texture-pso` (Phase 47) targets
+  this.
+- **The interpreter helps only a little.** It cut excess by 0.6 s and the
+  worst frame from 649 to 433 ms, but GPU time in the long frames rose from
+  1.1 to 2.5 s.
+- **Forced on every draw it is about 160 ms of GPU a frame (6 FPS).**
+  Prologue measured 79 ms, never found the cause, and needs a GPU profile.
+  Until the interpreted pixel cost falls by an order of magnitude, it can only
+  cover a budgeted handful of pending draws. It cannot be the frame's
+  renderer.
+
+Next, in order of measured payoff:
+1. Merge `perf/prologue-texture-pso`: fast lookup and texture placement.
+2. Take bytecode reads and driver calls off the render thread: hand
+   compiled bytecode over in memory instead of re-reading it.
+3. Profile the interpreter pixel shader before relying on it.
+
 ## Pipeline growth per track and car: no saturation (2026-11-13)
 
 Question: would scripted race runs through every track (Prologue's content
