@@ -4,6 +4,21 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Menu and race sound restored: SPU arithmetic in the audio DSP (2026-11-14)
+
+Users reported no sound; the user confirmed movie audio but silent menus and
+races after `e608d51`'s containment. The game-audio port's PCM went bad in
+DSP image `j9804ABA8`: (1) `0 * extended-range estimate` from sqrt(0) gave
+NaN on the host but 0 on the SPU, and (2) round-to-nearest put one pole of
+a 1 Hz coefficient set at ~1.000125 where SPU truncation keeps it stable.
+Both fixes are audio-only: a force-included arithmetic header
+(`audio_extended_zero_images`, CMake `GT5P_AUDIO_EXTENDED_ZERO`) and
+round-toward-zero scopes around five measured constructor calls
+(`spu_audio_round_zero_calls`, patched by `spu_native_patch.py`,
+`GT5P_AUDIO_ROUND_ZERO=0` off). Live with scrubbing off: menu 77 s and
+HSR race 145 s with 0 NaN/Inf; movie 57 s clean with the default. Details,
+tests and limits: [audio.md](audio.md).
+
 ## SPU DMA/channel fast paths: live acceptance and A/B (2026-11-13)
 
 Adapted Ascension-R's inactive-diagnostic gate and context-only MFC channel

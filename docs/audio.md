@@ -3,7 +3,8 @@
 The live investigation found invalid floating-point samples in GT5's guest
 audio ring while its playback index advanced. A successful WASAPI open and
 an unmuted Windows session do not establish that the game is producing valid
-sound. The origin of those invalid samples has not yet been established.
+sound. The origin is now found and fixed: see "Root cause" below. Menu and
+race sound play again (2026-11-14).
 
 The audio change has two independent parts:
 
@@ -19,6 +20,62 @@ The audio change has two independent parts:
 
 `AUDIO_NONFINITE_SCRUB=0` restores propagation for diagnosis. It disables both
 input and mixed-output scrubbing. It is not an audio-repair setting.
+
+## Root cause: two SPU arithmetic differences (2026-11-14)
+
+The PCM ring is written by audio image 14 (`jFDFFAAC1`), which copies an
+already corrupt buffer fetched from guest `0x4209EB30`. Stage measurements
+traced that buffer to the DSP image `j9804ABA8`: its input decayed toward
+silence while its output grew exponentially, first as a large DC offset,
+then Inf/NaN after about 43 s on the menu. Two causes, both needed:
+
+1. **Extended-range values times zero.** DSP initialisation takes square
+   roots of zero. The SPU reciprocal-sqrt estimate of 0 has exponent 255,
+   which the SPU treats as a finite extended value, not IEEE Inf. The SPU
+   also flushes zero/denormal operands, so `0 * extended` is 0 there; the
+   host computed NaN and stored it in the DSP tables. The force-included
+   `src/gt5p_spu_audio_math.h` makes `fi`, `fm`, `fma`, `fms` and `fnms`
+   return the SPU's result for exactly that operand pair and interpolates
+   `fi` on extended estimates. Ordinary operands keep the runtime's
+   arithmetic, FMA dispatch included. It is not a full extended-range
+   implementation. Applied to `audio_extended_zero_images` in
+   `config/targets.json` (the four native audio images plus `j9804ABA8`);
+   render images are excluded. CMake `-DGT5P_AUDIO_EXTENDED_ZERO=OFF` is the
+   build-time rollback.
+2. **Rounding of the filter coefficients.** SPU single precision truncates;
+   the host rounds to nearest. The coefficient constructor at `0x4E8` in
+   `j9804ABA8` builds a 1 Hz filter whose denominator margin is
+   `-5.96e-08` under round-to-nearest: one pole at about 1.000125, just
+   outside the unit circle, hence the slow DC build-up. Truncation gives
+   `+1.79e-07` (stable). `spu_audio_round_zero_calls` lists the five call
+   sites; `scripts/spu_native_patch.py` (already a required post-SPU-lift
+   step) wraps each in a round-toward-zero MXCSR scope and restores the
+   caller's mode afterwards. Sample processing keeps its existing mode.
+   `GT5P_AUDIO_ROUND_ZERO=0` turns the scope off at run time.
+
+Fixing only one image, or only cause 1, left the failure in place: earlier
+partial attempts still produced the DC offset and NaNs.
+
+Tests (synthetic, no game run): `scripts/test/audio_extended.py` checks
+zero/extended products, interpolation, ordinary-operand parity and sqrt(0)
+in portable, scalar-reference and FMA builds. `scripts/test/audio_coefficients.py`
+runs the real lifted constructor (extracted from `generated/` into
+`scratch/` at test time) on synthetic inputs, checks the stability margin
+and a million-sample impulse tail, the rollback, MXCSR restoration and the
+patcher's exact-count refusal, with the extended fix on and off.
+
+Live, build `6e224f6e102d252a` (SHA-256 prefix), native audio,
+`PS3_VERBOSE=0`, headless:
+
+- Menu, scrubbing off: 77 s recorded, 0 NaN/Inf, no DC (5 s means within
+  0.0004), peaks 0.28-0.35 after the music starts; past the old 43 s failure.
+- HSR race, scrubbing off: 145 s, 0 NaN/Inf. A small steady offset of about
+  0.012 appears once driving starts and does not grow; peaks reach 1.0
+  and about 1% of samples clip in the loudest 10 s of throttle. Not shown
+  to be wrong; listening is still owed.
+- Opening movie, default scrubbing: 57 s, 0 NaN/Inf, peaks 0.5-0.7.
+
+The containment below stays enabled: it is now a safety net, not the fix.
 
 ## Diagnostics
 
@@ -57,7 +114,6 @@ storage and must not be committed.
 
 Live results are recorded in [progress-gt5.md](progress-gt5.md). Invalid PCM
 was reproduced in menu, opening movie and race, with native and portable
-menu paths both affected. Containment restores a healthy movie signal to
-Windows but leaves menu/race output silent because their producer is still
-corrupt. This is not a claim that the upstream audio fault is fixed. Subjective
+menu paths both affected. Containment alone restored the movie but left menu/race silent; the
+root-cause fix above restores them. Subjective
 speaker/headphone listening remains separate from signal/meter verification.

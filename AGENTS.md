@@ -85,6 +85,16 @@ another build. Player builds become PGO with `clean_build.py --profile`
 the build fails if hot functions lost their counts). `pgo.py gen`/`use`
 refuse a `generated/` missing a post-lift step. See [docs/pgo.md](docs/pgo.md).
 
+**Game sound fixed (2026-11-14).** Menus and races were silent: the DSP
+image `j9804ABA8` produced NaN PCM from two SPU arithmetic differences (0 x
+extended-range is 0; single precision truncates). Audio images force-include
+`src/gt5p_spu_audio_math.h` (`audio_extended_zero_images`, CMake
+`GT5P_AUDIO_EXTENDED_ZERO=OFF` rollback); `spu_native_patch.py` scopes the
+coefficient constructor calls in round-toward-zero
+(`spu_audio_round_zero_calls`, `GT5P_AUDIO_ROUND_ZERO=0` off). Re-run
+`spu_native_patch.py` after any SPU lift. Tests: `audio_extended.py`,
+`audio_coefficients.py`. See [docs/audio.md](docs/audio.md).
+
 **Release 0.1.3** (tag `v0.1.3`) is 0.1.2 plus the antivirus fix
 (runtime env defaults from one table; Bitdefender `Gen:Variant.Lazy`), built
 from the 0.1.2 tag, not from main.
