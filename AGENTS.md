@@ -64,6 +64,17 @@ all compiler-dependent caches under `dxc-1.8.2502-sm60-v1/`; do not move old FXC
 recipes into it. See [docs/dxc.md](docs/dxc.md) and Phase 34 for the synthetic
 differences, live checks and offline preparation contract.
 
+**Prologue renderer ports (GT5 Phase 47).** All default on, measured at High Speed Ring:
+`RSX_PSO_FAST_LOOKUP` (learned table `warmup-v1/fp-lookup-gt5-v1-<tag>.bin`: a miss whose mapped
+pipeline is resident skips HLSL/DXBC; `=0` off, `=2` checks every mapping, 0 mismatches), placed
+textures in 64 MB heaps (`RSX_TEX_PLACED=0` committed) whose released ranges return only after the
+next GPU wait, a 64 MB staging ring (`RSX_TEX_RING_MB=0` off) and `RSX_TEX_LRU` (`=0` old). Race
+start 182 -> ~85 ms, grid 246 -> 125-148 ms, same FPS and working set. The table's tag covers
+compiler, root signature and all `RSX_`/`FP_`/`VP_` values except texture, cache and diagnostic ones:
+add a new translation switch outside those prefixes to `fplk_epoch`. Not ported: re-targeting learned
+sets after an MSAA change (GT5 relearns them in the first race). Test:
+`scripts/test/texture_heap_alloc_native.py`.
+
 **Race pack and helper prewarm (GT5 Phase 35, run in game in Phase 36).** The
 loading gate prepares the learned race set on four helper threads
 (`RSX_RACE_PREWARM_THREADS`, `=1` old) from one file,

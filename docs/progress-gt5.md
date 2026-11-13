@@ -4,6 +4,142 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Phase 47 - Prologue renderer ports: fast pipeline lookup, placed textures, staging ring, texture LRU (2026-11-13)
+
+Branch `perf/prologue-texture-pso`. Four Tourline Prologue renderer changes (Phases 221 and 223) were
+measured on GT5 first, then ported where GT5 pays the cost. Phase 46 is taken on another branch.
+
+**Method.** `gt5boot.ps1 -Route race -FrameTest` (High Speed Ring, 60 s FrameTest), `GT5P_NO_SETTINGS=1`
+(720p, 4x MSAA, DXC), one private cache (`scratch\cache\base`) warmed by a menu run and a race run.
+Every run adds `RSX_PSO_TIMING=1 RSX_TEXUPSTAT=1 RSX_HITCH_LOG=<fresh csv>`. Long frames come from the
+hitch trace (display intervals, cumulative columns differenced), counted from the RaceLoad milestone.
+"Excess" is the time above 33.4 ms in intervals over 50 ms. Working set is `gt5.exe`'s, sampled every 2 s
+over the whole run. FrameTest FPS spread between identical runs is about 1 FPS here; working set spreads
+about 300 MB. Readers: `scratch\table.py`, `scratch\hitch_sum.py` (untracked, local).
+
+### What GT5 paid before (baseline build, run m0a)
+
+| Frame | Interval | Pipeline lookup | Texture creation |
+| --- | --- | --- | --- |
+| Grid | 246 ms | 27 ms | 80 ms (166 textures + 168 staging buffers) |
+| Race start | 182 ms | 9 ms | 74 ms (286 + 289) |
+
+Texture creation (a committed texture and a committed staging buffer each, about 0.26 ms a pair; GT5's
+own pool from Phase 29 rarely holds a texture of the same description at these moments) was the larger
+race-start cost; pipeline lookup was smaller than Prologue's 86 ms but not negligible. After boot the menu
+spent 1.3-1.8 s rebuilding HLSL for 7,300-12,500 pipeline misses in its first 5 s.
+
+### 1. Fast pipeline lookup (`RSX_PSO_FAST_LOOKUP`, default on)
+
+Ported from Prologue `59cf049`/`6ffde70` (learned-in-play only; GT5 has no offline preparation that
+would write the table). A persistent table maps a session-independent key to the native pipeline hash the
+full path produced; a miss whose mapped pipeline is resident in the prepared set uses it directly, without
+rebuilding HLSL or finding DXBC. File: `<cache>/<compiler dir>/warmup-v1/fp-lookup-gt5-v1-<tag>.bin`.
+
+- **Key:** fragment program structural identity, FNV-1a 64 of the vertex shader's bytecode, and every field
+  of the in-memory pipeline key: blend, colour mask, target count and format, `exp32`, cull, stencil word
+  (including the no-depth bit), texel-addressing mask, `cube_mask` (cube units, output gamma and the MSAA
+  sample count in bits 16-19), vertex attribute mask, sampler key, gamma/shadow/unnorm-high masks (border
+  cube and volume units are in these).
+- **Tag** (a different tag starts an empty table): engine executable size and write time, DXC or FXC, the
+  guest root signature hash, `rsx_ultrawide()`, native render height, high precision, and every `RSX_`,
+  `FP_`, `VP_` environment value plus `CMASK_FORCE`, `CULL_*`, `DEPTH_OFF`, `PSO_DSV_ALWAYS`,
+  `GT5P_ULTRAWIDE*`, `GT5P_RESOLUTION`, `GT5P_RENDER_NATIVE`. Texture, cache, preparation and diagnostic
+  names are left out (`fplk_env_ignored`). The warmup directory is already per compiler.
+- **Safety:** only a pipeline resident under the current root signature and bytecode can be returned
+  (`pso_warm_get`), so a stale or absent mapping falls back to the full path. Race membership is still
+  learned on a fast hit. `RSX_PSO_FAST_LOOKUP=2` is a check mode: the full path always runs and each
+  existing mapping is compared with the hash it produces. **Check run fchk: 1,140 mappings compared, 0
+  mismatches.**
+- Writes: every 20 s with at least 64 new entries, from a short-lived thread, and at shutdown.
+  `[fast-lookup]` every 5 s. `RSX_PSO_FAST_LOOKUP=0`: no reads, writes or lookups.
+
+| Runs (textures at new defaults) | >50 ms frames | Excess | Lookup in those frames | Worst three | FPS | p99 |
+| --- | --- | --- | --- | --- | --- | --- |
+| on: fon1, fon2, fon3 | 7, 9, 6 | 421, 477, 400 ms | 8, 10, 7 ms | 141/128/127, 148/133/127, 140/130/120 | 55.2, 55.4, 54.4 | 29.9, 29.1, 30.7 |
+| off: foff1, foff2 | 12, 10 | 600, 574 ms | 49, 64 ms | 171/129/127, 178/150/129 | 55.4, 55.2 | 29.9, 29.6 |
+| learning run fl0 (table empty) | 8 | 621 ms | 111 ms | 264/136/129 | 54.9 | 29.5 |
+
+The grid frame drops from 171-178 ms (off) to 128-148 ms (on), with 1.5 ms of lookup instead of 23-79 ms.
+Steady-state FPS and p99 are unchanged. About 510-550 lookups hit per race.
+
+**Menu after boot.** Boots land on one of two menu states: a light one (about 9 s to Arcade) and a heavy one
+(about 14 s, ~35 frames over 100 ms). In the light one the table removes most of the cost: excess 2,987 ms
+(foff1) against 123-395 ms (seven runs with the table), lookup 1,512 against 71-113 ms. The heavy one is
+not helped: fon4 (on) 9,892 ms against m0a 9,683 and foff2 10,219 (both off). Its pipelines are in the
+table but were not in the resident prepared set then (`not-resident` 32,000), so every lookup fell back.
+Why the menu set is not resident in that state is open.
+
+### 2. Placed textures and a staging ring (`RSX_TEX_PLACED`, `RSX_TEX_RING_MB`, default on)
+
+Ported from Prologue `aa98847`/`6ffde70`, around GT5's own texture pool, which stays as it is:
+
+- Textures are placed resources in 64 MB default heaps (`RSX_TEX_HEAP_MB`), two made at the first upload
+  (`RSX_TEX_HEAP_PRE`), one more whenever less than a heap is free, at most 32 (`RSX_TEX_HEAP_MAX`). First
+  fit with coalescing, 4 KB alignment for small textures when the driver accepts it; anything else is
+  committed as before. **GT5 change:** a released texture's range returns to its heap only at the next
+  batch start, after the GPU wait, so a placement later in the same batch never aliases memory an earlier
+  draw of that batch reads (a slot's texture can be replaced in the batch that used it). GT5's pool parks
+  placed textures like committed ones; its dropped textures release through the heap.
+- A texture without its own staging buffer stages through one persistently mapped 64 MB upload buffer,
+  reset at the batch start after the GPU wait. An upload that does not fit, or a slot that still has its own
+  buffer, uses the per-slot buffer and GT5's staging pool as before. Peak use was 54.6 MB, no fallbacks.
+- `[tex-heap]` every 5 s with `RSX_TEXUPSTAT=1`. A race made 4 heaps (13 ms in total) and placed about
+  1,400-2,300 textures (50-76 ms in total for the whole run).
+- Rollback: `RSX_TEX_PLACED=0` (committed textures), `RSX_TEX_RING_MB=0` (per-slot staging).
+
+| Runs (fast lookup on) | >50 ms frames | Excess | Texture creation in those frames | Worst three | Race-start frame |
+| --- | --- | --- | --- | --- | --- |
+| on: fon1-fon3 | 6-9 | 400-477 ms | 9-13 ms | 140-148 / 128-133 | 85 ms (talloc 3 ms) |
+| off: toff1, toff2 | 12, 13 | 767, 754 ms | 267, 261 ms | 202/173/149, 207/175/134 | 173-175 ms (talloc 82 ms) |
+
+Working set did not separate: toff1 1,848 MB and toff2 2,105 MB median against 2,126-2,255 MB for the
+on runs; the ring (64 MB system memory) is inside that spread. Race screenshots (road, signage, crowd,
+mirror, HUD) render as with committed textures.
+Test: `scripts/test/texture_heap_alloc_native.py` (ported) compiles the real allocator: 157,758 random
+operations, 39,506 of them deferred releases. It checks for no overlap and no reuse of a pending range,
+that alignment and free bytes hold, and that everything coalesces back to one range per heap.
+
+### 3. Texture LRU (`RSX_TEX_LRU`, now default on)
+
+Already ported in GT5 Phase 33 and off. Measured with the other two on:
+
+| Runs | FPS | p99 | Excess | Worst three | Textures made | Working set median |
+| --- | --- | --- | --- | --- | --- | --- |
+| LRU: lru1-lru4 | 55.4, 55.3, 54.2, 54.1 | 28.9, 27.5, 29.3, 30.1 | 475, 410, 512, 416 ms | 128-130 / 155 | 2,405-2,430 | 1,859-2,165 MB |
+| default then: fon1-fon5 | 55.2, 55.4, 54.4, 54.2, 54.8 | 29.9, 29.1, 30.7, 31.3, 30.0 | 400-708 ms | 131-284 | 11,356-18,119 | 1,874-2,255 MB |
+
+The same FPS, p99 about 1 ms lower, 80% fewer texture creations, and no change in working set: made default.
+lru1 and lru3 have FrameTest maxima of 83 and 104 ms; the 104 ms interval had a 9 ms replay batch with no
+texture creation, so the time went outside the renderer. Rollback `RSX_TEX_LRU=0`.
+`texture_slot_policy_native.py` passes both modes.
+
+### 4. Learned sets after an MSAA change: measured, not ported
+
+On a copy of the warm cache (learned at the default 4x), two races at `RSX_MSAA=2`:
+
+- ms2a: the race prewarm still prepared the 824 learned 4x pipelines (3.25 s, from files: the pack no
+  longer matched), none usable. Grid frame 272 ms (lookup 72 ms), race start 131 ms (22 ms), excess
+  733 ms, about 240 pipelines made on demand: like a learning run.
+- ms2b: GT5 learns race membership in play (`pso_race_learn`), so the race set already had 1,174 members
+  (both counts) and prepared them in 234 ms; grid 123 ms, lookup 9 ms in long frames. A 1.3 s stall
+  75 s into ms2b had a 4 ms replay batch (outside the renderer) and is not counted against this.
+
+So GT5 loses the warm set only for the first race after an MSAA change. Prologue's fix lives in its
+offline preparation helper (`msaa_pipeline_map.py`), which GT5 does not have. A runtime re-target in
+recipe and pack preparation would save that one race; not done. The other count's members stay in the
+index until the 14-day prune.
+
+### Final defaults
+
+final2 (all defaults, no switch set, table warm): 55.3 FPS, p99 27.8 ms, max 35.3 ms, 6 frames over
+50 ms (excess 437 ms), grid frame 125 ms (lookup 1.3 ms); the race start is no longer among the long
+frames. No PSO failures, empty textures or device errors in the logs.
+
+Open: the heavy menu state (pipelines not resident); the remaining ~120-160 ms frames at race load
+(about 115-145 ms of replay with no lookup or texture cost) and the grid (65 ms of texture work).
+Measured on one route, one save, 720p/4x and this machine's GPU only.
+
 ## Bitdefender "Gen:Variant.Lazy" on gt5.exe: located and changed (2026-11-12)
 
 Release 0.1.2's ZIP had 7/64 VirusTotal detections: Bitdefender
