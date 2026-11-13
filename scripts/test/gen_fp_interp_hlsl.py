@@ -21,6 +21,11 @@ def texture_block():
         "// sample site with bias 0, identity swizzles and unmodified operands skip that work.",
         "// RSX_INTERP_NODISC: the host picks this variant for a program without KIL drawn with the alpha test",
         "// off; it has no discard, so the GPU can depth-test before running it.",
+        "// RSX_INTERP_EARLYZ: the host picks this variant for a draw that can discard but writes neither depth",
+        "// nor stencil; depth is then tested before the shader runs (a discarded pixel has nothing to undo).",
+        "#ifndef RSX_INTERP_EARLYZ",
+        "#define RSX_INTERP_EARLYZ 0",
+        "#endif",
         "#ifndef RSX_INTERP_NODISC",
         "#define RSX_INTERP_NODISC 0",
         "#endif",
@@ -433,8 +438,14 @@ struct RSXInterpOut {
     float4 c3 : SV_TARGET3;
 #endif
 };
+#if RSX_INTERP_EARLYZ
+[earlydepthstencil]
+#endif
 RSXInterpOut main(RSXInterpIn input) {
 #else
+#if RSX_INTERP_EARLYZ
+[earlydepthstencil]
+#endif
 float4 main(RSXInterpIn input) : SV_TARGET {
 #endif
 #if RSX_INTERP_LEGACY

@@ -89,6 +89,7 @@ smaller targets).
 | Probe 3: no `discard` anywhere (renders wrong) | 9.0 ms | 11.5 ms | 44.1 |
 | No-discard variant where legal (`NODISC=0` old) | 11.3 ms (11.7) | 13.1 ms (13.5) | 42.1 (41.8) |
 | Opcode dispatch as a switch (`SWITCH=0` old) | 10.5 ms (11.3) | 12.4 ms (13.1) | 43.2 (41.1) |
+| Early-depth variant (`EARLYZ=1`, opt-in) | 11.3 ms (11.2) | - | 42.8 (43.2) |
 
 - **No-discard variant (`RSX_SHADER_INTERP_NODISC=0`: old).** A shader that
   can discard is depth-tested after it runs, so hidden pixels ran the
@@ -107,9 +108,22 @@ smaller targets).
   Kept, as it is no slower.
 - Race screenshots with every draw interpreted are correct after both.
 
-**Next.** The interpreter loop is about 7.8 ms of interpreted draw time
-a frame: per-instruction decode and the opcode chain. Alpha-tested draws
-with depth writes off could use early depth testing even with `discard`.
+- **Early-depth variant (`RSX_SHADER_INTERP_EARLYZ=1`, opt-in).** A draw
+  that can discard but writes neither depth nor stencil gets
+  `[earlydepthstencil]`. Measured no faster: the race's alpha-tested
+  draws mostly write depth.
+- **Source buffer.** The early-depth attribute took the HLSL past the
+  backend's 64 KB source buffer, and every variant was refused without a
+  message (the first early-depth run used no interpreter at all). The
+  buffer is now 128 KB, and an overflow logs `[interp] shader source does
+  not fit`.
+
+**Where this leaves the interpreter.** With every draw interpreted, High
+Speed Ring runs at 43 FPS, against 54 for specialized shaders (6.3 at the
+start). The instruction loop is the remaining cost, about 7 ms of
+interpreted draw time a frame. As a stand-in for only the draws whose
+pipelines are not ready it is cheap; the next step is making it that
+default (plan C).
 
 Specialized shaders take 5.1 ms GPU; the interpreter is now about 3x that
 when it draws everything.
