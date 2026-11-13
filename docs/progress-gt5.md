@@ -4,6 +4,34 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## SPU DMA/channel fast paths: live acceptance and A/B (2026-11-13)
+
+Adapted Ascension-R's inactive-diagnostic gate and context-only MFC channel
+paths for GT5. `SPU_DMA_FAST=0` rolls back; `SPU_DMA_DIAG=1` forces original
+probe checks. Existing validation, coherency, copies, hooks and watchdogs stay.
+Native state/diagnostic parity checks and production channel compilation pass.
+
+Built the existing non-PGO Release target and ran one `gt5.exe` at a time,
+with `PS3_VERBOSE=0`, DXC, 720p/2x MSAA and VSync off. Existing shader caches
+were retained; neither shaderstamp checkout was accessed. The audio thread
+waited for the live run slot. Boot/menu, car list, HSR, Eiger rain and the
+opening movie passed short visual checks, with no crash/device-loss/stall
+reports. Not a full playthrough or audio acceptance.
+
+- HSR, on/off/off/on, 60 s each after 20 s: off 51.088/53.016 FPS;
+  on 53.256/53.251. Median 52.052 -> 53.254 (+2.3%); late frames
+  30.1% -> 24.1%, p99 34.23 -> 34.77 ms. The off spread exceeds the
+  median difference, so the exact gain remains preliminary.
+- Eiger rain, one 60 s off/on pair after a separate warmup: 48.427 ->
+  50.925 FPS (+5.2%). Inside Phase 45's ~5 FPS spread; needs repetition.
+- Car list, one 40 s off/on pair: 48.853 -> 48.939 FPS (+0.2%, neutral).
+
+The fast paths remain enabled with rollback. Details, executable hash,
+reproduction and limits: [dma-fastpaths.md](dma-fastpaths.md).
+`gt5boot.ps1` now waits for other games and only stops its own child; it also
+writes precise sample-window JSON. Evidence is ignored under `scratch/pv/dma-*`
+and `scratch/dma-live/`. Pending audio changes are separate.
+
 ## Profile-guided release builds (2026-11-13)
 
 `scripts/release/clean_build.py --profile <profdata>` makes the player ZIP

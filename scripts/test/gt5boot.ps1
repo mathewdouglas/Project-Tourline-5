@@ -47,15 +47,26 @@ if ($Movie) { $set.Remove("PAD_HOLD") }
 if ($FrameTest) { $set.GT5P_FRAME_LOG = "$dir\$Tag.frames.csv"; $set.PAD_HOLD += ",@RaceStart+1000-900000:CROSS" }
 if ($ExtraHold) { $set.PAD_HOLD += ",$ExtraHold" }
 foreach ($v in $Vars) { if (-not $v) { continue }; $k, $val = "$v" -split "=", 2; $set[$k] = $val }
-function Stop-GT5 { Get-Process gt5 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
+$p = $null
+function Stop-GT5 {
+    # Only this script's child belongs to us. Another test session may be
+    # waiting to launch; never stop its game during startup or cleanup.
+    if ($p -and -not $p.HasExited) {
+        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+        $p.WaitForExit(10000) | Out-Null
+    }
+}
 try {
-Stop-Stragglers; Stop-GT5
 if ($Fresh -or $FreshSave) {
     $a = @("$PSScriptRoot\gt5_reset.py"); if ($FreshSave) { $a += "--save" }
     & "$root\.venv\Scripts\python.exe" @a
 }
 foreach ($k in $set.Keys) { Set-Item "Env:$k" $set[$k] }
 if (-not $Exe) { $Exe = "$root\build\gt5.exe" }
+while ($other = @(Get-Process gt5 -ErrorAction SilentlyContinue)) {
+    "waiting for gt5.exe pid $(($other | ForEach-Object { $_.Id }) -join ', ')"
+    Start-Sleep -Seconds 2
+}
 $p = Start-Process -FilePath $Exe -WorkingDirectory $root -PassThru `
     -RedirectStandardOutput "$dir\$Tag.out" -RedirectStandardError "$dir\$Tag.err"
 foreach ($k in $set.Keys) { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
@@ -105,6 +116,14 @@ else {
             $txt = "frames {0} over {1:N1} s: {2:N1} FPS; interval median {3:N1} ms, p99 {4:N1} ms, max {5:N1} ms; late (>20 ms) {6:N1}%; walk {7:N2} ms/frame (cpu {8:N2})" -f `
                 $fr.Count, $span, (($fr.Count - 1) / $span), (& $pct 0.5), (& $pct 0.99), $sorted[-1], (100.0 * $late / $iv.Count), $walk, $walkCpu
             $txt | Set-Content "$dir\$Tag.frames.txt"; "FrameTest: $txt"
+            [ordered]@{
+                tag = $Tag; route = $Route; exe = $Exe
+                sample_start_ms = $tS0; sample_end_ms = $tS1
+                frames = $fr.Count; seconds = $span; fps = (($fr.Count - 1) / $span)
+                median_ms = (& $pct 0.5); p99_ms = (& $pct 0.99); max_ms = $sorted[-1]
+                late_percent = (100.0 * $late / $iv.Count); walk_ms = $walk; walk_cpu_ms = $walkCpu
+                spu_dma_fast = $set.SPU_DMA_FAST; ps3_verbose = $set.PS3_VERBOSE
+            } | ConvertTo-Json | Set-Content "$dir\$Tag.frames.json"
         } else { "FrameTest: too few frames in the window ($($fr.Count))" }
     }
 }
