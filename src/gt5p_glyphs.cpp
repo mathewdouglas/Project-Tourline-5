@@ -47,6 +47,7 @@ extern "C" {
 typedef int (*gt5p_repl_fn)(unsigned long long hash, unsigned w, unsigned h, unsigned fmt,
                             unsigned levels, unsigned nbytes, const void* src, const void** out);
 void rsx_tex_set_replacer(gt5p_repl_fn fn);
+void rsx_tex_set_replace_sizes(const unsigned* wh, int n);
 void rsx_tex_replace_invalidate(void);
 /* cellPad.c */
 extern volatile int g_pad_device_family;
@@ -749,6 +750,13 @@ void gt5p_glyphs_init()
         g_eff = resolve();
         if (g_table.empty()) return;
         printf("[glyphs] %zu textures listed; style %s%c", g_table.size(), style_name(g_eff.load()), 10);
+        /* Only the listed sizes can match: the backend hashes no others. */
+        std::vector<unsigned> wh;
+        for (const auto& kv : g_table) {
+            const unsigned k = kv.second.w << 16 | kv.second.h;
+            if (std::find(wh.begin(), wh.end(), k) == wh.end()) wh.push_back(k);
+        }
+        rsx_tex_set_replace_sizes(wh.data(), (int)wh.size());
         rsx_tex_set_replacer(rsx_replace);
         /* GT5P_GLYPHS_CYCLE=<ms>: step through the styles (tests the re-upload). */
         const char* cy = getenv("GT5P_GLYPHS_CYCLE");
