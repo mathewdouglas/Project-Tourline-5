@@ -34,6 +34,10 @@ extern void spu_overlay_register_region(uint32_t content_ea, uint32_t span, int 
 extern void gt5p_wwsjob_spu_func_00000A00(spu_context*);
 extern void gt5p_wwsjob_spu_recomp_register(void);
 
+extern void gt5p_j0B07CA3D_spu_func_00000000(spu_context*);
+extern void gt5p_j0B07CA3D_spu_recomp_register(void);
+extern void gt5p_j18DE3719_spu_func_00000000(spu_context*);
+extern void gt5p_j18DE3719_spu_recomp_register(void);
 extern void gt5p_j1B6BDAC3_spu_func_00000000(spu_context*);
 extern void gt5p_j1B6BDAC3_spu_recomp_register(void);
 extern void gt5p_j48AF2BC7_spu_func_00000000(spu_context*);
@@ -52,6 +56,10 @@ extern void gt5p_j9804ABA8_spu_func_00000000(spu_context*);
 extern void gt5p_j9804ABA8_spu_recomp_register(void);
 extern void gt5p_jABD49FC5_spu_func_00000000(spu_context*);
 extern void gt5p_jABD49FC5_spu_recomp_register(void);
+extern void gt5p_jCB9BD024_spu_func_00000000(spu_context*);
+extern void gt5p_jCB9BD024_spu_recomp_register(void);
+extern void gt5p_jCF635263_spu_func_00000000(spu_context*);
+extern void gt5p_jCF635263_spu_recomp_register(void);
 extern void gt5p_jD58063CD_spu_func_00000000(spu_context*);
 extern void gt5p_jD58063CD_spu_recomp_register(void);
 extern void gt5p_jEB79FDFC_spu_func_00000000(spu_context*);
@@ -116,288 +124,312 @@ void gt5p_spu_register_all(void)
     gt5p_wwsjob_spu_recomp_register();
     spu_workload_register_img(fp, gt5p_wwsjob_spu_func_00000A00, 1, "Wws_Job");
 
-    /* spujob_1B6BDAC375C5438D_13840.bin */
+    /* spujob_0B07CA3DA8C030C2_29920.bin */
     spu_begin_image(2);
+    gt5p_j0B07CA3D_spu_recomp_register();
+    spu_workload_register_img(0x0B07CA3DA8C030C2ULL, gt5p_j0B07CA3D_spu_func_00000000, 2,
+                              "j0B07CA3D");
+
+    /* spujob_18DE371921B1A751_13200.bin */
+    spu_begin_image(3);
+    gt5p_j18DE3719_spu_recomp_register();
+    spu_workload_register_img(0x18DE371921B1A751ULL, gt5p_j18DE3719_spu_func_00000000, 3,
+                              "j18DE3719");
+
+    /* spujob_1B6BDAC375C5438D_13840.bin */
+    spu_begin_image(4);
     gt5p_j1B6BDAC3_spu_recomp_register();
-    spu_workload_register_img(0x1B6BDAC375C5438DULL, gt5p_j1B6BDAC3_spu_func_00000000, 2,
+    spu_workload_register_img(0x1B6BDAC375C5438DULL, gt5p_j1B6BDAC3_spu_func_00000000, 4,
                               "j1B6BDAC3");
 
     /* spujob_48AF2BC79A72CB50_25232.bin */
-    spu_begin_image(3);
+    spu_begin_image(5);
     gt5p_j48AF2BC7_spu_recomp_register();
-    spu_workload_register_img(0x48AF2BC79A72CB50ULL, gt5p_j48AF2BC7_spu_func_00000000, 3,
+    spu_workload_register_img(0x48AF2BC79A72CB50ULL, gt5p_j48AF2BC7_spu_func_00000000, 5,
                               "j48AF2BC7");
 
     /* spujob_49C1D6C47E80AF43_24720.bin */
-    spu_begin_image(4);
+    spu_begin_image(6);
     gt5p_j49C1D6C4_spu_recomp_register();
-    spu_workload_register_img(0x49C1D6C47E80AF43ULL, gt5p_j49C1D6C4_spu_func_00000000, 4,
+    spu_workload_register_img(0x49C1D6C47E80AF43ULL, gt5p_j49C1D6C4_spu_func_00000000, 6,
                               "j49C1D6C4");
 
     /* spujob_5DA195169669A5FF_72464.bin */
-    spu_begin_image(5);
+    spu_begin_image(7);
     gt5p_j5DA19516_spu_recomp_register();
-    spu_workload_register_img(0x5DA195169669A5FFULL, gt5p_j5DA19516_spu_func_00000000, 5,
+    spu_workload_register_img(0x5DA195169669A5FFULL, gt5p_j5DA19516_spu_func_00000000, 7,
                               "j5DA19516");
 
     /* spujob_650EE1A07AEBB151_22032.bin */
-    spu_begin_image(6);
+    spu_begin_image(8);
     gt5p_j650EE1A0_spu_recomp_register();
-    spu_workload_register_img(0x650EE1A07AEBB151ULL, gt5p_j650EE1A0_spu_func_00000000, 6,
+    spu_workload_register_img(0x650EE1A07AEBB151ULL, gt5p_j650EE1A0_spu_func_00000000, 8,
                               "j650EE1A0");
 
     /* spujob_80435D36E623FAA0_19488.bin */
-    spu_begin_image(7);
+    spu_begin_image(9);
     gt5p_j80435D36_spu_recomp_register();
-    spu_workload_register_img(0x80435D36E623FAA0ULL, gt5p_j80435D36_spu_func_00000000, 7,
+    spu_workload_register_img(0x80435D36E623FAA0ULL, gt5p_j80435D36_spu_func_00000000, 9,
                               "j80435D36");
 
     /* spujob_82D0BE145EC28AEE_17424.bin */
-    spu_begin_image(8);
+    spu_begin_image(10);
     gt5p_j82D0BE14_spu_recomp_register();
-    spu_workload_register_img(0x82D0BE145EC28AEEULL, gt5p_j82D0BE14_spu_func_00000000, 8,
+    spu_workload_register_img(0x82D0BE145EC28AEEULL, gt5p_j82D0BE14_spu_func_00000000, 10,
                               "j82D0BE14");
 
     /* spujob_9804ABA84566F431_20624.bin */
-    spu_begin_image(9);
+    spu_begin_image(11);
     gt5p_j9804ABA8_spu_recomp_register();
-    spu_workload_register_img(0x9804ABA84566F431ULL, gt5p_j9804ABA8_spu_func_00000000, 9,
+    spu_workload_register_img(0x9804ABA84566F431ULL, gt5p_j9804ABA8_spu_func_00000000, 11,
                               "j9804ABA8");
 
     /* spujob_ABD49FC58F53F368_9488.bin */
-    spu_begin_image(10);
+    spu_begin_image(12);
     gt5p_jABD49FC5_spu_recomp_register();
-    spu_workload_register_img(0xABD49FC58F53F368ULL, gt5p_jABD49FC5_spu_func_00000000, 10,
+    spu_workload_register_img(0xABD49FC58F53F368ULL, gt5p_jABD49FC5_spu_func_00000000, 12,
                               "jABD49FC5");
 
+    /* spujob_CB9BD0241BB0DE67_53280.bin */
+    spu_begin_image(13);
+    gt5p_jCB9BD024_spu_recomp_register();
+    spu_workload_register_img(0xCB9BD0241BB0DE67ULL, gt5p_jCB9BD024_spu_func_00000000, 13,
+                              "jCB9BD024");
+
+    /* spujob_CF6352633FE351E3_24000.bin */
+    spu_begin_image(14);
+    gt5p_jCF635263_spu_recomp_register();
+    spu_workload_register_img(0xCF6352633FE351E3ULL, gt5p_jCF635263_spu_func_00000000, 14,
+                              "jCF635263");
+
     /* spujob_D58063CD2A0236B5_53408.bin */
-    spu_begin_image(11);
+    spu_begin_image(15);
     gt5p_jD58063CD_spu_recomp_register();
-    spu_workload_register_img(0xD58063CD2A0236B5ULL, gt5p_jD58063CD_spu_func_00000000, 11,
+    spu_workload_register_img(0xD58063CD2A0236B5ULL, gt5p_jD58063CD_spu_func_00000000, 15,
                               "jD58063CD");
 
     /* spujob_EB79FDFCD7112702_22288.bin */
-    spu_begin_image(12);
+    spu_begin_image(16);
     gt5p_jEB79FDFC_spu_recomp_register();
-    spu_workload_register_img(0xEB79FDFCD7112702ULL, gt5p_jEB79FDFC_spu_func_00000000, 12,
+    spu_workload_register_img(0xEB79FDFCD7112702ULL, gt5p_jEB79FDFC_spu_func_00000000, 16,
                               "jEB79FDFC");
 
     /* spujob_F523F26F69764538_64912.bin */
-    spu_begin_image(13);
+    spu_begin_image(17);
     gt5p_jF523F26F_spu_recomp_register();
-    spu_workload_register_img(0xF523F26F69764538ULL, gt5p_jF523F26F_spu_func_00000000, 13,
+    spu_workload_register_img(0xF523F26F69764538ULL, gt5p_jF523F26F_spu_func_00000000, 17,
                               "jF523F26F");
 
     /* spujob_FDFFAAC1BCD5352E_34704.bin */
-    spu_begin_image(14);
+    spu_begin_image(18);
     gt5p_jFDFFAAC1_spu_recomp_register();
-    spu_workload_register_img(0xFDFFAAC1BCD5352EULL, gt5p_jFDFFAAC1_spu_func_00000000, 14,
+    spu_workload_register_img(0xFDFFAAC1BCD5352EULL, gt5p_jFDFFAAC1_spu_func_00000000, 18,
                               "jFDFFAAC1");
 
     /* spujob_FE031AF67ED048DE_46928.bin */
-    spu_begin_image(15);
+    spu_begin_image(19);
     gt5p_jFE031AF6_spu_recomp_register();
-    spu_workload_register_img(0xFE031AF67ED048DEULL, gt5p_jFE031AF6_spu_func_00000000, 15,
+    spu_workload_register_img(0xFE031AF67ED048DEULL, gt5p_jFE031AF6_spu_func_00000000, 19,
                               "jFE031AF6");
 
     /* job body at 0x014BD280, 57568 bytes, runs at LS 0x4000 */
-    spu_begin_image(16);
+    spu_begin_image(20);
     gt5p_b014BD280_spu_recomp_register();
-    spu_overlay_register_region(0x014BD280u, 57568u, 16);
+    spu_overlay_register_region(0x014BD280u, 57568u, 20);
 
     /* job body at 0x014D6D00, 16320 bytes, runs at LS 0x4000 */
-    spu_begin_image(17);
+    spu_begin_image(21);
     gt5p_b014D6D00_spu_recomp_register();
-    spu_overlay_register_region(0x014D6D00u, 16320u, 17);
+    spu_overlay_register_region(0x014D6D00u, 16320u, 21);
 
     /* job body at 0x014DD280, 78320 bytes, runs at LS 0x4000 */
-    spu_begin_image(18);
+    spu_begin_image(22);
     gt5p_b014DD280_spu_recomp_register();
-    spu_overlay_register_region(0x014DD280u, 78320u, 18);
+    spu_overlay_register_region(0x014DD280u, 78320u, 22);
 
     /* job body at 0x014F3280, 18736 bytes, runs at LS 0x4000 */
-    spu_begin_image(19);
+    spu_begin_image(23);
     gt5p_b014F3280_spu_recomp_register();
-    spu_overlay_register_region(0x014F3280u, 18736u, 19);
+    spu_overlay_register_region(0x014F3280u, 18736u, 23);
 
     /* job body at 0x014F8500, 14000 bytes, runs at LS 0x4000 */
-    spu_begin_image(20);
+    spu_begin_image(24);
     gt5p_b014F8500_spu_recomp_register();
-    spu_overlay_register_region(0x014F8500u, 14000u, 20);
+    spu_overlay_register_region(0x014F8500u, 14000u, 24);
 
     /* job body at 0x014FBC00, 31808 bytes, runs at LS 0x4000 */
-    spu_begin_image(21);
+    spu_begin_image(25);
     gt5p_b014FBC00_spu_recomp_register();
-    spu_overlay_register_region(0x014FBC00u, 31808u, 21);
+    spu_overlay_register_region(0x014FBC00u, 31808u, 25);
 
     /* job body at 0x01503900, 15024 bytes, runs at LS 0x4000 */
-    spu_begin_image(22);
+    spu_begin_image(26);
     gt5p_b01503900_spu_recomp_register();
-    spu_overlay_register_region(0x01503900u, 15024u, 22);
+    spu_overlay_register_region(0x01503900u, 15024u, 26);
 
     /* job body at 0x01508480, 19536 bytes, runs at LS 0x4000 */
-    spu_begin_image(23);
+    spu_begin_image(27);
     gt5p_b01508480_spu_recomp_register();
-    spu_overlay_register_region(0x01508480u, 19536u, 23);
+    spu_overlay_register_region(0x01508480u, 19536u, 27);
 
     /* job body at 0x0150D180, 12608 bytes, runs at LS 0x4000 */
-    spu_begin_image(24);
+    spu_begin_image(28);
     gt5p_b0150D180_spu_recomp_register();
-    spu_overlay_register_region(0x0150D180u, 12608u, 24);
+    spu_overlay_register_region(0x0150D180u, 12608u, 28);
 
     /* job body at 0x01510B00, 5424 bytes, runs at LS 0x4000 */
-    spu_begin_image(25);
+    spu_begin_image(29);
     gt5p_b01510B00_spu_recomp_register();
-    spu_overlay_register_region(0x01510B00u, 5424u, 25);
+    spu_overlay_register_region(0x01510B00u, 5424u, 29);
 
     /* job body at 0x01512080, 31280 bytes, runs at LS 0x4000 */
-    spu_begin_image(26);
+    spu_begin_image(30);
     gt5p_b01512080_spu_recomp_register();
-    spu_overlay_register_region(0x01512080u, 31280u, 26);
+    spu_overlay_register_region(0x01512080u, 31280u, 30);
 
     /* job body at 0x0151A400, 92624 bytes, runs at LS 0x4000 */
-    spu_begin_image(27);
+    spu_begin_image(31);
     gt5p_b0151A400_spu_recomp_register();
-    spu_overlay_register_region(0x0151A400u, 92624u, 27);
+    spu_overlay_register_region(0x0151A400u, 92624u, 31);
 
     /* job body at 0x01530F00, 16176 bytes, runs at LS 0x4000 */
-    spu_begin_image(28);
+    spu_begin_image(32);
     gt5p_b01530F00_spu_recomp_register();
-    spu_overlay_register_region(0x01530F00u, 16176u, 28);
+    spu_overlay_register_region(0x01530F00u, 16176u, 32);
 
     /* job body at 0x01534E80, 14784 bytes, runs at LS 0x4000 */
-    spu_begin_image(29);
+    spu_begin_image(33);
     gt5p_b01534E80_spu_recomp_register();
-    spu_overlay_register_region(0x01534E80u, 14784u, 29);
+    spu_overlay_register_region(0x01534E80u, 14784u, 33);
 
     /* job body at 0x01538880, 62032 bytes, runs at LS 0x4000 */
-    spu_begin_image(30);
+    spu_begin_image(34);
     gt5p_b01538880_spu_recomp_register();
-    spu_overlay_register_region(0x01538880u, 62032u, 30);
+    spu_overlay_register_region(0x01538880u, 62032u, 34);
 
     /* job body at 0x01547B80, 6576 bytes, runs at LS 0x4000 */
-    spu_begin_image(31);
+    spu_begin_image(35);
     gt5p_b01547B80_spu_recomp_register();
-    spu_overlay_register_region(0x01547B80u, 6576u, 31);
+    spu_overlay_register_region(0x01547B80u, 6576u, 35);
 
     /* job body at 0x01564A80, 24800 bytes, runs at LS 0x4000 */
-    spu_begin_image(32);
+    spu_begin_image(36);
     gt5p_b01564A80_spu_recomp_register();
-    spu_overlay_register_region(0x01564A80u, 24800u, 32);
+    spu_overlay_register_region(0x01564A80u, 24800u, 36);
 
     /* job body at 0x0156EB80, 26336 bytes, runs at LS 0x4000 */
-    spu_begin_image(33);
+    spu_begin_image(37);
     gt5p_b0156EB80_spu_recomp_register();
-    spu_overlay_register_region(0x0156EB80u, 26336u, 33);
+    spu_overlay_register_region(0x0156EB80u, 26336u, 37);
 
     /* job body at 0x01577780, 12720 bytes, runs at LS 0x4000 */
-    spu_begin_image(34);
+    spu_begin_image(38);
     gt5p_b01577780_spu_recomp_register();
-    spu_overlay_register_region(0x01577780u, 12720u, 34);
+    spu_overlay_register_region(0x01577780u, 12720u, 38);
 
     /* job body at 0x0157B700, 12624 bytes, runs at LS 0x4000 */
-    spu_begin_image(35);
+    spu_begin_image(39);
     gt5p_b0157B700_spu_recomp_register();
-    spu_overlay_register_region(0x0157B700u, 12624u, 35);
+    spu_overlay_register_region(0x0157B700u, 12624u, 39);
 
     /* job body at 0x01599C80, 146080 bytes, runs at LS 0x4000 */
-    spu_begin_image(36);
+    spu_begin_image(40);
     gt5p_b01599C80_spu_recomp_register();
-    spu_overlay_register_region(0x01599C80u, 146080u, 36);
+    spu_overlay_register_region(0x01599C80u, 146080u, 40);
 
     /* job body at 0x015C3980, 4656 bytes, runs at LS 0x4000 */
-    spu_begin_image(37);
+    spu_begin_image(41);
     gt5p_b015C3980_spu_recomp_register();
-    spu_overlay_register_region(0x015C3980u, 4656u, 37);
+    spu_overlay_register_region(0x015C3980u, 4656u, 41);
 
     /* job body at 0x015C4C00, 12464 bytes, runs at LS 0x4000 */
-    spu_begin_image(38);
+    spu_begin_image(42);
     gt5p_b015C4C00_spu_recomp_register();
-    spu_overlay_register_region(0x015C4C00u, 12464u, 38);
+    spu_overlay_register_region(0x015C4C00u, 12464u, 42);
 
     /* job body at 0x015C7D00, 2608 bytes, runs at LS 0x4000 */
-    spu_begin_image(39);
+    spu_begin_image(43);
     gt5p_b015C7D00_spu_recomp_register();
-    spu_overlay_register_region(0x015C7D00u, 2608u, 39);
+    spu_overlay_register_region(0x015C7D00u, 2608u, 43);
 
     /* job body at 0x015C8780, 5808 bytes, runs at LS 0x4000 */
-    spu_begin_image(40);
+    spu_begin_image(44);
     gt5p_b015C8780_spu_recomp_register();
-    spu_overlay_register_region(0x015C8780u, 5808u, 40);
+    spu_overlay_register_region(0x015C8780u, 5808u, 44);
 
     /* job body at 0x015DA580, 9776 bytes, runs at LS 0x4000 */
-    spu_begin_image(41);
+    spu_begin_image(45);
     gt5p_b015DA580_spu_recomp_register();
-    spu_overlay_register_region(0x015DA580u, 9776u, 41);
+    spu_overlay_register_region(0x015DA580u, 9776u, 45);
 
     /* job body at 0x015DCC00, 6960 bytes, runs at LS 0x4000 */
-    spu_begin_image(42);
+    spu_begin_image(46);
     gt5p_b015DCC00_spu_recomp_register();
-    spu_overlay_register_region(0x015DCC00u, 6960u, 42);
+    spu_overlay_register_region(0x015DCC00u, 6960u, 46);
 
     /* job body at 0x015DE780, 5424 bytes, runs at LS 0x4000 */
-    spu_begin_image(43);
+    spu_begin_image(47);
     gt5p_b015DE780_spu_recomp_register();
-    spu_overlay_register_region(0x015DE780u, 5424u, 43);
+    spu_overlay_register_region(0x015DE780u, 5424u, 47);
 
     /* job body at 0x015DFD00, 18192 bytes, runs at LS 0x4000 */
-    spu_begin_image(44);
+    spu_begin_image(48);
     gt5p_b015DFD00_spu_recomp_register();
-    spu_overlay_register_region(0x015DFD00u, 18192u, 44);
+    spu_overlay_register_region(0x015DFD00u, 18192u, 48);
 
     /* job body at 0x015E4480, 2992 bytes, runs at LS 0x4000 */
-    spu_begin_image(45);
+    spu_begin_image(49);
     gt5p_b015E4480_spu_recomp_register();
-    spu_overlay_register_region(0x015E4480u, 2992u, 45);
+    spu_overlay_register_region(0x015E4480u, 2992u, 49);
 
     /* job body at 0x015E5080, 19648 bytes, runs at LS 0x4000 */
-    spu_begin_image(46);
+    spu_begin_image(50);
     gt5p_b015E5080_spu_recomp_register();
-    spu_overlay_register_region(0x015E5080u, 19648u, 46);
+    spu_overlay_register_region(0x015E5080u, 19648u, 50);
 
     /* job body at 0x015E9D80, 23616 bytes, runs at LS 0x4000 */
-    spu_begin_image(47);
+    spu_begin_image(51);
     gt5p_b015E9D80_spu_recomp_register();
-    spu_overlay_register_region(0x015E9D80u, 23616u, 47);
+    spu_overlay_register_region(0x015E9D80u, 23616u, 51);
 
     /* job body at 0x015EFA00, 27744 bytes, runs at LS 0x4000 */
-    spu_begin_image(48);
+    spu_begin_image(52);
     gt5p_b015EFA00_spu_recomp_register();
-    spu_overlay_register_region(0x015EFA00u, 27744u, 48);
+    spu_overlay_register_region(0x015EFA00u, 27744u, 52);
 
     /* job body at 0x015F6780, 4032 bytes, runs at LS 0x4000 */
-    spu_begin_image(49);
+    spu_begin_image(53);
     gt5p_b015F6780_spu_recomp_register();
-    spu_overlay_register_region(0x015F6780u, 4032u, 49);
+    spu_overlay_register_region(0x015F6780u, 4032u, 53);
 
     /* job body at 0x0163EB00, 25184 bytes, runs at LS 0x4000 */
-    spu_begin_image(50);
+    spu_begin_image(54);
     gt5p_b0163EB00_spu_recomp_register();
-    spu_overlay_register_region(0x0163EB00u, 25184u, 50);
+    spu_overlay_register_region(0x0163EB00u, 25184u, 54);
 
     /* job body at 0x01645600, 3520 bytes, runs at LS 0x4000 */
-    spu_begin_image(51);
+    spu_begin_image(55);
     gt5p_b01645600_spu_recomp_register();
-    spu_overlay_register_region(0x01645600u, 3520u, 51);
+    spu_overlay_register_region(0x01645600u, 3520u, 55);
 
     /* job body at 0x017B6500, 29232 bytes, runs at LS 0x4000 */
-    spu_begin_image(52);
+    spu_begin_image(56);
     gt5p_b017B6500_spu_recomp_register();
-    spu_overlay_register_region(0x017B6500u, 29232u, 52);
+    spu_overlay_register_region(0x017B6500u, 29232u, 56);
 
     /* job body at 0x017BD780, 55488 bytes, runs at LS 0x4000 */
-    spu_begin_image(53);
+    spu_begin_image(57);
     gt5p_b017BD780_spu_recomp_register();
-    spu_overlay_register_region(0x017BD780u, 55488u, 53);
+    spu_overlay_register_region(0x017BD780u, 55488u, 57);
 
     /* task ELF spujob_CDCD962FAC770DB9_17400.bin, entry LS 0x3050 */
-    spu_begin_image(54);
+    spu_begin_image(58);
     gt5p_tCDCD962F_spu_recomp_register();
-    spu_workload_register_img(0xCDCD962FAC770DB9ULL, gt5p_tCDCD962F_spu_func_00003050, 54,
+    spu_workload_register_img(0xCDCD962FAC770DB9ULL, gt5p_tCDCD962F_spu_func_00003050, 58,
                               "tCDCD962F");
 
     spu_begin_image(0);
 
-    printf("[GT5P] SPU: Wws_Job (fp=0x%016llX) + 14 job image(s) registered\n",
+    printf("[GT5P] SPU: Wws_Job (fp=0x%016llX) + 18 job image(s) registered\n",
            (unsigned long long)fp);
 }
