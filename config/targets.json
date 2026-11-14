@@ -96,5 +96,26 @@
     "aspect_16_9_float": "0x019133B0",
     "ui_aspect_16_9_float": "0x01914A48",
     "scene_camera_aspect_16_9_float": "0x018EB70C"
+  },
+  "BCUS98114-v211": {
+    "description": "US disc, Gran Turismo 5, update 02.11 executable (the 01.05-02.11 update chain; base of the master mod). Bring-up: measured lift inputs only; 01.04's hooks and screen addresses are not carried over",
+    "title_id": "BCUS98114",
+    "exe_name": "gt5_211",
+    "code_end": "0x00FA63A0",
+    "install_prompt_file": "installed00.dat",
+    "seeds": "config/extra_seeds_bcus98114_v211.json",
+    "setjmp": "0x00BD6F94",
+    "longjmp": "0x00BD70B8",
+    "wws_job_pm_ea": "0x016A9000",
+    "wws_job_pm_size": 12032,
+    "wws_job_pm_extra_funcs": "0xA2C",
+    "wws_job_bodies": [["0x014BD280", 57568, "0x4000"], ["0x014D6D00", 16320, "0x4000"], ["0x014DD280", 78320, "0x4000"], ["0x014F3280", 18736, "0x4000"], ["0x014F8500", 14000, "0x4000"], ["0x014FBC00", 31808, "0x4000"], ["0x01503900", 15024, "0x4000"], ["0x01508480", 19536, "0x4000"], ["0x0150D180", 12608, "0x4000"], ["0x01510B00", 5424, "0x4000"], ["0x01512080", 31280, "0x4000"], ["0x0151A400", 92624, "0x4000"], ["0x01530F00", 16176, "0x4000"], ["0x01534E80", 14784, "0x4000"], ["0x01538880", 62032, "0x4000"], ["0x01547B80", 6576, "0x4000"], ["0x01564A80", 24800, "0x4000"], ["0x0156EB80", 26336, "0x4000"], ["0x01577780", 12720, "0x4000"], ["0x0157B700", 12624, "0x4000"], ["0x01599C80", 146080, "0x4000"], ["0x015C3980", 4656, "0x4000"], ["0x015C4C00", 12464, "0x4000"], ["0x015C7D00", 2608, "0x4000"], ["0x015C8780", 5808, "0x4000"], ["0x015DA580", 9776, "0x4000"], ["0x015DCC00", 6960, "0x4000"], ["0x015DE780", 5424, "0x4000"], ["0x015DFD00", 18192, "0x4000"], ["0x015E4480", 2992, "0x4000"], ["0x015E5080", 19648, "0x4000"], ["0x015E9D80", 23616, "0x4000"], ["0x015EFA00", 27744, "0x4000"], ["0x015F6780", 4032, "0x4000"], ["0x0163EB00", 25184, "0x4000"], ["0x01645600", 3520, "0x4000"], ["0x017B6500", 29232, "0x4000"], ["0x017BD780", 55488, "0x4000"]],
+    "spu_registry": "src/gen/spu_workloads_bcus98114_v211.c",
+    "boot_from": "bdvd",
+    "hdd_title": false,
+    "spurs_synth_job_done": false,
+    "spu_sn_defer": 4,
+    "gcm_ctrl_base": "0x03000000",
+    "gt5p_allocwatch": false
   }
 }
