@@ -52,8 +52,11 @@ int gt5p_spu_region_init(void) { return 1; }
 #endif
 #ifdef BENCH_RP
 /* Register-promoted copies (scripts/spu_regpromo.py), switched on. */
-volatile int g_gt5p_spu_regpromo = 1;
-int gt5p_spu_regpromo_init(void) { return 1; }
+#ifndef BENCH_RP_MODE
+#define BENCH_RP_MODE 1
+#endif
+volatile int g_gt5p_spu_regpromo = BENCH_RP_MODE;
+int gt5p_spu_regpromo_init(void) { return BENCH_RP_MODE; }
 void gt5p_spu_regpromo_check(spu_context* ctx, void (*orig)(spu_context*), void (*promo)(spu_context*), uint32_t block)
 { (void)ctx; (void)orig; (void)promo; (void)block; }
 #endif
@@ -105,10 +108,16 @@ int main(int argc, char** argv)
                 void (*t)(spu_context*) = g_spu_trampoline_fn; g_spu_trampoline_fn = NULL; t(&s_ctx);
             }
             QueryPerformanceCounter(&t1);
-            if (s_bad || s_ctx.pc != ret) { fprintf(stderr, "state %d: ended at pc 0x%X, expected 0x%X (bad=%d)\n", k, s_ctx.pc, ret, s_bad); return 1; }
+            if (s_bad
+#ifndef BENCH_BLOCK
+                || s_ctx.pc != ret
+#endif
+                ) { fprintf(stderr, "state %d: ended at pc 0x%X, expected 0x%X (bad=%d)\n", k, s_ctx.pc, ret, s_bad); return 1; }
             const double us = (double)(t1.QuadPart - t0.QuadPart) * 1e6 / (double)qf.QuadPart;
             if (nb < 64) best[nb++] = us;
-            const uint64_t hh = fnv(s_ctx.ls_store, SPU_LS_SIZE, fnv(s_ctx.gpr, sizeof s_ctx.gpr, 1469598103934665603ULL));
+            uint64_t hh = fnv(s_ctx.ls_store, SPU_LS_SIZE, fnv(s_ctx.gpr, sizeof s_ctx.gpr, 1469598103934665603ULL));
+            hh=fnv(&s_ctx.pc,sizeof s_ctx.pc,hh);
+            hh=fnv(&s_ctx.int_enable,sizeof s_ctx.int_enable,hh);
             if (r && hh != hash) { fprintf(stderr, "state %d: not deterministic\n", k); return 1; }
             hash = hh;
         }

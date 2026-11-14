@@ -36,6 +36,21 @@ public class WinShot { [DllImport("user32.dll")] public static extern bool Print
  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; } }
 '@ }
+if ($Cpu -and -not ("SpuThreadName" -as [type])) {
+Add-Type @'
+using System; using System.Runtime.InteropServices;
+public class SpuThreadName {
+ [DllImport("kernel32.dll")] static extern IntPtr OpenThread(uint a, bool i, uint id);
+ [DllImport("kernel32.dll")] static extern int GetThreadDescription(IntPtr h, out IntPtr p);
+ [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+ [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr p);
+ public static string Get(uint id) { IntPtr h=OpenThread(0x0800,false,id), p=IntPtr.Zero;
+  if(h==IntPtr.Zero) return "";
+  try { return GetThreadDescription(h,out p)>=0 ? Marshal.PtrToStringUni(p) : ""; }
+  finally { if(p!=IntPtr.Zero) LocalFree(p); CloseHandle(h); }
+ }
+}
+'@ }
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $dir = "$root\scratch\pv"; New-Item -ItemType Directory -Force $dir | Out-Null
 $set = @{ GT5P_NO_SETTINGS = "1"; FS_HIDE = "grim/file/contents"; PS3_VERBOSE = "0"; GT5P_PROFVIEW = "0";
@@ -96,7 +111,10 @@ else {
     if ($Cpu -and -not $p.HasExited) {
         $p.Refresh(); $span = ($tS1 - $tS0) / 1000.0
         $rows = foreach ($t in $p.Threads) { $d = $t.TotalProcessorTime.TotalSeconds - [double]$thr0[$t.Id]
-            if ($d -gt 0.02 * $span) { [pscustomobject]@{ Tid = $t.Id; PctCore = [int](100 * $d / $span) } } }
+            if ($d -gt 0.02 * $span) { [pscustomobject]@{ Tid = $t.Id; PctCore = (100 * $d / $span); CpuSeconds = $d; Name = [SpuThreadName]::Get($t.Id) } } }
+        [ordered]@{ sample_start_ms=$tS0; sample_end_ms=$tS1; seconds=$span;
+            process_cpu_seconds=($p.TotalProcessorTime.TotalSeconds-$cpu0); threads=@($rows) } |
+            ConvertTo-Json -Depth 5 | Set-Content "$dir\$Tag.cpu.json"
         $rep = "process {0:N2} cores over {1:N0} s`n" -f (($p.TotalProcessorTime.TotalSeconds - $cpu0) / $span), $span
         $rep += ($rows | Sort-Object PctCore -Descending | Select-Object -First 20 | Format-Table -AutoSize | Out-String)
         $rep | Set-Content "$dir\$Tag.cpu.txt"; $rep
