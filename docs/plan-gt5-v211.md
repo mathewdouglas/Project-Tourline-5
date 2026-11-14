@@ -407,6 +407,58 @@ but still uses the 6.2 GiB once, so the virtual install is preferred.
 Switches: `PS3_FS_VOLMAP=0` stores real files as today, and `=2` checks each
 served read against a real copy when one exists.
 
+**Status (2026-11-14, T23 in progress).** Built differently from items 1
+and 4 above: conversion happens after the fact, not by watching the
+install's reads and writes. The game installs real files as today, and the
+launcher then replaces verified copies.
+
+- **Runtime** (`libs/filesystem/volmap.c` and hooks in `cellFs.c`, in the
+  compatibility patch).
+  - A record is 256 bytes: magic, offset, length, CRC-32, the first and
+    last 16 bytes, the volume's size, and the volume's guest path
+    (`/dev_bdvd/PS3_GAME/USRDIR/GT.VOL`).
+  - Read-only opens read a window of the volume. Open checks the volume's
+    size and the head and tail bytes (`PS3_FS_VOLMAP=2` also checks the CRC).
+  - stat and fstat report the range's size. Writes and `ftruncate` on such
+    a descriptor return EBADF.
+  - Opening for writing without `O_TRUNC`, or truncating by path, first
+    turns the record back into the real file, atomically. `O_TRUNC`,
+    `O_EXCL`, rename and unlink act on the record itself.
+  - A changed or missing volume returns `CELL_EIO`.
+  - Measured in two recent runs: normal play opens every `PDIPFS` file with
+    flags `0x0` (about 490 opens a run), so play never turns a record back
+    into a file.
+- **Converter.**
+  - `scripts/volmap.py` and `launcher/volmap.h` use the same method. They
+    read each file of at least 4 KiB once to get its first 64 bytes, scan the
+    volume once at 0x800 steps, and verify every match in full before
+    replacing the file.
+  - Dry run on RPCS3's 01.04 install, which changed nothing: 12,233 files
+    (6.23 GiB) would become records, in 32 s. 905 files over 4 KiB matched
+    nothing (the package's own files), and 3,312 smaller files are left as
+    they are.
+- **Launcher.**
+  - Import writes records instead of copying matched files, so the import
+    also stops needing that space.
+  - Before play, `link_installed_data` converts in place whenever the
+    ordinary files changed since the last pass (stored in `volmap.ini`).
+    That covers the game's own first-boot install and installs set up
+    before this change.
+  - Only an engine that declares `volmap=1` in `pt5-release.ini` gets records.
+- **Test.** `scripts/test/volmap_fs.py` builds a synthetic disc and install
+  and runs the converter (convert, idempotence, restore, verify). It then
+  runs the real `cellFs.c` and `volmap.c` in a harness covering reads,
+  seeks, stat, copy on write, truncation, refused writes, a changed or
+  missing volume, and modes 0 and 2. It passes, and fails as expected when
+  records are off.
+- **Still open.**
+  - A live boot and race with converted data: blocked while the game slot
+    was in use.
+  - A launcher restore path for `PT5_VOLMAP=0` after conversion. Until then,
+    use `volmap.py restore`.
+  - A player-setup test that drives the launcher's import with records.
+  - Old setup backups under `<storage>\backups` are not converted.
+
 ### Milestones
 
 | | Milestone | Done when |

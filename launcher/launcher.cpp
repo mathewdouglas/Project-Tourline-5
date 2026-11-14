@@ -218,6 +218,8 @@ static std::wstring quote(const fs::path& p) {
     return out + L'"';
 }
 
+#include <unordered_map>
+#include "volmap.h"
 #include "storage.h"
 
 // Starts a child in a kill-on-close job with its output in logs/<tag>.*.
@@ -673,7 +675,8 @@ static void configure(fs::path disc, fs::path installed, fs::path executable) {
         fail(L"Choose the source installation outside the launcher's import/storage root.");
     const bool reuse = fs::exists(game) && fs::equivalent(game, installed);
     setup_progress(0.20, "Copying and verifying installed update data");
-    if (!reuse) copy_verified(installed, staging.path / L"game", L"Importing GT5 installed data");
+    if (!reuse) copy_verified(installed, staging.path / L"game", L"Importing GT5 installed data", false,
+                              disc / L"USRDIR/GT.VOL");
     setup_progress(0.90, "Verifying imported executable");
     fs::copy_file(executable, staging.path / L"EMAIN.ELF");
     if (hash(staging.path / L"EMAIN.ELF") != PT5_ELF_SHA256) fail(L"The executable changed during import. Previous setup is unchanged.");
@@ -721,6 +724,31 @@ static void validate_setup() {
     const auto elf = data/L"input/EMAIN.ELF";
     if (!fs::is_regular_file(elf) || fs::file_size(elf) != PT5_ELF_BYTES || hash(elf) != PT5_ELF_SHA256)
         fail(L"The imported executable is missing or changed. Run tourline5.exe --setup.");
+}
+// Virtual install after the game's own first-boot install (or any other new
+// copies): records replace verified copies of GT.VOL ranges (volmap.h). Runs
+// only when the installed files changed since the last pass; a cancelled pass
+// is not offered again until they change. PT5_VOLMAP=0 off.
+static void link_installed_data(const fs::path& disc) {
+    const auto pdipfs = data/L"gamedata/dev_hdd0/game/BCUS98114/USRDIR/PDIPFS";
+    const auto volume = disc/L"USRDIR/GT.VOL";
+    if (!volmap::enabled() || !fs::is_directory(pdipfs) || !fs::is_regular_file(volume)) return;
+    const auto ini = data/L"volmap.ini";
+    if (profile(ini, L"game", L"signature") == volmap::signature(pdipfs)) return;
+    CopyState state; state.total = 1000;
+    volmap::Result result;
+    with_progress(L"Freeing disk space", L"Game data that is already on your disc is replaced by links to the disc. This runs once after the game installs its data.", state, [&] {
+        {
+            std::lock_guard<std::mutex> guard(state.mutex);
+            state.current = L"Matching installed game data with your disc. Your disc files are only read.";
+        }
+        result = volmap::convert(pdipfs, volume, state.cancel,
+                                 [&](double f) { state.copied = static_cast<uint64_t>(1000 * f); });
+    });
+    setting(ini, L"signature", volmap::signature(pdipfs));
+    fwprintf(stderr, L"[volmap] %llu installed files (%.2f GiB) now read from the disc%ls\n",
+             static_cast<unsigned long long>(result.files), result.bytes / 1073741824.0,
+             result.cancelled ? L"; cancelled" : L"");
 }
 static fs::path validate_engine() {
     const auto release = install/L"pt5-release.ini";
@@ -860,6 +888,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         setenv(L"GT5P_SETTINGS", settings.wstring());
         const auto selected_game = game_folder(profile(data/L"setup.ini", L"game", L"directory"));
         setenv(L"GT5P_GAME_DIR", selected_game.wstring()+L"/");
+        link_installed_data(selected_game);
         if (env(L"RSX_SHADER_CACHE").empty()) setenv(L"RSX_SHADER_CACHE", (data/L"shadercache").wstring());
         setenv(L"GT5P_LAUNCHER_RESTART", L"1");
         if (env(L"PS3_VERBOSE").empty()) setenv(L"PS3_VERBOSE", L"0");

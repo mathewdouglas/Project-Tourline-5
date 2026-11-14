@@ -235,7 +235,8 @@ def main():
                f'elf_sha256={sha(elf)}\nengine_sha256={sha(files[ENGINE])}\n')
     if args.pgo_profile:
         release += f'pgo_profile_sha256={sha(regular(args.pgo_profile))}\n'
-    generated['pt5-release.ini'] = f'[game]\ntarget={TARGET}\nengine_sha256={sha(files[ENGINE])}\n'
+    # volmap=1: the engine serves virtual-install records (launcher/volmap.h).
+    generated['pt5-release.ini'] = f'[game]\ntarget={TARGET}\nengine_sha256={sha(files[ENGINE])}\nvolmap=1\n'
     before = {n: (p.stat().st_size, p.stat().st_mtime_ns) for n, p in files.items()}
     if stage:
         # Prevent copying a source directory into itself (including via aliases).

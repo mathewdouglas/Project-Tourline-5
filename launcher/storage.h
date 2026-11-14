@@ -90,8 +90,10 @@ static void with_progress(const wchar_t* title, const wchar_t* content, CopyStat
     if (state.error) std::rethrow_exception(state.error);
 }
 // Always copy into a new staging/empty directory. Never move a source file.
+// With a disc volume (virtual install, volmap.h), files under USRDIR/PDIPFS
+// that are verified copies of a volume range are written as records instead.
 static void copy_verified(const fs::path& source, const fs::path& destination, const wchar_t* title,
-                          bool storage_copy = false) {
+                          bool storage_copy = false, const fs::path& volume = {}) {
     std::vector<CopyItem> files; CopyState state;
     for (const auto& entry : fs::recursive_directory_iterator(source)) {
         const auto relative = entry.path().lexically_relative(source);
@@ -104,14 +106,40 @@ static void copy_verified(const fs::path& source, const fs::path& destination, c
         files.push_back({relative, bytes, entry.is_directory()}); state.total += bytes;
     }
     fs::create_directories(destination);
-    if (fs::space(destination).available < state.total + 64 * 1024 * 1024)
-        fail(L"Not enough free space in " + destination.wstring() + L". The source remains unchanged.");
+    const bool linked = !volume.empty() && volmap::enabled();
+    auto check_space = [&](uint64_t saved) {
+        if (fs::space(destination).available < state.total - saved + 64 * 1024 * 1024)
+            fail(L"Not enough free space in " + destination.wstring() + L". The source remains unchanged.");
+    };
+    if (!linked) check_space(0);
     with_progress(title, L"Copying your selected files. Your original files will not be modified.", state, [&] {
+        volmap::Plan plan;
+        if (linked) {
+            {
+                std::lock_guard<std::mutex> guard(state.mutex);
+                state.current = L"Matching installed data with your disc, so data already on the disc is not copied again.";
+            }
+            plan = volmap::plan(source / L"USRDIR/PDIPFS", volume, state.cancel, nullptr);
+            if (state.cancel) throw Cancelled{};
+            check_space(plan.bytes);
+        }
         for (const auto& item : files) {
             if (state.cancel) throw Cancelled{};
             const auto from = source / item.relative, to = destination / item.relative;
             if (item.directory) { fs::create_directories(to); continue; }
             fs::create_directories(to.parent_path());
+            if (linked) {
+                std::string record;
+                if (volmap::make_record(from, plan.at(from), plan, record, state.cancel)) {
+                    std::ofstream f(to, std::ios::binary | std::ios::trunc);
+                    f.write(record.data(), static_cast<std::streamsize>(record.size()));
+                    f.flush();
+                    if (!f) fail(L"Could not write " + to.wstring() + L". The source and previous setup are unchanged.");
+                    state.completed += item.bytes; state.copied = state.completed;
+                    continue;
+                }
+                if (state.cancel) throw Cancelled{};
+            }
             {
                 std::lock_guard<std::mutex> guard(state.mutex);
                 state.current = L"Copying and verifying " + item.relative.wstring() +

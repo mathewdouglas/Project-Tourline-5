@@ -4972,10 +4972,18 @@ index 00000000..e8aa9f7a
 +
 +#endif
 diff --git a/libs/filesystem/cellFs.c b/libs/filesystem/cellFs.c
-index 5166a47d..0fe74820 100644
+index 5166a47d..df0baa82 100644
 --- a/libs/filesystem/cellFs.c
 +++ b/libs/filesystem/cellFs.c
-@@ -14,6 +14,7 @@
+@@ -6,6 +6,7 @@
+  */
+ 
+ #include "cellFs.h"
++#include "volmap.h"
+ #include "../../runtime/platform/win32_backtrace.h"   /* RtlCaptureStackBackTrace / GetModuleHandleA on POSIX */
+ #include "ps3emu/endian.h"
+ #include <stdio.h>
+@@ -14,6 +15,7 @@
  #include <sys/stat.h>
  #include <errno.h>
  #include "../../runtime/ppu/ppu_memory.h"   /* GUEST_PTR, vm_write*: guest EA -> host */
@@ -4983,7 +4991,7 @@ index 5166a47d..0fe74820 100644
  
  /* glibc's <sys/stat.h> exposes st_atime/st_mtime/st_ctime as macros that expand
   * to st_atim.tv_sec etc.  They collide with the identically named members of the
-@@ -74,6 +75,9 @@ static void init_default_mappings(void)
+@@ -74,6 +76,9 @@ static void init_default_mappings(void)
      cellfs_add_path_mapping("/dev_flash/", "gamedata/dev_flash/");
      cellfs_add_path_mapping("/app_home/",  "gamedata/app_home/");
      cellfs_add_path_mapping("/dev_usb000/","gamedata/dev_usb/");
@@ -4993,7 +5001,7 @@ index 5166a47d..0fe74820 100644
  }
  
  void cellfs_set_root_path(const char* root)
-@@ -126,6 +130,24 @@ static int translate_path(const char* ps3_path, char* host_buf, size_t buf_size)
+@@ -126,6 +131,24 @@ static int translate_path(const char* ps3_path, char* host_buf, size_t buf_size)
      if (!ps3_path || !host_buf || buf_size == 0)
          return -1;
  
@@ -5018,7 +5026,7 @@ index 5166a47d..0fe74820 100644
      /* Find longest matching prefix */
      int best = -1;
      size_t best_len = 0;
-@@ -157,8 +179,17 @@ static int translate_path(const char* ps3_path, char* host_buf, size_t buf_size)
+@@ -157,8 +180,17 @@ static int translate_path(const char* ps3_path, char* host_buf, size_t buf_size)
          return -1;
  
      const char* remainder = ps3_path + best_len;
@@ -5038,7 +5046,7 @@ index 5166a47d..0fe74820 100644
  
      /* A mapped path with an empty remainder ends in a separator ("…/dev_hdd0/"),
       * and stat() rejects that on Windows -- so the directory a game asks about
-@@ -215,6 +246,78 @@ int cellfs_translate_path(const char* ps3_path, char* host_buf, size_t buf_size)
+@@ -215,6 +247,78 @@ int cellfs_translate_path(const char* ps3_path, char* host_buf, size_t buf_size)
      return translate_path(ps3_path, host_buf, buf_size);
  }
  
@@ -5117,7 +5125,19 @@ index 5166a47d..0fe74820 100644
  /* ---------------------------------------------------------------------------
   * Host stat -> CellFsStat conversion
   * -----------------------------------------------------------------------*/
-@@ -322,27 +425,53 @@ typedef struct {
+@@ -304,6 +408,11 @@ typedef struct {
+     char   path[CELL_FS_MAX_FS_PATH_LENGTH];
+     FILE*  host_fp;
+     s32    flags;
++    /* Volume-range record (volmap.h): host_fp is the volume, and the guest
++     * sees only [vbase, vbase + vlen) of it, at positions 0..vlen. */
++    int    vmap;
++    u64    vbase;
++    u64    vlen;
+ } FsFileSlot;
+ 
+ typedef struct {
+@@ -322,27 +431,56 @@ typedef struct {
  static FsFileSlot s_files[MAX_OPEN_FILES];
  static FsDirSlot  s_dirs[MAX_OPEN_DIRS];
  
@@ -5145,6 +5165,9 @@ index 5166a47d..0fe74820 100644
      for (int i = 3; i < MAX_OPEN_FILES; i++) {  /* skip 0,1,2 = stdin/out/err */
          if (!s_files[i].in_use) {
 +            s_files[i].host_fp = NULL;
++            s_files[i].vmap = 0;
++            s_files[i].vbase = 0;
++            s_files[i].vlen = 0;
              s_files[i].in_use = 1;
 -            return i;
 +            fd = i;
@@ -5175,7 +5198,7 @@ index 5166a47d..0fe74820 100644
  }
  
  /* Build fopen mode string from PS3 flags */
-@@ -353,6 +482,19 @@ static const char* flags_to_mode(s32 flags)
+@@ -353,6 +491,19 @@ static const char* flags_to_mode(s32 flags)
      int trunc   = flags & CELL_FS_O_TRUNC;
      int append  = flags & CELL_FS_O_APPEND;
  
@@ -5195,7 +5218,94 @@ index 5166a47d..0fe74820 100644
      if (access == CELL_FS_O_RDONLY) {
          return "rb";
      } else if (access == CELL_FS_O_WRONLY) {
-@@ -408,6 +550,7 @@ static void ensure_parent_dirs(const char* path)
+@@ -404,10 +555,94 @@ static void ensure_parent_dirs(const char* path)
+  * File operations
+  * -----------------------------------------------------------------------*/
+ 
++/* ---------------------------------------------------------------------------
++ * Volume-range records (volmap.h)
++ * -----------------------------------------------------------------------*/
++
++/* 1 when host_path is a record whose volume maps to a host path, 0 when it is
++ * not a record (or records are off), negative when it is a broken record. */
++static int vm_lookup(const char* host_path, volmap_record* rec, char* vol_host, size_t cap)
++{
++    if (!volmap_mode())
++        return 0;
++    int r = volmap_read_record(host_path, rec);
++    if (r <= 0)
++        return r;
++    if (translate_path(rec->volume, vol_host, cap) != 0) {
++        fprintf(stderr, "[volmap] no path mapping for volume '%s' (record %s)\n",
++                rec->volume, host_path);
++        return -1;
++    }
++    return 1;
++}
++
++/* Before an operation that changes a file's contents by path: 0 when
++ * host_path is now an ordinary file (or missing), negative when it is a
++ * record that could not be turned back. */
++static int vm_materialize_path(const char* host_path)
++{
++    volmap_record rec;
++    char vol_host[CELL_FS_MAX_FS_PATH_LENGTH];
++    int r = vm_lookup(host_path, &rec, vol_host, sizeof vol_host);
++    if (r <= 0)
++        return r;
++    return volmap_materialize(host_path, vol_host, &rec);
++}
++
++static s32 vm_open(const char* guest_path, const char* host_path, s32 flags,
++                   const volmap_record* vr, const char* vol_host, CellFsFd* fd)
++{
++    FILE* vf = fopen(vol_host, "rb");
++    if (!vf) {
++        fprintf(stderr, "[volmap] cannot open volume '%s' for %s\n", vol_host, host_path);
++        return (s32)CELL_EIO;
++    }
++    if (volmap_check(vf, vr, volmap_mode() == 2) != 0
++#ifdef _MSC_VER
++        || _fseeki64(vf, (__int64)vr->offset, SEEK_SET) != 0
++#else
++        || fseeko(vf, (off_t)vr->offset, SEEK_SET) != 0
++#endif
++        ) {
++        fprintf(stderr, "[volmap] record %s does not match volume '%s'\n", host_path, vol_host);
++        fclose(vf);
++        return (s32)CELL_EIO;
++    }
++    CellFsFd slot = alloc_fd();
++    if (slot < 0) {
++        fclose(vf);
++        return CELL_FS_ERROR_EMFILE;
++    }
++    strncpy(s_files[slot].path, guest_path, CELL_FS_MAX_FS_PATH_LENGTH - 1);
++    s_files[slot].path[CELL_FS_MAX_FS_PATH_LENGTH - 1] = '\0';
++    s_files[slot].flags = flags;
++    s_files[slot].vbase = vr->offset;
++    s_files[slot].vlen  = vr->length;
++    s_files[slot].vmap  = 1;
++    s_files[slot].host_fp = vf;
++    *(CellFsFd*)gptr(fd) = (CellFsFd)ps3_bswap32((u32)slot);
++    { static volatile long n = 0;
++      if (n++ < 8)
++          printf("[volmap] Open: fd=%d -> %s [0x%llX, +0x%llX)\n", slot, vol_host,
++                 (unsigned long long)vr->offset, (unsigned long long)vr->length); }
++    return CELL_OK;
++}
++
++/* Position within the guest's view of a record descriptor. */
++static s64 vm_tell(const FsFileSlot* s)
++{
++#ifdef _MSC_VER
++    return (s64)_ftelli64(s->host_fp) - (s64)s->vbase;
++#else
++    return (s64)ftello(s->host_fp) - (s64)s->vbase;
++#endif
++}
++
+ /* NID: 0x718BF5F8 */
  s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 size)
  {
      printf("[cellFs] Open(path='%s', flags=0x%X)\n", gpath(path) ? gpath(path) : "<null>", flags);
@@ -5203,7 +5313,30 @@ index 5166a47d..0fe74820 100644
      { extern char* getenv(const char*); static int _bt=-1; if(_bt<0){ const char* e=getenv("PS3_FSLOG_BT"); _bt=(e&&*e&&*e!='0')?1:0; } if(_bt){ extern unsigned int ppu_prof_resolve_host(void*); void* fr[24]; unsigned short n=RtlCaptureStackBackTrace(0,24,fr,0); char ln[600]; int p=snprintf(ln,sizeof ln,"[FSBT]"); unsigned int prev=0; for(unsigned short i=0;i<n;i++){ unsigned int g=ppu_prof_resolve_host(fr[i]); if(g&&g!=prev){ prev=g; p+=snprintf(ln+p,sizeof(ln)-p," %08X",g); } } fprintf(stderr,"%s%c",ln,10); } }
  
      if (!path || !fd)
-@@ -427,6 +570,15 @@ s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 s
+@@ -422,11 +657,38 @@ s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 s
+         return (s32)CELL_ENOENT;
+     }
+ 
++    /* A volume-range record (volmap.h): read-only opens read the volume's
++     * range; other opens that keep the contents turn it back into the real
++     * file first. O_TRUNC replaces the contents, and O_CREAT|O_EXCL fails
++     * below as for any existing file, so both act on the record itself. */
++    if (!((flags & CELL_FS_O_CREAT) && (flags & CELL_FS_O_EXCL))) {
++        volmap_record vr;
++        char vol_host[CELL_FS_MAX_FS_PATH_LENGTH];
++        int r = vm_lookup(host_path, &vr, vol_host, sizeof vol_host);
++        if (r < 0)
++            return (s32)CELL_EIO;
++        if (r > 0 && !(flags & CELL_FS_O_TRUNC)) {
++            if ((flags & CELL_FS_O_ACCMODE) == CELL_FS_O_RDONLY)
++                return vm_open(gpath(path), host_path, flags, &vr, vol_host, fd);
++            if (volmap_materialize(host_path, vol_host, &vr) != 0)
++                return (s32)CELL_EIO;
++        }
++    }
++
+     /* If creating, ensure parent directories exist */
+     if (flags & CELL_FS_O_CREAT) {
          ensure_parent_dirs(host_path);
      }
  
@@ -5219,7 +5352,7 @@ index 5166a47d..0fe74820 100644
      const char* mode = flags_to_mode(flags);
      FILE* fp = fopen(host_path, mode);
  
-@@ -491,6 +643,23 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
+@@ -491,12 +753,35 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
      u64 bytes_read = 0;
  
      if (s_files[fd].host_fp) {
@@ -5243,7 +5376,20 @@ index 5166a47d..0fe74820 100644
          /* gptr(buf): the DATA buffer is a guest address like every other
           * pointer parameter. The nread out-param below was already translated,
           * which made this look handled -- but the file contents were being read
-@@ -515,6 +684,37 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
+          * to a raw guest address interpreted as a host one, so nothing the
+          * title loaded ever landed in guest memory. */
+-        bytes_read = (u64)fread(gptr(buf), 1, (size_t)nbytes, s_files[fd].host_fp);
++        u64 want = nbytes;
++        if (s_files[fd].vmap) {   /* never past the record's range */
++            s64 at = vm_tell(&s_files[fd]);
++            u64 left = (at >= 0 && (u64)at < s_files[fd].vlen) ? s_files[fd].vlen - (u64)at : 0;
++            if (want > left) want = left;
++        }
++        bytes_read = want ? (u64)fread(gptr(buf), 1, (size_t)want, s_files[fd].host_fp) : 0;
+     }
+ 
+     { static int _n = 0;
+@@ -515,6 +800,37 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
              }
              printf("\n"); } }
  
@@ -5281,9 +5427,13 @@ index 5166a47d..0fe74820 100644
      if (nread)
          *(u64*)gptr(nread) = ps3_bswap64(bytes_read);
  
-@@ -533,8 +733,32 @@ s32 cellFsWrite(CellFsFd fd, const void* buf, u64 nbytes, u64* nwrite)
+@@ -532,9 +848,36 @@ s32 cellFsWrite(CellFsFd fd, const void* buf, u64 nbytes, u64* nwrite)
+ 
      u64 bytes_written = 0;
  
++    if (s_files[fd].vmap)   /* opened read-only from a volume-range record */
++        return CELL_FS_ERROR_EBADF;
++
      if (s_files[fd].host_fp) {
 +        /* As in cellFsRead: WriteFile from a reserved, uncommitted guest page
 +         * fails with ERROR_NOACCESS instead of faulting, so a large fwrite came
@@ -5314,7 +5464,48 @@ index 5166a47d..0fe74820 100644
      }
  
      if (nwrite)
-@@ -615,6 +839,7 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
+@@ -549,7 +892,21 @@ s32 cellFsLseek(CellFsFd fd, s64 offset, s32 whence, u64* pos)
+     if (fd < 0 || fd >= MAX_OPEN_FILES || !s_files[fd].in_use)
+         return CELL_FS_ERROR_EBADF;
+ 
+-    if (s_files[fd].host_fp) {
++    if (s_files[fd].host_fp && s_files[fd].vmap) {
++        /* Positions are relative to the record's range; SEEK_END is its end. */
++        s64 base = whence == CELL_FS_SEEK_CUR ? vm_tell(&s_files[fd])
++                 : whence == CELL_FS_SEEK_END ? (s64)s_files[fd].vlen : 0;
++        s64 to = base + offset;
++        if (to < 0)
++            return CELL_EINVAL;
++#ifdef _MSC_VER
++        _fseeki64(s_files[fd].host_fp, (__int64)(s_files[fd].vbase + (u64)to), SEEK_SET);
++#else
++        fseeko(s_files[fd].host_fp, (off_t)(s_files[fd].vbase + (u64)to), SEEK_SET);
++#endif
++        if (pos)
++            *(u64*)gptr(pos) = ps3_bswap64((u64)to);
++    } else if (s_files[fd].host_fp) {
+         int host_whence = SEEK_SET;
+         if (whence == CELL_FS_SEEK_CUR) host_whence = SEEK_CUR;
+         if (whence == CELL_FS_SEEK_END) host_whence = SEEK_END;
+@@ -590,6 +947,8 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
+         int file_no = _fileno(s_files[fd].host_fp);
+         HOST_STAT_T hst;
+         if (HOST_FSTAT(file_no, &hst) == 0) {
++            if (s_files[fd].vmap)   /* the size of the record's range */
++                hst.st_size = (s64)s_files[fd].vlen;
+             fill_cellfs_stat(sbh, &hst);
+             return CELL_OK;
+         }
+@@ -597,6 +956,8 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
+         int file_no = fileno(s_files[fd].host_fp);
+         HOST_STAT_T hst;
+         if (HOST_FSTAT(file_no, &hst) == 0) {
++            if (s_files[fd].vmap)
++                hst.st_size = (off_t)s_files[fd].vlen;
+             fill_cellfs_stat(sbh, &hst);
+             return CELL_OK;
+         }
+@@ -615,6 +976,7 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
  s32 cellFsStat(const char* path, CellFsStat* sb)
  {
      printf("[cellFs] Stat(path='%s')\n", gpath(path) ? gpath(path) : "<null>");
@@ -5322,7 +5513,47 @@ index 5166a47d..0fe74820 100644
  
      if (!path || !sb)
          return CELL_EFAULT;
-@@ -696,6 +921,41 @@ s32 cellFsFtruncate(CellFsFd fd, u64 size)
+@@ -629,6 +991,17 @@ s32 cellFsStat(const char* path, CellFsStat* sb)
+         return (s32)CELL_ENOENT;
+     }
+ 
++    /* A volume-range record reports the size of its range. */
++    if (hst.st_size == VOLMAP_RECORD_SIZE) {
++        volmap_record vr;
++        char vol_host[CELL_FS_MAX_FS_PATH_LENGTH];
++        int r = vm_lookup(host_path, &vr, vol_host, sizeof vol_host);
++        if (r < 0)
++            return (s32)CELL_EIO;
++        if (r > 0)
++            hst.st_size = vr.length;
++    }
++
+     /* Fill a host-local struct, then copy into guest memory: `sb` is a guest
+      * address, so fill_cellfs_stat writing through it directly faults. */
+     {
+@@ -655,6 +1028,11 @@ s32 cellFsTruncate(const char* path, u64 size)
+     if (translate_path(gpath(path), host_path, sizeof(host_path)) != 0)
+         return (s32)CELL_ENOENT;
+ 
++    /* Truncating keeps the start of the contents: a record becomes the real
++     * file first. */
++    if (size != 0 && vm_materialize_path(host_path) < 0)
++        return (s32)CELL_EIO;
++
+ #ifdef _WIN32
+     HANDLE hFile = CreateFileA(host_path, GENERIC_WRITE, 0, NULL,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+@@ -682,6 +1060,9 @@ s32 cellFsFtruncate(CellFsFd fd, u64 size)
+     if (fd < 0 || fd >= MAX_OPEN_FILES || !s_files[fd].in_use)
+         return CELL_FS_ERROR_EBADF;
+ 
++    if (s_files[fd].vmap)   /* read-only descriptor; the volume is never changed */
++        return CELL_FS_ERROR_EBADF;
++
+     if (s_files[fd].host_fp) {
+         fflush(s_files[fd].host_fp);
+ #ifdef _WIN32
+@@ -696,6 +1077,41 @@ s32 cellFsFtruncate(CellFsFd fd, u64 size)
      return CELL_OK;
  }
  
@@ -5364,6 +5595,290 @@ index 5166a47d..0fe74820 100644
  /* NID: 0xC1C507E7 */
  s32 cellFsGetBlockSize(const char* path, u64* sector_size, u64* block_size)
  {
+diff --git a/libs/filesystem/volmap.c b/libs/filesystem/volmap.c
+new file mode 100644
+index 00000000..fe5bc8ea
+--- /dev/null
++++ b/libs/filesystem/volmap.c
+@@ -0,0 +1,184 @@
++/* volmap.c -- see volmap.h. */
++#include "volmap.h"
++
++#include <stdlib.h>
++#include <string.h>
++
++#ifdef _WIN32
++#  include <windows.h>
++#  define VM_SEEK(f, o) _fseeki64((f), (__int64)(o), SEEK_SET)
++#  define VM_TELL(f)    _ftelli64(f)
++#  define VM_SEEK_END(f) _fseeki64((f), 0, SEEK_END)
++#else
++#  include <unistd.h>
++#  define VM_SEEK(f, o) fseeko((f), (off_t)(o), SEEK_SET)
++#  define VM_TELL(f)    ftello(f)
++#  define VM_SEEK_END(f) fseeko((f), 0, SEEK_END)
++#endif
++
++static const char k_magic[8] = { 'P', 'T', '5', 'V', 'M', 'A', 'P', '1' };
++
++static void vm_log(const char* what, const char* path)
++{
++    static volatile long n = 0;
++    if (n++ < 64)
++        fprintf(stderr, "[volmap] %s: %s\n", what, path ? path : "");
++}
++
++int volmap_mode(void)
++{
++    static int mode = -1;
++    if (mode < 0) {
++        const char* e = getenv("PS3_FS_VOLMAP");
++        mode = (e && *e) ? atoi(e) : 1;
++        if (mode < 0 || mode > 2) mode = 1;
++    }
++    return mode;
++}
++
++uint32_t volmap_crc32(uint32_t crc, const void* data, size_t n)
++{
++    static uint32_t table[256];
++    static volatile int ready = 0;
++    if (!ready) {
++        for (uint32_t i = 0; i < 256; i++) {
++            uint32_t c = i;
++            for (int k = 0; k < 8; k++)
++                c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
++            table[i] = c;
++        }
++        ready = 1;
++    }
++    const uint8_t* p = (const uint8_t*)data;
++    crc = ~crc;
++    for (size_t i = 0; i < n; i++)
++        crc = table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
++    return ~crc;
++}
++
++static uint32_t rd32(const uint8_t* p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
++static uint64_t rd64(const uint8_t* p) { return (uint64_t)rd32(p) | (uint64_t)rd32(p + 4) << 32; }
++static void wr32(uint8_t* p, uint32_t v) { for (int i = 0; i < 4; i++) p[i] = (uint8_t)(v >> (8 * i)); }
++static void wr64(uint8_t* p, uint64_t v) { for (int i = 0; i < 8; i++) p[i] = (uint8_t)(v >> (8 * i)); }
++
++void volmap_encode(const volmap_record* rec, uint8_t out[VOLMAP_RECORD_SIZE])
++{
++    memset(out, 0, VOLMAP_RECORD_SIZE);
++    memcpy(out, k_magic, 8);
++    wr32(out + 8, 1);
++    wr32(out + 12, VOLMAP_RECORD_SIZE);
++    wr64(out + 16, rec->offset);
++    wr64(out + 24, rec->length);
++    wr64(out + 32, rec->crc);
++    memcpy(out + 40, rec->head, 16);
++    memcpy(out + 56, rec->tail, 16);
++    wr64(out + 72, rec->volume_size);
++    strncpy((char*)out + 80, rec->volume, VOLMAP_PATH_MAX - 1);
++}
++
++int volmap_read_record(const char* host_path, volmap_record* rec)
++{
++    FILE* f = fopen(host_path, "rb");
++    if (!f) return 0;
++    uint8_t b[VOLMAP_RECORD_SIZE + 1];
++    size_t n = fread(b, 1, sizeof b, f);
++    fclose(f);
++    if (n < 8 || memcmp(b, k_magic, 8) != 0) return 0;
++    if (n != VOLMAP_RECORD_SIZE || rd32(b + 8) != 1 || rd32(b + 12) != VOLMAP_RECORD_SIZE
++        || b[VOLMAP_RECORD_SIZE - 1] != 0 || b[80] != '/') {
++        vm_log("malformed record", host_path);
++        return -1;
++    }
++    memset(rec, 0, sizeof *rec);
++    rec->offset = rd64(b + 16);
++    rec->length = rd64(b + 24);
++    rec->crc = rd64(b + 32);
++    memcpy(rec->head, b + 40, 16);
++    memcpy(rec->tail, b + 56, 16);
++    rec->volume_size = rd64(b + 72);
++    memcpy(rec->volume, b + 80, VOLMAP_PATH_MAX);
++    rec->volume[VOLMAP_PATH_MAX - 1] = 0;
++    if (rec->offset + rec->length < rec->offset || rec->offset + rec->length > rec->volume_size) {
++        vm_log("record range outside its volume", host_path);
++        return -1;
++    }
++    return 1;
++}
++
++int volmap_check(FILE* vol, const volmap_record* rec, int full)
++{
++    if (VM_SEEK_END(vol) != 0 || (uint64_t)VM_TELL(vol) != rec->volume_size) {
++        vm_log("volume size differs from the record's", rec->volume);
++        return -1;
++    }
++    uint8_t head[16] = { 0 }, tail[16] = { 0 };
++    size_t hn = rec->length < 16 ? (size_t)rec->length : 16;
++    if (VM_SEEK(vol, rec->offset) != 0 || fread(head, 1, hn, vol) != hn
++        || VM_SEEK(vol, rec->offset + rec->length - hn) != 0 || fread(tail, 1, hn, vol) != hn
++        || memcmp(head, rec->head, 16) != 0 || memcmp(tail, rec->tail, 16) != 0) {
++        vm_log("volume bytes differ from the record's", rec->volume);
++        return -2;
++    }
++    if (full) {
++        uint32_t h = 0;
++        uint64_t left = rec->length;
++        uint8_t* p = (uint8_t*)malloc(1 << 20);
++        if (!p || VM_SEEK(vol, rec->offset) != 0) { free(p); return -3; }
++        while (left) {
++            size_t k = left < (1u << 20) ? (size_t)left : (1u << 20);
++            if (fread(p, 1, k, vol) != k) break;
++            h = volmap_crc32(h, p, k);
++            left -= k;
++        }
++        free(p);
++        if (left || h != (uint32_t)rec->crc) {
++            vm_log("volume range hash differs from the record's", rec->volume);
++            return -3;
++        }
++    }
++    return 0;
++}
++
++int volmap_materialize(const char* host_path, const char* vol_host_path,
++                       const volmap_record* rec)
++{
++    FILE* vol = fopen(vol_host_path, "rb");
++    if (!vol) { vm_log("materialize: cannot open volume", vol_host_path); return -1; }
++    if (volmap_check(vol, rec, 0) != 0) { fclose(vol); return -2; }
++
++    char tmp[1100];
++    snprintf(tmp, sizeof tmp, "%s.vmtmp", host_path);
++    FILE* out = fopen(tmp, "wb");
++    if (!out) { fclose(vol); vm_log("materialize: cannot create", tmp); return -3; }
++
++    uint8_t* p = (uint8_t*)malloc(1 << 20);
++    uint64_t left = rec->length;
++    uint32_t h = 0;
++    int ok = p != NULL && VM_SEEK(vol, rec->offset) == 0;
++    while (ok && left) {
++        size_t k = left < (1u << 20) ? (size_t)left : (1u << 20);
++        ok = fread(p, 1, k, vol) == k && fwrite(p, 1, k, out) == k;
++        if (ok) h = volmap_crc32(h, p, k);
++        left -= ok ? k : 0;
++    }
++    free(p);
++    fclose(vol);
++    ok = ok && fflush(out) == 0;
++    ok = (fclose(out) == 0) && ok;
++    if (ok && h != (uint32_t)rec->crc) {
++        vm_log("materialize: range hash differs from the record's", host_path);
++        ok = 0;
++    }
++#ifdef _WIN32
++    ok = ok && MoveFileExA(tmp, host_path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
++#else
++    ok = ok && rename(tmp, host_path) == 0;
++#endif
++    if (!ok) {
++        remove(tmp);
++        vm_log("materialize failed; record kept", host_path);
++        return -4;
++    }
++    vm_log("materialized for writing", host_path);
++    return 0;
++}
+diff --git a/libs/filesystem/volmap.h b/libs/filesystem/volmap.h
+new file mode 100644
+index 00000000..6baab80d
+--- /dev/null
++++ b/libs/filesystem/volmap.h
+@@ -0,0 +1,88 @@
++/* volmap.h -- installed files kept as records of a byte range of a game volume.
++ *
++ * GT5's first-boot install copies entries of the disc's GT.VOL into
++ * dev_hdd0/.../PDIPFS byte for byte (no decryption, no decompression): 15,226
++ * of the 16,450 files of a 01.04 install, 6.24 GiB, are exact copies of a
++ * GT.VOL range. A converter (scripts/volmap.py in the GT5 tree) replaces each
++ * such copy with a 256-byte record naming the volume (as a GUEST path) and
++ * the range. The filesystem layer then serves the file from the volume:
++ *
++ *   - open read-only: the descriptor reads a window of the volume;
++ *   - stat/fstat: the size is the range's length, not the record's;
++ *   - open for writing without O_TRUNC, truncate, allocate: the record is
++ *     first turned back into the real file (copy on write);
++ *   - open with O_TRUNC, rename, unlink: act on the record as on the file.
++ *
++ * No keys and no parsing of the volume's (encrypted) table of contents are
++ * involved: the converter matches bytes.
++ *
++ * PS3_FS_VOLMAP=0 treats records as plain files (diagnostic only: the game
++ * then reads 256-byte stubs), 1 (default) serves them, 2 also checks the
++ * whole range's hash on every open.
++ *
++ * Record layout (256 bytes, little-endian):
++ *   0   "PT5VMAP1"
++ *   8   u32 version (1), u32 record size (256)
++ *   16  u64 offset into the volume
++ *   24  u64 length
++ *   32  u64 CRC-32 (zlib) of the range, in the low 32 bits
++ *   40  16 bytes: the range's first 16 bytes (fewer if shorter, zero padded)
++ *   56  16 bytes: the range's last 16 bytes
++ *   72  u64 the volume's size when the record was made
++ *   80  NUL-terminated guest path of the volume (up to 175 characters)
++ */
++#ifndef PS3RECOMP_VOLMAP_H
++#define PS3RECOMP_VOLMAP_H
++
++#include <stddef.h>
++#include <stdint.h>
++#include <stdio.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define VOLMAP_RECORD_SIZE 256
++#define VOLMAP_PATH_MAX    176
++
++typedef struct {
++    uint64_t offset;
++    uint64_t length;
++    uint64_t crc;     /* CRC-32 (zlib polynomial) of the range */
++    uint8_t  head[16];
++    uint8_t  tail[16];
++    uint64_t volume_size;
++    char     volume[VOLMAP_PATH_MAX];   /* guest path */
++} volmap_record;
++
++/* 0 off, 1 serve records (default), 2 serve and hash-check every open. */
++int volmap_mode(void);
++
++/* 1 and fills rec when host_path is a valid record; 0 when it is not a record
++ * (any ordinary file or a missing one); negative when it carries the record
++ * magic but is malformed (logged). */
++int volmap_read_record(const char* host_path, volmap_record* rec);
++
++/* Encode rec into out[VOLMAP_RECORD_SIZE]. */
++void volmap_encode(const volmap_record* rec, uint8_t out[VOLMAP_RECORD_SIZE]);
++
++/* Check an open volume against rec: its size, then the first and last 16
++ * bytes of the range; with full != 0 also the whole range's CRC-32. Leaves
++ * the file position unspecified. 0 when it matches, negative (logged) when
++ * not. */
++int volmap_check(FILE* vol, const volmap_record* rec, int full);
++
++/* Replace the record at host_path with the real file, read from the volume at
++ * vol_host_path. Writes "<host_path>.vmtmp" and renames it over the record.
++ * 0 on success, negative (logged) on failure; the record is then unchanged. */
++int volmap_materialize(const char* host_path, const char* vol_host_path,
++                       const volmap_record* rec);
++
++/* CRC-32 (zlib), continued from crc (start with 0). */
++uint32_t volmap_crc32(uint32_t crc, const void* data, size_t n);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* PS3RECOMP_VOLMAP_H */
 diff --git a/libs/filesystem/cellFs.h b/libs/filesystem/cellFs.h
 index a6262c94..160d907d 100644
 --- a/libs/filesystem/cellFs.h

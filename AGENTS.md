@@ -72,6 +72,15 @@ owned DLC must work offline. No 2.11 inputs are on this machine yet;
 never upgrade the 01.04 RPCS3 install in place. Every v104 value is listed
 there with how to re-derive it; carry none across.
 
+**Virtual install (in progress, `feat/gt5-v211`).** Installed `PDIPFS` files that are
+byte copies of a `GT.VOL` range (6.23 GiB of a 6.5 GB 01.04 install) become 256-byte records;
+the runtime's cellFs serves them from the disc (`libs/filesystem/volmap.c`, `PS3_FS_VOLMAP=0`
+off, `=2` full check per open; writes turn a record back into the file first). The launcher
+converts during import and after the game's own first-boot install (`launcher/volmap.h`,
+`PT5_VOLMAP=0` off; only with an engine whose `pt5-release.ini` says `volmap=1`).
+`scripts/volmap.py convert|restore|verify|stats` is the reference tool. Test:
+`scripts/test/volmap_fs.py`. Not yet run in game. See docs/plan-gt5-v211.md (T23).
+
 **Prologue renderer ports (GT5 Phase 47).** All default on, measured at High Speed Ring:
 `RSX_PSO_FAST_LOOKUP` (learned table `warmup-v1/fp-lookup-gt5-v1-<tag>.bin`: a miss whose mapped
 pipeline is resident skips HLSL/DXBC; `=0` off, `=2` checks every mapping, 0 mismatches), placed
