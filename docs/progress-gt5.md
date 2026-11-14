@@ -4,6 +4,43 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Car list: pruned lanes recalled when a car appears (2026-11-14)
+
+**Symptom (user).** In Arcade's car list the frame rate drops when a car
+first appears, then settles.
+
+**Measured** (warm cache, preload on as players have it, 21:9, 2x MSAA;
+`RSX_HITCH_LOG` and `PS3_TIMELINE` over the car's appearance). The render
+list behind the page is workload 4, dispatched on four lanes. For the first
+8-14 frames with a car, only lane 0 ran it, 53-68 ms a frame (worst
+render-thread frames 64-65 ms, the frame thread waiting in `cond_wait` on
+it); then all four lanes ran, about 20 ms each, and the page held 50-53
+FPS. While the list is still empty lanes 1-3 find no job, so the lane pool
+prunes them after 8 idle dispatches and retries them only every 64th
+dispatch: until that retry, lane 0 did all four lanes' work. With preload
+off the car's appearance also creates about 200 pipelines from cached blobs
+(about 150 ms); preload (the player default) prepares them at boot.
+
+**Change** (runtime, `cellSpurs.c`). Pool lanes record their run time; a
+run of `SPURS_LANE_RECALL_US` (default 3000; `0` off) or more on the lanes
+sent brings the pruned lanes back on the next dispatch. A recalled lane
+that then finds no work is not recalled again until it does some, so a lane
+that never takes a job (GT5 Prologue's SPU 3, Phase 64) is not sent again
+and again.
+
+**Verified** (timeline, one visit each, same settings):
+
+| | Off (`=0`) | Off (earlier run) | On |
+| --- | --- | --- | --- |
+| Workload 4 runs over 30 ms | 14 | 8 | 1 |
+| Presents in the 2 s after the car appears | 75 | 85 | 102 |
+| Frames over 40 ms there | 14 (55-68 ms) | 8 (55-73 ms) | 1 (54 ms) |
+| Presents per second, +2 to +13 s | 53.0 / 53.0 / 50.3 | 50.7 / 53.0 / 52.0 | 50.3 / 52.3 / 52.3 |
+| Warm HSR FrameTest | 53.6-55.1 FPS (earlier runs) | - | 54.4 FPS, p99 28.6 ms, no stall line |
+
+The hitch trace opens its file only if it does not exist: a rerun under the
+same tag keeps the earlier run's rows.
+
 ## Render targets made once per frame at their largest size (2026-11-14)
 
 **Cause.** On a cold boot the long renderer batches during menu and race

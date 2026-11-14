@@ -20,6 +20,12 @@ versions follow [SemVer](https://semver.org/).
   keep the normal priority. `RSX_SHADER_WORKER_PRIO_RACE=same` turns it off.
 
 ### Fixed
+- **Arcade car list: the frame-rate dip when a car appears.** The page's
+  render work ran on one of its four SPU lanes for the first 8-14 frames
+  with a car (the others had been parked while the list was empty), at
+  55-68 ms a frame. Parked lanes now return as soon as the work needs them:
+  one slow frame instead of up to 14. `SPURS_LANE_RECALL_US=0` restores the
+  old behaviour.
 - **Pauses while a menu or race loads for the first time.** Frames that
   draw one image at several growing sizes rebuilt it at every size, copying
   its contents each time: 10-59 rebuilds and up to a quarter of a second
