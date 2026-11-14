@@ -140,6 +140,15 @@ smoke is acceptance evidence, not an extra controlled performance comparison.
 Fresh preparation reproduces all optional candidate sources (allowing Git's
 checkout CRLF conversion).
 
+After integration into `release/v0.1.5` (`a489d3c`), the refreshed merged
+Release executable also passed `release015-merged-smoke`: HSR RaceStart plus
+a 40-second window, inspected road/cars/HUD/rear-view and finite/nonzero audio
+with scrubbing off. No crash/watchdog/assertion/device-loss report was found.
+The sample recorded 1,991 frames, 49.47 FPS, p99 35.83 ms and 40.90% intervals
+over 20 ms; this single smoke run is not a controlled performance comparison
+with the earlier helper measurements. Executable SHA256:
+`106b9867cb41ab55d26dc4c7540471b1a0474784cad10a432fa2b6742335ace7`.
+
 The optional `patches/incremental/gt5-spu-codegen-experiment.patch` is relative
 to the adopted runtime; setup does not apply it. Preparation copies installed
 sources and refuses existing snapshots. All guest-derived data stays ignored.

@@ -17,9 +17,15 @@ than choosing either overlapping patch wholesale. Clean application to pinned
 The combined Release build, 3.8 million helper cases, scissored-clear/rollback,
 audio extended/coefficient and debug-export checks pass. All 16 captured
 car-list states match between original and helper code using the merged
-benchmark driver. The merged-build game smoke is **deferred at the user's
-request while their game instance runs**. Earlier SPU/Course Maker acceptance
-runs below precede this integration; no new merged-build live claim is made.
+benchmark driver. The merged-build game smoke was deferred while the user's
+game ran, then completed after they released the slot. `release015-merged-smoke`
+reached HSR RaceStart and completed a 40-second window at 720p/2x MSAA, DXC,
+VSync off. Both inspected captures show road, cars, HUD and rear-view; audio
+remained finite/nonzero with scrubbing off. No crash, watchdog, assertion or
+device-loss report was found. The runner stopped only its own child. This is
+a short smoke check, not a full race or controlled performance comparison.
+Evidence is under `scratch/pv/release015-merged-smoke.*`; settings/executable
+SHA256 are in `scratch/spu-codegen/live/release015-merged-smoke.json`.
 
 ## SPU reference review: integer helpers win, whole-image locals do not (2026-11-14)
 
