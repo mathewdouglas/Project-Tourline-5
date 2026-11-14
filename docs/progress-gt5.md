@@ -4,6 +4,25 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.1.5 published (2026-11-14)
+
+Tag `v0.1.5` (commit `5b13226`), main fast-forwarded to it. A new PGO
+profile was made from the tag's sources (`pgo.py gen`/`play`/`merge`; the
+instrumented route reached RaceStart and raced 60 s), SHA-256
+`af85a90f...d0ab`. `clean_build.py --profile` from a fresh clone of the tag:
+0 functions lost counts, 501 without a record. Player ZIP
+`project-tourline-5-v0.1.5-windows-x64.zip`, 125 files, SHA-256
+`aaa78fc1f7951bc6a3110d66e8e28498b399f12fb1590baaa8bab3a996b8435c`.
+
+Packaged `gt5.exe` smoke (`release015-pkg-smoke`, `gt5boot.ps1 -Route race
+-FrameTest`): RaceStart, 60.6 s window at 57.5 FPS, median 16.8 ms, p99
+30.1 ms, 9.5% over 20 ms. 0.1.4's packaged build measured 55.1-55.7 in its
+own session; this is one run, not a controlled comparison. The same 16
+`[spu-smc]` microstep lines as the merged-build smoke; no crash, watchdog or
+device-loss line. The final capture shows road, HUD, mirror and lap timer.
+Published as a full (not pre-) release with the 0.1.5 changelog section.
+Known issue carried: Course Maker at 21:9 (misplaced map, clipped labels).
+
 ## Completed work integrated into release/v0.1.5 (2026-11-14)
 
 Merged the completed Course Maker scissored-clear correction, integer SPU
