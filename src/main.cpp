@@ -94,8 +94,14 @@ void gt5p_start_present_thread(void);     /* src/gt5p_present.cpp */
  * here, and the RSX pump reads them every frame. */
 #define GT5P_GCM_CTRL_SIZE  0x00010000u
 
-/* argv/envp block handed to the guest _start. */
+/* argv/envp block handed to the guest _start: 64 KB, zeroed after the ELF
+ * is loaded, so it must lie outside the image. Per target (argv_base in
+ * config/targets.json): 0x00F00000 sits inside the 01.04 image on code
+ * nothing reads, but inside 2.11's it wiped a switch's jump table
+ * (0x00F03300), and the switch then jumped into its own table. */
+#ifndef GT5P_ARGV_BASE
 #define GT5P_ARGV_BASE      0x00F00000u
+#endif
 
 /* Main thread stack. The runtime hands ppu_thread stacks out of its own
  * region at 0xD0000000; main is created by us, so it needs one too. 1 MB

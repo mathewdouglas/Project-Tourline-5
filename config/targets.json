@@ -116,6 +116,7 @@
     "spurs_synth_job_done": false,
     "spu_sn_defer": 4,
     "gcm_ctrl_base": "0x03000000",
+    "argv_base": "0x01F00000",
     "gt5p_allocwatch": false
   }
 }
