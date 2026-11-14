@@ -108,6 +108,8 @@ extern void gt5p_b0163EB00_spu_recomp_register(void);
 extern void gt5p_b01645600_spu_recomp_register(void);
 extern void gt5p_b017B6500_spu_recomp_register(void);
 extern void gt5p_b017BD780_spu_recomp_register(void);
+extern void gt5p_t4C414F6C_spu_func_00003050(spu_context*);
+extern void gt5p_t4C414F6C_spu_recomp_register(void);
 extern void gt5p_tCDCD962F_spu_func_00003050(spu_context*);
 extern void gt5p_tCDCD962F_spu_recomp_register(void);
 
@@ -422,10 +424,16 @@ void gt5p_spu_register_all(void)
     gt5p_b017BD780_spu_recomp_register();
     spu_overlay_register_region(0x017BD780u, 55488u, 57);
 
-    /* task ELF spujob_CDCD962FAC770DB9_17400.bin, entry LS 0x3050 */
+    /* task ELF spujob_4C414F6CABE03E45_17400.bin, entry LS 0x3050 */
     spu_begin_image(58);
+    gt5p_t4C414F6C_spu_recomp_register();
+    spu_workload_register_img(0x4C414F6CABE03E45ULL, gt5p_t4C414F6C_spu_func_00003050, 58,
+                              "t4C414F6C");
+
+    /* task ELF spujob_CDCD962FAC770DB9_17400.bin, entry LS 0x3050 */
+    spu_begin_image(59);
     gt5p_tCDCD962F_spu_recomp_register();
-    spu_workload_register_img(0xCDCD962FAC770DB9ULL, gt5p_tCDCD962F_spu_func_00003050, 58,
+    spu_workload_register_img(0xCDCD962FAC770DB9ULL, gt5p_tCDCD962F_spu_func_00003050, 59,
                               "tCDCD962F");
 
     spu_begin_image(0);

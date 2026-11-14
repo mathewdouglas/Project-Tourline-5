@@ -106,6 +106,47 @@ first-boot install of `GT.VOL` copies has not run yet. Pins:
 `config/gt5-updates.json`. Not yet measured: whether 2.11's first boot
 patches installed files.
 
+**Bring-up, 2026-11-15 (M2-M5 partly).** `BCUS98114-v211` in
+`config/targets.json` holds only lift inputs measured on 2.11:
+- `code_end` `0x00FA63A0`;
+- `setjmp`/`longjmp` at `0x00BD6F94`/`0x00BD70B8` (from `find_setjmp.py`);
+- the policy module, byte-identical, at `0x016A9000`;
+- 38 job bodies (from `find_bodies.py`);
+- 4,949 + 23 seeds.
+
+01.04's hooks, screen files and addresses are not carried over.
+`build/gt5_211.exe` boots the installed 2.11 game folder through the
+warning, the logo, the first-boot install (accepted by `PAD_AUTO_INSTALL`,
+stored as records), save creation and the opening movie. The menu music then
+plays, but the screen stays on the GT logo: presents stop and every guest
+thread waits. That is the open item.
+
+Fixes needed on the way:
+- **Sound jobs.** 2.11 changed `socisynth`, `socepdideq`, `socepdidist`
+  and `socepdirta`. A missing capture leaves the sound chain's guard closed
+  and the window white. `scripts/spu_job_images.py` lists the images from
+  the executable and fingerprints them; `SPU_DUMP_MISS` captured the
+  size-0 ones.
+- **Movie.** The YUV-to-ARGB task ELF changed: `taskdump` gained
+  `4C414F6C...`.
+- **Seeds.** The block shared by `0x009D9660` and `0x009DA95C` needed its
+  labels seeded.
+- **argv block.** The 64 KB block at `0x00F00000` wiped 2.11's jump table
+  at `0x00F03300`. It now moves per target (`argv_base`, 2.11
+  `0x01F00000`).
+- **SPURS workload flag** (runtime). `cellSpursGetWorkloadFlag` and
+  `_cellSpursWorkloadFlagReceiver` are new in 2.11, and the render
+  workload (wid 4) is the receiver. Added: the flag word at +0x6C, the
+  receiver at +0x77, and a kernel kick that consumes the flag
+  (`SPURS_WKL_FLAG_KICK=0` off).
+- **Syscall 350** (runtime). `sys_memory_allocate_from_container` was a
+  stub (`SYS_MEMORY_FROM_CONTAINER=0` old).
+- **Audio.** The extended-zero fix and native images are mapped to 2.11's
+  sound images.
+
+Still unhandled imports (logged once each): `cellSysutilAvconfExt`
+`0xFAA275A4`, four new `sceNp` and five `sys_net` NIDs.
+
 ### What the user must provide
 
 1. **The US update packages from 01.05 up to and including 02.11**, as `.pkg`

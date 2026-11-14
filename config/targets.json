@@ -117,6 +117,9 @@
     "spu_sn_defer": 4,
     "gcm_ctrl_base": "0x03000000",
     "argv_base": "0x01F00000",
+    "audio_native_images": [["jCB9BD024", "0xCB9BD0241BB0DE67", 13], ["j0B07CA3D", "0x0B07CA3DA8C030C2", 2], ["jF523F26F", "0xF523F26F69764538", 17], ["jFDFFAAC1", "0xFDFFAAC1BCD5352E", 18]],
+    "audio_extended_zero_images": ["j9804ABA8", "jCB9BD024", "j0B07CA3D", "jF523F26F", "jFDFFAAC1"],
+    "spu_audio_round_zero_calls": [["j9804ABA8", "0x4E8", 5]],
     "gt5p_allocwatch": false
   }
 }

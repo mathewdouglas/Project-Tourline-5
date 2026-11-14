@@ -725,6 +725,8 @@ extern "C" {
     void cellSpurs_debug_dump_to(void);
     void cellSpurs_debug_dump(void);
     void cellSpursReadyCountStore(void);
+    void cellSpursGetWorkloadFlag(void);
+    void _cellSpursWorkloadFlagReceiver(void);
     void cellSpursReadyCountSwap(void);
     void cellSpursReadyCountCompareAndSwap(void);
     void cellSpursWakeUp(void);
@@ -1955,6 +1957,8 @@ extern "C" void ppu_hle_register_all(void) {
     ps3_hle_register(0x36D2531Du, "cellSpurs_debug_dump_to", (void*)cellSpurs_debug_dump_to);
     ps3_hle_register(0xC2F6C916u, "cellSpurs_debug_dump", (void*)cellSpurs_debug_dump);
     ps3_hle_register(0xF843818Du, "cellSpursReadyCountStore", (void*)cellSpursReadyCountStore);
+    ps3_hle_register(0xC765B995u, "cellSpursGetWorkloadFlag", (void*)cellSpursGetWorkloadFlag);
+    ps3_hle_register(0xA73BF47Eu, "_cellSpursWorkloadFlagReceiver", (void*)_cellSpursWorkloadFlagReceiver);
     ps3_hle_register(0x49A3426Du, "cellSpursReadyCountSwap", (void*)cellSpursReadyCountSwap);
     ps3_hle_register(0xF1D3552Du, "cellSpursReadyCountCompareAndSwap", (void*)cellSpursReadyCountCompareAndSwap);
     ps3_hle_register(0x7E4EA023u, "cellSpursWakeUp", (void*)cellSpursWakeUp);
