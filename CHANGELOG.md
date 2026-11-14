@@ -20,6 +20,13 @@ versions follow [SemVer](https://semver.org/).
   keep the normal priority. `RSX_SHADER_WORKER_PRIO_RACE=same` turns it off.
 
 ### Fixed
+- **21:9: the opening WARNING, copyright and Polyphony screens are no
+  longer stretched.** They are 1920x1080 pictures; at 720p the ultrawide
+  pillarbox only recognised pictures exactly the display's size. Any 16:9
+  picture at least display-sized now counts. `RSX_ULTRAWIDE_PILLAR=1`
+  restores the exact-size rule.
+- Crash and debug reports name the release by its version and commit
+  (0.1.4's said `v0.1.3-66-...`: the build preceded its tag).
 - **Hitches when other programs are busy.** The game's frame thread ran at
   Windows' lowest priority (idle), so a browser, a virus scan or the game's
   own shader compiling could take its CPU for hundreds of milliseconds. It

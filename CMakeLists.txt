@@ -237,9 +237,22 @@ target_include_directories(gt5p PRIVATE
 )
 
 # Report identity only belongs to the export TU; never invalidate lifted code.
-execute_process(COMMAND git describe --always --dirty --abbrev=12
+# The release is named by the project version, with the commit beside it:
+# `git describe` named a release after the previous tag when the build was made
+# before its own tag (0.1.4's reports said v0.1.3-66-...).
+execute_process(COMMAND git rev-parse --short=12 HEAD
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    OUTPUT_VARIABLE GT5P_REPORT_REVISION OUTPUT_STRIP_TRAILING_WHITESPACE)
+    OUTPUT_VARIABLE GT5P_REPORT_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+execute_process(COMMAND git status --porcelain --untracked-files=no
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE GT5P_REPORT_DIRTY OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(NOT GT5P_REPORT_COMMIT)
+    set(GT5P_REPORT_COMMIT "unknown")
+endif()
+if(GT5P_REPORT_DIRTY)
+    string(APPEND GT5P_REPORT_COMMIT "-modified")
+endif()
+set(GT5P_REPORT_REVISION "v${PROJECT_VERSION} (commit ${GT5P_REPORT_COMMIT})")
 configure_file(src/gt5p_build_info.h.in gt5p_build_info.h @ONLY)
 set_source_files_properties(src/gt5p_debug_export.cpp PROPERTIES
     INCLUDE_DIRECTORIES "${CMAKE_CURRENT_BINARY_DIR}")

@@ -4,6 +4,26 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 21:9 opening screens pillarboxed at any display size (2026-11-14)
+
+At 21:9 the WARNING, copyright and Polyphony Digital screens before the
+opening movie were stretched. `RSX_ULTRAWIDE_EDGEDBG=1` (now with texture
+location, display size and time) and a new `=2` (the candidate programs
+active each second) placed them: from 3 to 16 s after the first frame the
+only picture drawn is program `0x0FFFFD41`, sampling a 1920x1080 image in
+main memory into the display. The pillarbox rule (Phase 126) needs a
+main-memory image exactly the display's size; the display is 1280x720 at
+720p, so it never matched. The rule now also takes a 16:9 main-memory image
+at least the display's size (`RSX_ULTRAWIDE_PILLAR=1` exact size only, `=0`
+off). The same program draws in menus only from video memory into
+offscreen targets, so menus are unchanged; checked by window shots at 21:9:
+the three screens pillarboxed, the movie (already pillarboxed by its own
+path), menu and race as before.
+
+Reports: `GT5P_REPORT_REVISION` is now `v<project version> (commit <sha>)`
+and the launcher's `PT5_REVISION` the commit, both from CMake's project
+version and `git rev-parse` (`-modified` with uncommitted tracked changes).
+
 ## The frame thread out of the IDLE band (2026-11-14)
 
 **Change.** `PS3_PPU_PRIO_LOW` (runtime, default `idle` = unchanged) sets the
