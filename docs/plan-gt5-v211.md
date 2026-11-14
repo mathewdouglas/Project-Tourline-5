@@ -336,12 +336,76 @@ each one is checked on both (switch-gated, as every behaviour already is).
 | Config | `BCUS98114-v211` key in `targets.json` with `title_id` BCUS98114 and `exe_name` `gt5_211`, so both engines can sit side by side |
 | Inputs | `input/<target>/EMAIN.ELF`, `generated/<target>/`, `analysis/<target>/` with the current paths as v104's fallback; scripts get them from `scripts/target.py` (several hard-code `input/EMAIN.ELF` today) |
 | Builds | `build_v211\` (already ignored by `build_*/`); `GT5P_TARGET` already selects everything else |
-| Storage | one storage root, `targets/<target>/` underneath for `input/`, `gamedata/`, `shadercache/`; saves are per target because a 2.11 save cannot go back to 01.04 (hypothesis: the game upgrades saves) |
+| Storage | one storage root, `targets/<target>/` underneath for `input/`, `gamedata/` (saves, database, update and patched files), `shadercache/`; saves and progression are per target because a 2.11 save cannot go back to 01.04 (hypothesis: the game upgrades saves). The ~6.2 GiB of first-boot copies of `GT.VOL` are not stored per target at all ("Storage: the first-boot install is a copy of GT.VOL" below) |
+| Switching | both versions set up; F1 GAME > "Game version" (01.04 / 2.11) restarts through the launcher (`src/pt5_restart.h`) into the other engine with that version's storage, saves and settings. Shown only when both are set up. The launcher remembers the last one |
 | Shader caches | per target. Pipeline keys are content hashes, so sharing may work, but learned menu/race sets, the race pack and the fast-lookup table are per executable and data; measure overlap later before sharing |
 | PGO | one profile per target, made from that target's lift (`pgo.py` takes `--target`) |
 | Launcher | one `tourline5.exe` for both. Setup reads the selected install's `PARAM.SFO` and ELF hash: 01.04 selects `BCUS98114-v104`, 02.11 selects `BCUS98114-v211`, and anything else is refused by name, so 2.17 says "GT5 2.11 is required" and is never half-accepted. `setup.ini` `target=` (already present) records the result. Both versions may be set up side by side, each in its own storage subtree, with a version choice on the launcher page. `pt5-player.json` becomes a map of targets. F1 restarts and crash reports carry the target |
 | Release | **one player ZIP** holding the launcher and both engines (`gt5.exe`, `gt5_211.exe`; each about 176 MB before compression), each PGO-built from its own profile. `clean_build.py` lifts and builds every target listed in the release config and `package_player.py` packages them all. Until M8 the 2.11 engine is labelled "experimental" in the launcher, and a release blocks if it fails M6 |
 | Setup route for 2.11 | first: import an existing RPCS3 2.11 install plus `EBOOT.elf` (the existing import path, with `APP_VER` 02.11). Later: install a folder of the player's update PKGs in order with the launcher's RPCS3, pinned by hash, as the disc route does for `DATA000.PKG` |
+
+### Storage: the first-boot install is a copy of GT.VOL
+
+**Measured 2026-11-14 (read-only).** The method was GTToolsSharp 5.3.5
+`listfiles` on the disc's `GT.VOL` and on RPCS3's 01.04 `PDIPFS`, followed by
+byte comparison. RPCS3's 01.04 install has 16,450 files under `PDIPFS`, which
+fall into two groups:
+
+- **15,226 files (6.24 GiB) are raw byte copies of `GT.VOL` extents.**
+  - Each is the volume entry with the same file index. Its size equals the
+    entry's compressed size.
+  - Each sits in `GT.VOL` at `649,216 + SegIndex * 0x800`.
+  - The first and last 4 KiB of every one of the 15,226 match, and 40 random
+    files match in full.
+  - No decryption or decompression is involved: the game's install copies
+    the stored bytes unchanged.
+- **1,224 files (135.6 MiB) named outside the volume's table of contents**
+  (`9/..`). These are the 01.04 package's own files.
+
+So the 6.5 GB install is about 6.2 GiB of data already on the disc, plus about
+140 MB of real content and the database. For 2.11, GTToolsSharp's
+documentation says updates from 1.07 onwards carry binary patches that the
+game applies to installed files. Some 2.11 files will therefore differ from
+`GT.VOL`. Hypothesis: most will not.
+
+**Proposal: a virtual install (runtime, switch-gated).** Copied files are
+served from `GT.VOL` instead of being stored.
+
+1. **Record during the game's own first-boot install.** When the guest
+   writes a `PDIPFS` file whose bytes equal the `GT.VOL` range it just read,
+   the runtime stores a small record (file name -> `GT.VOL` offset, length,
+   hash) instead of the bytes. Any write that does not match is stored as a
+   real file. This needs no keys and no parsing of the encrypted table of
+   contents: the game's own reads and writes supply the mapping.
+   (Hypothesis: the install reads and writes in matching chunks; check this
+   with `PAD_FILE_LOG=2` on a fresh install.)
+2. **Serve reads from the record.** Open, stat and read of such a file map
+   to the `GT.VOL` range. The disc is already opened by absolute path
+   (Phase 39). If the disc is moved or missing, setup says so; it does not
+   fail at random.
+3. **Copy on write.** When the game writes to or patches a recorded file
+   (2.11's binary patches), the runtime first turns the record into a real
+   file.
+4. **Existing imports.** Setup can turn an imported RPCS3 install into
+   records by the same byte comparison used above. It needs no table of
+   contents: it hashes each imported file and finds the matching `GT.VOL`
+   range from one read of the disc.
+
+**What a second version then costs.** With records, 01.04 and 2.11 take no
+space for the ~6.2 GiB of copies, and the records are shared. Each version
+stores only its package or update data, its patched files, its database and
+its saves. For 01.04 that is about 150 MB. For 2.11 it is the update data
+(hypothesis: around 3 GB, from the EU 02.07 install's 2.9 GB) plus patched
+files. Without this work, a second version costs about another 6.5 GB plus
+the update data.
+
+**Simpler interim option: NTFS hard links between the two versions'
+identical files.** This is only safe with copy on write, because a write
+through one link changes the file for both versions. It saves the duplicate
+but still uses the 6.2 GiB once, so the virtual install is preferred.
+
+Switches: `PS3_FS_VOLMAP=0` stores real files as today, and `=2` checks each
+served read against a real copy when one exists.
 
 ### Milestones
 
@@ -356,7 +420,7 @@ each one is checked on both (switch-gated, as every behaviour already is).
 | M6 | Race | Arcade HSR race runs; `gt5boot.ps1 -Route race` works with new milestones |
 | M7 | Feature parity | ultrawide, F1 pause, prompts, skip movie, race scope, race pack |
 | M8 | Performance parity | SPU tuning keys re-derived, HSR/Eiger/car list within noise of v104, PGO profile |
-| M9 | Multi-target product | one launcher and one ZIP carry both; setup detects 01.04/02.11 and refuses others; clean-machine install of each from the ZIP |
+| M9 | Multi-target product | one launcher and one ZIP carry both; setup detects 01.04/02.11 and refuses others; clean-machine install of each from the ZIP; F1 switches version with separate progression; first-boot copies of `GT.VOL` not stored (T23) |
 | M10 | Master mod | overlay switch, mod's debug menu reachable, Arcade race with mod data |
 | M11 | DLC offline | DLC layout and licence type measured; owned packs imported, listed and usable in a race with the network off; missing packs hidden cleanly; shop reports unavailable without hanging |
 
@@ -391,6 +455,8 @@ warning to menu took Phases 7-12, mostly runtime fixes that 2.11 inherits.
 | T20 | Check whether RPCS3 decrypts DLC EDATs from the command line or GUI with the player's `.rap` (setup route a); fall back to `.rifkey` (route b) | S | T19 |
 | T21 | Runtime: offline `sceNpDrm*` answer from local files, offline `sceNpCommerce2` (switch-gated); unit tests with synthetic EDATs | M | T19 |
 | T22 | Launcher: import, verify and list DLC; remove a pack; M11 race with the network off | M | T14, T20, T21 |
+| T23 | Virtual install on v104 first: log the first-boot install's read/write pattern, then records for copies of `GT.VOL`, copy on write, `PS3_FS_VOLMAP` check mode; turn an existing import into records. Test: fresh install and an imported install both reach a race, with the ~6.2 GiB not stored | L | none (v104), T8 for 2.11 |
+| T24 | F1 "Game version" switch and launcher restart into the other target; per-target saves and settings | M | T14, T23 |
 
 ## 7. Open questions for the user
 
@@ -400,8 +466,8 @@ launcher and one ZIP; DLC works offline.
 1. Which update packages do you have (01.05 to 02.11)?
 2. May 2.11 be installed into a second RPCS3 folder, keeping the 01.04
    install as the reference for v104 work?
-3. When both versions are set up, which does the launcher start by
-   default? Should 01.04 support ever be dropped?
+3. Both versions stay, switched in F1, and the launcher starts the last
+   one used. Should 01.04 support ever be dropped?
 4. Which master mod version, and has it been checked whether the archive
    holds anything outside `PDIPFS` (an EBOOT, patches)?
 5. DLC: which packs do you own, and are they installed in an RPCS3 with
