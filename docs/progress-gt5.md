@@ -4,6 +4,73 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Completed work integrated into release/v0.1.5 (2026-11-14)
+
+Merged the completed Course Maker scissored-clear correction, integer SPU
+helpers and experiment tooling from `feat/pgo-build`, retaining the release
+branch's newer renderer, thread-priority and lane-recall fixes. The runtime
+was merged as actual source files and its cumulative patch regenerated, rather
+than choosing either overlapping patch wholesale. Clean application to pinned
+5244db9 reproduces all merged sources. Both isolated installed runtimes pass
+`setup_runtime.py --check`; fresh optional experiment preparation also passes.
+
+The combined Release build, 3.8 million helper cases, scissored-clear/rollback,
+audio extended/coefficient and debug-export checks pass. All 16 captured
+car-list states match between original and helper code using the merged
+benchmark driver. The merged-build game smoke is **deferred at the user's
+request while their game instance runs**. Earlier SPU/Course Maker acceptance
+runs below precede this integration; no new merged-build live claim is made.
+
+## SPU reference review: integer helpers win, whole-image locals do not (2026-11-14)
+
+Live tests started after the user released the protected test slot. Matching
+non-PGO Release, 720p/2x MSAA/DXC/VSync-off alternating repeats found integer
+SIMD helper medians of 56.05 versus 54.07 FPS at HSR (+3.7%), 54.56 versus
+51.67 at rainy Eiger (+5.6%), and 50.30 versus 49.13 in the car list (+2.4%,
+overlapping runs). CPU/frame and late-frame share fell in all three; Eiger
+p99 rose slightly. Two runs each are short-route evidence, not a full-game
+or completed-race validation.
+
+Only integer bitwise/control-mask/shift helpers are adopted, default ON with
+CMake `GT5P_SPU_CODEGEN_HELPERS=OFF` rollback. Float/audio policy and existing
+Eiger regions are unchanged. Lazy locals and System V, separately and together,
+did not improve HSR. A fuller cached-LS/local/ABI/helper/OR package also lost
+(52.82 versus 54.51 FPS). Larger fingerprint caches offer no benefit on the
+traced route: its 14 keys already fit the existing 16 entries. Context reuse
+and the major shuffle optimization were already implemented.
+
+Installed helpers pass 3.8 million exact comparisons; real captured Eiger and
+car-list states match. Audio regressions and the normal Release build pass.
+The rebuilt normal executable also passed a 40-second HSR smoke with an
+inspected race image and finite/nonzero audio, scrubbing off.
+The isolated runtime patch was refreshed preserving existing compatibility
+changes, clean-apply checked and verified with `setup_runtime.py --check`.
+Private experiments remain reproducible through an optional patch and ignored
+scratch builds. Details, limitations and raw evidence: [SPU review](spu-codegen.md).
+
+## Course Maker flicker: a panel clear presented half a frame (2026-11-14)
+
+Reproduced in 16:9 and 21:9. A scissored `0xF1` colour/depth clear of the map
+panel was treated as a full-frame boundary: consecutive presentations showed
+the title/details and map/settings separately. Scissored display clears now
+record/replay an ordered rectangle, with their depth clear retained, instead
+of presenting or changing the whole-frame clear colour. Full-display clears
+retain the boundary path. `RSX_SCISSORED_CLEAR=0` restores the fault.
+
+Private live builds at 720p: corrected 16:9 shows all editor panels together;
+corrected 21:9 stops flickering but retains a misplaced map and missing right
+labels. Those are separate aspect-dependent defects and remain open. The
+initial texture-bounds lead was not established as the cause and is unchanged.
+Native recording/rectangle/rollback checks pass (`scissored_clear.py`), as do
+private clean patch application and installed-runtime verification. The normal
+developer executable was subsequently rebuilt during the SPU helper work above.
+Evidence, limits and follow-up:
+[Course Maker investigation](course-maker-investigation.md).
+
+A corrected private 720p/21:9 High Speed Ring smoke reached RaceStart and
+sampled another 30 seconds, with road, cars, HUD and rear-view visible. This
+is not a performance comparison or full-race acceptance.
+
 ## Car list: pruned lanes recalled when a car appears (2026-11-14)
 
 **Symptom (user).** In Arcade's car list the frame rate drops when a car
@@ -365,6 +432,7 @@ round-toward-zero scopes around five measured constructor calls
 `GT5P_AUDIO_ROUND_ZERO=0` off). Live with scrubbing off: menu 77 s and
 HSR race 145 s with 0 NaN/Inf; movie 57 s clean with the default. Details,
 tests and limits: [audio.md](audio.md).
+
 
 ## Launcher: prepare the supported disc's bundled 01.04 data (2026-11-14)
 

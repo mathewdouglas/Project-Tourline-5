@@ -14928,7 +14928,7 @@ index 4a791bb1..f7ec038c 100644
      /* Texture */
      void (*bind_texture)(void* userdata, u32 unit, const rsx_texture_state* tex);
 diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
-index 68929ed2..01c8b2cc 100644
+index 68929ed2..c8779a49 100644
 --- a/libs/video/rsx_d3d12_backend.c
 +++ b/libs/video/rsx_d3d12_backend.c
 @@ -16,6 +16,8 @@
@@ -31367,7 +31367,7 @@ index 68929ed2..01c8b2cc 100644
                                + (u64)1000 * 256u);
                            static const float tri[3][4] = {
                                {-2.0f, -2.0f, 0.0f, 1.0f},
-@@ -4529,8 +15284,30 @@ static void render_frame(void)
+@@ -4529,10 +15284,44 @@ static void render_frame(void)
                        } }
                      cur_rt = want;
                      for (int _m = 0; _m < 3; _m++) cur_m[_m] = wantm[_m];
@@ -31397,8 +31397,31 @@ index 68929ed2..01c8b2cc 100644
 +                    }
                      D3D12_CPU_DESCRIPTOR_HANDLE rh =
                          (cur_rt >= 0) ? off_rt_rtv(cur_rt) : rtv_handle;
++                    D3D12_RECT cr = {0, 0, (LONG)s_d3d.width, (LONG)s_d3d.height};
++                    UINT nr = 0;
++                    if (cur_rt < 0 && dr->sc_w && dr->sc_h && s_gw && s_gh) {
++                        cr.left = (LONG)((u64)dr->sc_x * s_d3d.width / s_gw);
++                        cr.top = (LONG)((u64)dr->sc_y * s_d3d.height / s_gh);
++                        cr.right = (LONG)((u64)(dr->sc_x + dr->sc_w) * s_d3d.width / s_gw);
++                        cr.bottom = (LONG)((u64)(dr->sc_y + dr->sc_h) * s_d3d.height / s_gh);
++                        if (cr.right > (LONG)s_d3d.width) cr.right = (LONG)s_d3d.width;
++                        if (cr.bottom > (LONG)s_d3d.height) cr.bottom = (LONG)s_d3d.height;
++                        if (cr.left >= cr.right || cr.top >= cr.bottom) continue;
++                        nr = 1;
++                    }
                      /* RT_CLEARDBG=1: clear offscreen targets to magenta rather
-@@ -4554,24 +15331,247 @@ static void render_frame(void)
+                      * than the guest colour. "0.000% nonzero" cannot tell an
+                      * untouched surface from one written black, and that
+@@ -4546,7 +15335,7 @@ static void render_frame(void)
+                           const float mag[4] = {1.0f, 0.0f, 1.0f, 1.0f};
+                           s_d3d.cmd_list->lpVtbl->ClearRenderTargetView(s_d3d.cmd_list, rh, mag, 0, NULL);
+                       } else
+-                          s_d3d.cmd_list->lpVtbl->ClearRenderTargetView(s_d3d.cmd_list, rh, dr->cc, 0, NULL); }
++                          s_d3d.cmd_list->lpVtbl->ClearRenderTargetView(s_d3d.cmd_list, rh, dr->cc, nr, nr ? &cr : NULL); }
+                     for (int _m = 0; _m < 3; _m++)
+                         if (cur_m[_m] >= 0) {
+                             D3D12_CPU_DESCRIPTOR_HANDLE rhm = off_rt_rtv(cur_m[_m]);
+@@ -4554,24 +15343,247 @@ static void render_frame(void)
                          }
                      continue;
                  }
@@ -31656,7 +31679,7 @@ index 68929ed2..01c8b2cc 100644
                          (float)(dr->vp_x + dr->vp_w) <= tw + 0.5f &&
                          (float)(dr->vp_y + dr->vp_h) <= th + 0.5f) {
                          dvp.TopLeftX = (float)dr->vp_x;
-@@ -4579,868 +15579,2402 @@ static void render_frame(void)
+@@ -4579,868 +15591,2412 @@ static void render_frame(void)
                          dvp.Width    = (float)dr->vp_w;
                          dvp.Height   = (float)dr->vp_h;
                      }
@@ -32494,42 +32517,6 @@ index 68929ed2..01c8b2cc 100644
 +                extern long long pad_milestone_age_ms(const char*);
 +                long long age = pad_milestone_age_ms(s_cap_ms);
 +                if (age >= s_cap_wait) s_cap_after_ok = 1;
-+            }
-+            /* RSX_CAP_RT=<hex surface offset>: and only a frame with an op
-+             * on that colour surface (a target drawn once, at a frame number
-+             * that varies from run to run). */
-+            /* "~<hex>": any surface whose low 16 bits are that, drawn (not
-+             * cleared) this frame. */
-+            static u32 s_cap_rt = 1; static int s_cap_low = 0;
-+            if (s_cap_rt == 1) { const char* e = getenv("RSX_CAP_RT");
-+                                 if (e && e[0] == '~') { s_cap_low = 1; e++; }
-+                                 s_cap_rt = e ? (u32)strtoul(e, NULL, 16) : 0; }
-+            int cap_rt_ok = !s_cap_rt;
-+            for (u32 d = 0; !cap_rt_ok && d < s_dbg_last_draws && d < MAX_DRAWS; d++)
-+                if (s_cap_low ? ((FR->draws[d].rt_off & 0xFFFFu) == s_cap_rt && !FR->draws[d].is_clear)
-+                              : FR->draws[d].rt_off == s_cap_rt) cap_rt_ok = 1;
-+            if (s_cap_after_ok && cap_rt_ok && s_d3d.frame_count >= target && s_dbg_last_draws > 0 &&
-+                s_dbg_last_draws >= (u32)s_cap_min && s_frame_cut != 0 &&
-+                /* RSX_CAP_ZB=<n>: n frames after the first depth-only pass (zb_*). */
-+                (!getenv("RSX_CAP_ZB") ||
-+                 (s_zb_first && s_d3d.frame_count >= s_zb_first + (u64)atoi(getenv("RSX_CAP_ZB"))))) {
-+                rsx_capture_frame(fi, s_dbg_last_draws, s_cap_done);
-+                /* RSX_RDOC=1: when running under RenderDoc, also have it
-+                 * capture the next frame (its in-app API, TriggerCapture,
-+                 * slot 15 of RENDERDOC_API_1_6_0), so the frame RSX_CAP picks
-+                 * can be read with vertex inputs and outputs per draw. */
-+                if (getenv("RSX_RDOC")) {
-+                    HMODULE rd = GetModuleHandleA("renderdoc.dll");
-+                    typedef int (__cdecl *rd_get_api)(int, void**);
-+                    rd_get_api ga = rd ? (rd_get_api)(void*)GetProcAddress(rd, "RENDERDOC_GetAPI") : NULL;
-+                    void** api = NULL;
-+                    if (ga && ga(10600, (void**)&api) && api) {
-+                        ((void (__cdecl*)(void))api[15])();
-+                        fprintf(stderr, "[rdoc] capture triggered at frame %llu%c",
-+                                (unsigned long long)s_d3d.frame_count, 10);
-+                    } else fprintf(stderr, "[rdoc] renderdoc.dll not loaded: run under renderdoccmd%c", 10);
-+                }
-+                s_cap_done++;
              }
 -            if (have && changed) { reported++;
 -                fprintf(stderr, "[VRAMSCAN] base=0x%08X %u/512 blocks changed:%s%c",
@@ -32572,22 +32559,44 @@ index 68929ed2..01c8b2cc 100644
 -            s_perf_gpu = 0.0; s_perf_pre = 0.0; s_perf_srv = 0.0; s_perf_pso = 0.0;
 -            s_perf_pso_calls = 0; s_perf_pso_miss = 0; s_perf_pso_hashbytes = 0;
 -            s_perf_ntex = 0; s_perf_texbytes = 0; s_perf_nverts = 0;
-         }
--    }
--    { static int dt = -1;
--      if (dt < 0) { const char* e = getenv("RSX_DBG_TRACK"); dt = e ? atoi(e) : 0; }
--      if (dt) { static int fr = 0; fr++;
--        if (s_lock_n)
--            fprintf(stderr, "[RSX_DBG_TRACK] frame %d: %u duck draws, ndc=(%.3f,%.3f)%c",
--                    fr, s_lock_n, (float)(s_lock_sx/s_lock_n), (float)(s_lock_sy/s_lock_n), 10);
--        else if (fr % 20 == 0)
--            fprintf(stderr, "[RSX_DBG_TRACK] frame %d: NO duck draws%c", fr, 10);
-       } }
--    if (s_lock_n) {                       /* publish this frame's centroid */
--        s_lock_x = (float)(s_lock_sx / s_lock_n);
--        s_lock_y = (float)(s_lock_sy / s_lock_n);
--        s_lock_valid = 1;
--        s_lock_sx = s_lock_sy = 0.0; s_lock_n = 0;
++            /* RSX_CAP_RT=<hex surface offset>: and only a frame with an op
++             * on that colour surface (a target drawn once, at a frame number
++             * that varies from run to run). */
++            /* "~<hex>": any surface whose low 16 bits are that, drawn (not
++             * cleared) this frame. */
++            static u32 s_cap_rt = 1; static int s_cap_low = 0;
++            if (s_cap_rt == 1) { const char* e = getenv("RSX_CAP_RT");
++                                 if (e && e[0] == '~') { s_cap_low = 1; e++; }
++                                 s_cap_rt = e ? (u32)strtoul(e, NULL, 16) : 0; }
++            int cap_rt_ok = !s_cap_rt;
++            for (u32 d = 0; !cap_rt_ok && d < s_dbg_last_draws && d < MAX_DRAWS; d++)
++                if (s_cap_low ? ((FR->draws[d].rt_off & 0xFFFFu) == s_cap_rt && !FR->draws[d].is_clear)
++                              : FR->draws[d].rt_off == s_cap_rt) cap_rt_ok = 1;
++            if (s_cap_after_ok && cap_rt_ok && s_d3d.frame_count >= target && s_dbg_last_draws > 0 &&
++                s_dbg_last_draws >= (u32)s_cap_min && s_frame_cut != 0 &&
++                /* RSX_CAP_ZB=<n>: n frames after the first depth-only pass (zb_*). */
++                (!getenv("RSX_CAP_ZB") ||
++                 (s_zb_first && s_d3d.frame_count >= s_zb_first + (u64)atoi(getenv("RSX_CAP_ZB"))))) {
++                rsx_capture_frame(fi, s_dbg_last_draws, s_cap_done);
++                /* RSX_RDOC=1: when running under RenderDoc, also have it
++                 * capture the next frame (its in-app API, TriggerCapture,
++                 * slot 15 of RENDERDOC_API_1_6_0), so the frame RSX_CAP picks
++                 * can be read with vertex inputs and outputs per draw. */
++                if (getenv("RSX_RDOC")) {
++                    HMODULE rd = GetModuleHandleA("renderdoc.dll");
++                    typedef int (__cdecl *rd_get_api)(int, void**);
++                    rd_get_api ga = rd ? (rd_get_api)(void*)GetProcAddress(rd, "RENDERDOC_GetAPI") : NULL;
++                    void** api = NULL;
++                    if (ga && ga(10600, (void**)&api) && api) {
++                        ((void (__cdecl*)(void))api[15])();
++                        fprintf(stderr, "[rdoc] capture triggered at frame %llu%c",
++                                (unsigned long long)s_d3d.frame_count, 10);
++                    } else fprintf(stderr, "[rdoc] renderdoc.dll not loaded: run under renderdoccmd%c", 10);
++                }
++                s_cap_done++;
++            }
++        }
++      } }
 +
 +    /* RSX_LUMA_POKE=<hex word>: write that word into guest memory at the
 +     * pixel of the frame's last single-pixel offscreen draw, every frame. A
@@ -32661,8 +32670,16 @@ index 68929ed2..01c8b2cc 100644
 +            else win_set_title(tb);
 +            s_tframes = 0;
 +            s_tt0 = tnow;
-+        }
-+    }
+         }
+     }
+-    { static int dt = -1;
+-      if (dt < 0) { const char* e = getenv("RSX_DBG_TRACK"); dt = e ? atoi(e) : 0; }
+-      if (dt) { static int fr = 0; fr++;
+-        if (s_lock_n)
+-            fprintf(stderr, "[RSX_DBG_TRACK] frame %d: %u duck draws, ndc=(%.3f,%.3f)%c",
+-                    fr, s_lock_n, (float)(s_lock_sx/s_lock_n), (float)(s_lock_sy/s_lock_n), 10);
+-        else if (fr % 20 == 0)
+-            fprintf(stderr, "[RSX_DBG_TRACK] frame %d: NO duck draws%c", fr, 10);
 +}
 +
 +/* ---------------------------------------------------------------------------
@@ -32741,6 +32758,15 @@ index 68929ed2..01c8b2cc 100644
 +    }
 +}
 +
++/* A scissored display clear is an operation inside a frame, not its boundary. */
++static int display_rect_clear(const rsx_state* st)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("RSX_SCISSORED_CLEAR"); on = !(e && e[0] == '0'); }
++    return on && st && st->scissor_w && st->scissor_h &&
++        (st->scissor_x || st->scissor_y || st->scissor_w < s_gw || st->scissor_h < s_gh);
++}
++
 +static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
 +{
 +    (void)ud;
@@ -32768,6 +32794,93 @@ index 68929ed2..01c8b2cc 100644
 +              st->scissor_x, st->scissor_y, st->scissor_w, st->scissor_h,
 +              st->surface_color_offset[0], st->surface_format, st->depth_test_enable,
 +              st->color_mask, st->stencil_test_enable, FR->draw_count);
++    }
++
++    /* A stencil clear of the surface a mask pass draws to: clear the colour
++     * target that stands in for it. Whole surface; the scissor is not applied. */
++    { const rsx_state* st = s_d3d.current_rsx_state;
++      if ((flags & 0x02u) && st && s_mask_zeta_off &&
++          st->surface_zeta_offset == s_mask_zeta_off && FR->draw_count < s_draw_cap) {
++          u32 zw = st->surface_clip_w, zh = st->surface_clip_h;
++          if (zw < 16 || zw > 2048 || zh < 16 || zh > 2048) { zw = 0; zh = 0; }
++          D3D12DrawRecord* dr = &FR->draws[FR->draw_count++];
++          memset(dr, 0, sizeof(*dr));
++          dr->is_vp = 1; dr->is_clear = 1; dr->tex_slot = -1;
++          dr->rt_off = s_mask_zeta_off; dr->rt_w = zw; dr->rt_h = zh;
++          dr->rt_fmt = st->surface_format;
++          dr_note_surface(dr);
++          dr->cc[0] = dr->cc[1] = dr->cc[2] = dr->cc[3] = stencil ? 1.0f : 0.0f;
+       } }
+-    if (s_lock_n) {                       /* publish this frame's centroid */
+-        s_lock_x = (float)(s_lock_sx / s_lock_n);
+-        s_lock_y = (float)(s_lock_sy / s_lock_n);
+-        s_lock_valid = 1;
+-        s_lock_sx = s_lock_sy = 0.0; s_lock_n = 0;
++    /* Preserve real CLEAR_SURFACE operations in command order. Previously
++     * colour-target changes stood in for these and erased the track's depth
++     * when a shadow/post-processing pass interrupted the scene. Mask stencils
++     * still use the colour substitute above. RSX_DEPTH_KEEP=0: legacy path. */
++    { const rsx_state* st = s_d3d.current_rsx_state;
++      u32 real_flags = depth_clear_flags(st, flags);
++      if (depth_keep_on() && real_flags && FR->draw_count < s_draw_cap) {
++          u32 zw = 0, zh = 0, zm[3] = {0, 0, 0};
++          u32 zrt = current_rt_off(&zw, &zh, zm);
++          /* A combined display clear below starts a new frame, whose DSV is
++           * initialized at replay. Do not append its clear to the OLD frame. */
++          if (!(flags & 0xF0u) || zrt || st->color_target == 0 || display_rect_clear(st)) {
++              D3D12DrawRecord* dr = &FR->draws[FR->draw_count++];
++              memset(dr, 0, sizeof(*dr));
++              dr->is_vp = 1; dr->is_clear = 1; dr->tex_slot = -1;
++              dr->rt_off = zrt; dr->rt_w = zw; dr->rt_h = zh;
++              memcpy(dr->rt_mrt, zm, sizeof zm);
++              dr->rt_fmt = st->surface_format;
++              dr_note_surface(dr);
++              dr->zeta_off = st->surface_zeta_offset;
++              if (st->color_target == 0 && zb_on()) {
++                  dr->zonly = 1; dr->rt_off = 0;
++                  dr->rt_w = st->surface_clip_w; dr->rt_h = st->surface_clip_h;
++              }
++              dr_set_scissor(dr, st);
++              dr->clear_z_flags = (u8)real_flags;
++              dr->clear_z_stencil = stencil; dr->clear_z = depth;
++          }
++      } }
++    /* Nothing below applies to a clear that leaves colour alone. */
++    if (!(flags & 0xF0u)) return;
++
++    /* Convert RSX ARGB u32 to float[4] RGBA */
++    float cc[4];
++    cc[0] = ((color >> 16) & 0xFF) / 255.0f; /* R */
++    cc[1] = ((color >> 8) & 0xFF) / 255.0f;  /* G */
++    cc[2] = (color & 0xFF) / 255.0f;          /* B */
++    cc[3] = ((color >> 24) & 0xFF) / 255.0f;  /* A */
++    /* CLEAR_RGB=r,g,b: override the guest clear colour. Black holes (geometry
++     * that never rasterized) and black pixels a shader really wrote look
++     * identical against a black clear; this separates them in one run. */
++    { static int _cinit = 0; static float _co[3]; static int _con = 0;
++      if (!_cinit) { _cinit = 1; const char* e = getenv("CLEAR_RGB");
++          if (e && sscanf(e, "%f,%f,%f", &_co[0], &_co[1], &_co[2]) == 3) _con = 1; }
++      if (_con) { cc[0] = _co[0]; cc[1] = _co[1]; cc[2] = _co[2]; } }
++
++    u32 rt_w = 0, rt_h = 0, mrt[3] = {0, 0, 0};
++    u32 rt = current_rt_off(&rt_w, &rt_h, mrt);
++
++    /* An OFFSCREEN clear is just an ordered op in the current frame's pass
++     * chain (demosaic clears each effect pass's surface) -- record it, don't
++     * touch the frame boundary. */
++    if (rt != 0 || display_rect_clear(s_d3d.current_rsx_state)) {
++        if (FR->draw_count < s_draw_cap) {
++            D3D12DrawRecord* dr = &FR->draws[FR->draw_count++];
++            memset(dr, 0, sizeof(*dr));
++            dr->is_vp = 1; dr->is_clear = 1; dr->tex_slot = -1;
++            dr->rt_off = rt; memcpy(dr->rt_mrt, mrt, sizeof(mrt));
++            dr->rt_w = rt_w; dr->rt_h = rt_h;
++            dr->rt_fmt = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->surface_format : 0;
++            dr_note_surface(dr);
++            memcpy(dr->cc, cc, sizeof(cc));
++            if (!rt) dr_set_scissor(dr, s_d3d.current_rsx_state);
++        }
++        return;
      }
 -    s_dbg_last_draws = s_d3d.draw_count;
 -    s_d3d.vb_offset  = 0; /* reset for next frame */
@@ -32848,53 +32961,24 @@ index 68929ed2..01c8b2cc 100644
 -                        rt, r->w, r->h, pitch);
 -                _done = 1;
 -            }
--        }
-+    /* A stencil clear of the surface a mask pass draws to: clear the colour
-+     * target that stands in for it. Whole surface; the scissor is not applied. */
-+    { const rsx_state* st = s_d3d.current_rsx_state;
-+      if ((flags & 0x02u) && st && s_mask_zeta_off &&
-+          st->surface_zeta_offset == s_mask_zeta_off && FR->draw_count < s_draw_cap) {
-+          u32 zw = st->surface_clip_w, zh = st->surface_clip_h;
-+          if (zw < 16 || zw > 2048 || zh < 16 || zh > 2048) { zw = 0; zh = 0; }
-+          D3D12DrawRecord* dr = &FR->draws[FR->draw_count++];
-+          memset(dr, 0, sizeof(*dr));
-+          dr->is_vp = 1; dr->is_clear = 1; dr->tex_slot = -1;
-+          dr->rt_off = s_mask_zeta_off; dr->rt_w = zw; dr->rt_h = zh;
-+          dr->rt_fmt = st->surface_format;
-+          dr_note_surface(dr);
-+          dr->cc[0] = dr->cc[1] = dr->cc[2] = dr->cc[3] = stencil ? 1.0f : 0.0f;
-+      } }
-+    /* Preserve real CLEAR_SURFACE operations in command order. Previously
-+     * colour-target changes stood in for these and erased the track's depth
-+     * when a shadow/post-processing pass interrupted the scene. Mask stencils
-+     * still use the colour substitute above. RSX_DEPTH_KEEP=0: legacy path. */
-+    { const rsx_state* st = s_d3d.current_rsx_state;
-+      u32 real_flags = depth_clear_flags(st, flags);
-+      if (depth_keep_on() && real_flags && FR->draw_count < s_draw_cap) {
-+          u32 zw = 0, zh = 0, zm[3] = {0, 0, 0};
-+          u32 zrt = current_rt_off(&zw, &zh, zm);
-+          /* A combined display clear below starts a new frame, whose DSV is
-+           * initialized at replay. Do not append its clear to the OLD frame. */
-+          if (!(flags & 0xF0u) || zrt || st->color_target == 0) {
-+              D3D12DrawRecord* dr = &FR->draws[FR->draw_count++];
-+              memset(dr, 0, sizeof(*dr));
-+              dr->is_vp = 1; dr->is_clear = 1; dr->tex_slot = -1;
-+              dr->rt_off = zrt; dr->rt_w = zw; dr->rt_h = zh;
-+              memcpy(dr->rt_mrt, zm, sizeof zm);
-+              dr->rt_fmt = st->surface_format;
-+              dr_note_surface(dr);
-+              dr->zeta_off = st->surface_zeta_offset;
-+              if (st->color_target == 0 && zb_on()) {
-+                  dr->zonly = 1; dr->rt_off = 0;
-+                  dr->rt_w = st->surface_clip_w; dr->rt_h = st->surface_clip_h;
-+              }
-+              dr_set_scissor(dr, st);
-+              dr->clear_z_flags = (u8)real_flags;
-+              dr->clear_z_stencil = stencil; dr->clear_z = depth;
-+          }
-       } }
-+    /* Nothing below applies to a clear that leaves colour alone. */
-+    if (!(flags & 0xF0u)) return;
++    memcpy(FR->clear_color, cc, sizeof(cc));
++
++    /* A DISPLAY clear marks the start of a new visible frame. If a completed
++     * frame is still accumulated (the drain gulped across a frame boundary --
++     * guaranteed at the FIFO ring wrap, where rest-of-frame-N + clear-N+1
++     * arrive in one batch), PRESENT it now instead of discarding it. Only a
++     * batch that actually contains DISPLAY draws is a completed frame: a
++     * batch of offscreen pass work (render-to-texture) must keep accumulating
++     * until its composite draw arrives, or the screen strobes intermediates. */
++    int have_display_draws = 0;
++    for (u32 i = 0; i < FR->draw_count && i < MAX_DRAWS; i++)
++        if (!FR->draws[i].is_clear && FR->draws[i].rt_off == 0) {
++            have_display_draws = 1;
++            break;
+         }
+-      } }
++    if (!have_display_draws)
++        return;   /* keep accumulating the in-progress frame */
  
 -    /* CELLMARK_DUMP_MINDRAWS=<N>: only consider frames carrying at least N draw
 -     * records. Most render_frame calls come from the guest flip with a batch the
@@ -32925,127 +33009,6 @@ index 68929ed2..01c8b2cc 100644
 -        if (s_every < 0) { const char* e = getenv("CELLMARK_DUMP_EVERY");
 -                           s_every = e ? atoi(e) : 0; }
 -        if (s_every > 1) s_d3d.dump_skip_left = s_every - 1;
--    }
--    if (dumping) {
--        /* RT -> COPY_SOURCE, copy into the readback buffer, then -> PRESENT. */
--        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
--        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
--        s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &barrier);
-+    /* Convert RSX ARGB u32 to float[4] RGBA */
-+    float cc[4];
-+    cc[0] = ((color >> 16) & 0xFF) / 255.0f; /* R */
-+    cc[1] = ((color >> 8) & 0xFF) / 255.0f;  /* G */
-+    cc[2] = (color & 0xFF) / 255.0f;          /* B */
-+    cc[3] = ((color >> 24) & 0xFF) / 255.0f;  /* A */
-+    /* CLEAR_RGB=r,g,b: override the guest clear colour. Black holes (geometry
-+     * that never rasterized) and black pixels a shader really wrote look
-+     * identical against a black clear; this separates them in one run. */
-+    { static int _cinit = 0; static float _co[3]; static int _con = 0;
-+      if (!_cinit) { _cinit = 1; const char* e = getenv("CLEAR_RGB");
-+          if (e && sscanf(e, "%f,%f,%f", &_co[0], &_co[1], &_co[2]) == 3) _con = 1; }
-+      if (_con) { cc[0] = _co[0]; cc[1] = _co[1]; cc[2] = _co[2]; } }
- 
--        D3D12_TEXTURE_COPY_LOCATION dst = {0}, src = {0};
--        dst.pResource = s_d3d.readback_buf;
--        dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
--        dst.PlacedFootprint.Offset = 0;
--        dst.PlacedFootprint.Footprint.Format   = DXGI_FORMAT_R8G8B8A8_UNORM;
--        dst.PlacedFootprint.Footprint.Width    = s_d3d.width;
--        dst.PlacedFootprint.Footprint.Height   = s_d3d.height;
--        dst.PlacedFootprint.Footprint.Depth    = 1;
--        dst.PlacedFootprint.Footprint.RowPitch = s_d3d.readback_pitch;
--        src.pResource = s_d3d.render_targets[fi];
--        src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
--        src.SubresourceIndex = 0;
--        s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dst, 0, 0, 0, &src, NULL);
-+    u32 rt_w = 0, rt_h = 0, mrt[3] = {0, 0, 0};
-+    u32 rt = current_rt_off(&rt_w, &rt_h, mrt);
- 
--        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
--        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
--        s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &barrier);
--    } else {
--        /* End-of-frame fallback snapshot: used when the frame never contained a
--         * reduced-viewport pass to capture mid-frame. */
--        screen_copy_capture(fi);
--        /* Transition render target to PRESENT state */
--        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
--        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
--        s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &barrier);
-+    /* An OFFSCREEN clear is just an ordered op in the current frame's pass
-+     * chain (demosaic clears each effect pass's surface) -- record it, don't
-+     * touch the frame boundary. */
-+    if (rt != 0) {
-+        if (FR->draw_count < s_draw_cap) {
-+            D3D12DrawRecord* dr = &FR->draws[FR->draw_count++];
-+            memset(dr, 0, sizeof(*dr));
-+            dr->is_vp = 1; dr->is_clear = 1; dr->tex_slot = -1;
-+            dr->rt_off = rt; memcpy(dr->rt_mrt, mrt, sizeof(mrt));
-+            dr->rt_w = rt_w; dr->rt_h = rt_h;
-+            dr->rt_fmt = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->surface_format : 0;
-+            dr_note_surface(dr);
-+            memcpy(dr->cc, cc, sizeof(cc));
-+        }
-+        return;
-     }
- 
--    /* Close and execute */
--    s_d3d.cmd_list->lpVtbl->Close(s_d3d.cmd_list);
--    ID3D12CommandList* cmd_lists[] = {(ID3D12CommandList*)s_d3d.cmd_list};
--    s_d3d.cmd_queue->lpVtbl->ExecuteCommandLists(s_d3d.cmd_queue, 1, cmd_lists);
-+    memcpy(FR->clear_color, cc, sizeof(cc));
- 
--    /* D3D12_IQ=1: drain the debug layer's message queue after submitting the
--     * frame. The legacy (is_vp=0) DrawInstanced path silently produced ZERO
--     * pixels in flOw's render injection while ClearRenderTargetView worked, and
--     * every input (verts, offsets, layout, MVP, PSO, root sig, depth, cull) was
--     * verified correct -- so the only remaining explanation is a validation
--     * error the debug layer is swallowing. Off unless the env var is set. */
--    { static int _iq = -1;
--      if (_iq < 0) { const char* e = getenv("D3D12_IQ"); _iq = e ? 1 : 0; }
--      if (_iq && s_d3d.device) {
--        ID3D12InfoQueue* iq = NULL;
--        if (SUCCEEDED(s_d3d.device->lpVtbl->QueryInterface(
--                s_d3d.device, &IID_ID3D12InfoQueue, (void**)&iq)) && iq) {
--            UINT64 n = iq->lpVtbl->GetNumStoredMessages(iq);
--            static int _printed = 0;
--            for (UINT64 mi = 0; mi < n && _printed < 80; mi++) {
--                SIZE_T len = 0;
--                iq->lpVtbl->GetMessage(iq, mi, NULL, &len);
--                D3D12_MESSAGE* m = (D3D12_MESSAGE*)malloc(len);
--                if (m && SUCCEEDED(iq->lpVtbl->GetMessage(iq, mi, m, &len))) {
--                    fprintf(stderr, "[D3D12-IQ][sev=%d id=%d] %s\n",
--                            (int)m->Severity, (int)m->ID, m->pDescription);
--                    _printed++;
--                }
--                free(m);
--            }
--            if (n) iq->lpVtbl->ClearStoredMessages(iq);
--            iq->lpVtbl->Release(iq);
--            fflush(stderr);
-+    /* A DISPLAY clear marks the start of a new visible frame. If a completed
-+     * frame is still accumulated (the drain gulped across a frame boundary --
-+     * guaranteed at the FIFO ring wrap, where rest-of-frame-N + clear-N+1
-+     * arrive in one batch), PRESENT it now instead of discarding it. Only a
-+     * batch that actually contains DISPLAY draws is a completed frame: a
-+     * batch of offscreen pass work (render-to-texture) must keep accumulating
-+     * until its composite draw arrives, or the screen strobes intermediates. */
-+    int have_display_draws = 0;
-+    for (u32 i = 0; i < FR->draw_count && i < MAX_DRAWS; i++)
-+        if (!FR->draws[i].is_clear && FR->draws[i].rt_off == 0) {
-+            have_display_draws = 1;
-+            break;
-         }
--      } }
-+    if (!have_display_draws)
-+        return;   /* keep accumulating the in-progress frame */
- 
--    if (s_sc_dump_pending) {
--        s_sc_dump_pending = 0;
--        wait_for_gpu();
--        s_dump_name = "screencopy";
--        dump_backbuffer_bmp();
--        s_dump_name = NULL;
 +    /* A title that DOUBLE-BUFFERS the display (DeferredShading clears both
 +     * 0x0 and 0x440000 per frame, plus a HUD pass) issues several display
 +     * clears per real frame -- treating each as a boundary presented the
@@ -33077,8 +33040,26 @@ index 68929ed2..01c8b2cc 100644
 +                return;   /* intermediate: keep accumulating, flip stays pending */
 +            s_last_present_flip = fc;
 +        }
-+    }
-+
+     }
+-    if (dumping) {
+-        /* RT -> COPY_SOURCE, copy into the readback buffer, then -> PRESENT. */
+-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+-        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
+-        s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &barrier);
+ 
+-        D3D12_TEXTURE_COPY_LOCATION dst = {0}, src = {0};
+-        dst.pResource = s_d3d.readback_buf;
+-        dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+-        dst.PlacedFootprint.Offset = 0;
+-        dst.PlacedFootprint.Footprint.Format   = DXGI_FORMAT_R8G8B8A8_UNORM;
+-        dst.PlacedFootprint.Footprint.Width    = s_d3d.width;
+-        dst.PlacedFootprint.Footprint.Height   = s_d3d.height;
+-        dst.PlacedFootprint.Footprint.Depth    = 1;
+-        dst.PlacedFootprint.Footprint.RowPitch = s_d3d.readback_pitch;
+-        src.pResource = s_d3d.render_targets[fi];
+-        src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+-        src.SubresourceIndex = 0;
+-        s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dst, 0, 0, 0, &src, NULL);
 +    /* RSX_ACCUM_FRAME=1: never present at a clear boundary, so every draw in a
 +     * guest frame accumulates into one image. A title that clears several times
 +     * per frame (render-to-texture passes) otherwise gets presented mid-scene,
@@ -33095,18 +33076,25 @@ index 68929ed2..01c8b2cc 100644
 +        s_clear_presents++;
 +        { extern unsigned cellGcm_flip_request_count(void);
 +          s_clear_present_flip = cellGcm_flip_request_count(); }
-     }
--    if (dumping) {
--        wait_for_gpu();            /* ensure the copy finished before mapping */
--        dump_backbuffer_bmp();
--        s_d3d.dump_frames_left--;
++    }
 +    s_dbg_clears_since_present++;
 +    FR->draw_count   = 0;
 +    s_d3d.vb_offset    = 0;
 +    s_d3d.vp_vb_offset = 0;
 +    ix_frame_reset();
 +}
-+
+ 
+-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+-        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+-        s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &barrier);
+-    } else {
+-        /* End-of-frame fallback snapshot: used when the frame never contained a
+-         * reduced-viewport pass to capture mid-frame. */
+-        screen_copy_capture(fi);
+-        /* Transition render target to PRESENT state */
+-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+-        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+-        s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &barrier);
 +static void d3d12_set_render_target(void* ud, const rsx_state* state)
 +{
 +    (void)ud;
@@ -33120,6 +33108,85 @@ index 68929ed2..01c8b2cc 100644
 +        s_count++;
      }
 +}
++
++static void d3d12_set_viewport(void* ud, const rsx_state* state)
++{
++    (void)ud;
++    /* TODO: update D3D12 viewport from RSX state */
++    (void)state;
++}
++
++/* Our host vertex layout for the fallback path: position (xyz) + color (rgba)
++ * + texcoord (uv), 36 bytes. (The real VP path feeds raw float4 attrib0.) */
++typedef struct { float x, y, z; float r, g, b, a; float u, v; } BasicVertex;
++
+ 
+-    /* Close and execute */
+-    s_d3d.cmd_list->lpVtbl->Close(s_d3d.cmd_list);
+-    ID3D12CommandList* cmd_lists[] = {(ID3D12CommandList*)s_d3d.cmd_list};
+-    s_d3d.cmd_queue->lpVtbl->ExecuteCommandLists(s_d3d.cmd_queue, 1, cmd_lists);
++/* Read one RSX vertex (by absolute vertex index) from guest memory into our
++ * host layout. Position is attrib 0 (float3+), color is attrib 3 (ubyte4 or
++ * float4); missing attribs default to opaque white. RSX stores each 32-bit
++ * component big-endian, so every lane is byte-swapped. */
++static void read_rsx_vertex(const rsx_state* state, u32 vindex, BasicVertex* out)
++{
++    extern uint8_t* vm_base;
++    extern u32 cellGcmResolveOffset(u32);
+ 
+-    /* D3D12_IQ=1: drain the debug layer's message queue after submitting the
+-     * frame. The legacy (is_vp=0) DrawInstanced path silently produced ZERO
+-     * pixels in flOw's render injection while ClearRenderTargetView worked, and
+-     * every input (verts, offsets, layout, MVP, PSO, root sig, depth, cull) was
+-     * verified correct -- so the only remaining explanation is a validation
+-     * error the debug layer is swallowing. Off unless the env var is set. */
+-    { static int _iq = -1;
+-      if (_iq < 0) { const char* e = getenv("D3D12_IQ"); _iq = e ? 1 : 0; }
+-      if (_iq && s_d3d.device) {
+-        ID3D12InfoQueue* iq = NULL;
+-        if (SUCCEEDED(s_d3d.device->lpVtbl->QueryInterface(
+-                s_d3d.device, &IID_ID3D12InfoQueue, (void**)&iq)) && iq) {
+-            UINT64 n = iq->lpVtbl->GetNumStoredMessages(iq);
+-            static int _printed = 0;
+-            for (UINT64 mi = 0; mi < n && _printed < 80; mi++) {
+-                SIZE_T len = 0;
+-                iq->lpVtbl->GetMessage(iq, mi, NULL, &len);
+-                D3D12_MESSAGE* m = (D3D12_MESSAGE*)malloc(len);
+-                if (m && SUCCEEDED(iq->lpVtbl->GetMessage(iq, mi, m, &len))) {
+-                    fprintf(stderr, "[D3D12-IQ][sev=%d id=%d] %s\n",
+-                            (int)m->Severity, (int)m->ID, m->pDescription);
+-                    _printed++;
+-                }
+-                free(m);
+-            }
+-            if (n) iq->lpVtbl->ClearStoredMessages(iq);
+-            iq->lpVtbl->Release(iq);
+-            fflush(stderr);
+-        }
+-      } }
++    out->x = out->y = out->z = 0.0f;
++    out->r = out->g = out->b = out->a = 1.0f;
++    out->u = out->v = 0.0f;
++    if (!state || !vm_base) return;
+ 
+-    if (s_sc_dump_pending) {
+-        s_sc_dump_pending = 0;
+-        wait_for_gpu();
+-        s_dump_name = "screencopy";
+-        dump_backbuffer_bmp();
+-        s_dump_name = NULL;
+-    }
+-    if (dumping) {
+-        wait_for_gpu();            /* ensure the copy finished before mapping */
+-        dump_backbuffer_bmp();
+-        s_d3d.dump_frames_left--;
+-    }
++    const rsx_vertex_attrib* pos = &state->vertex_attribs[0];
++    if (pos->enabled && pos->type == 2 /* float */ && pos->size >= 2) {
++        u8* src = vm_base + cellGcmResolveOffset(pos->offset + vindex * pos->stride);
++        out->x = rsx_rd_bef(src);
++        out->y = rsx_rd_bef(src + 4);
++        if (pos->size >= 3) out->z = rsx_rd_bef(src + 8);
  
 -    if (s_rtsave_state) {
 -        fprintf(stderr, "[RTT_SAVERT] writing rt_save.bmp %ux%u\n", s_rtsave_w, s_rtsave_h);
@@ -33196,39 +33263,6 @@ index 68929ed2..01c8b2cc 100644
 -                free(line);
 -                fclose(f);
 -                printf("[D3D12] wrote rt_save.bmp (%ux%u dxgi=%u)\n", w, h, s_rtsave_dxgi);
-+static void d3d12_set_viewport(void* ud, const rsx_state* state)
-+{
-+    (void)ud;
-+    /* TODO: update D3D12 viewport from RSX state */
-+    (void)state;
-+}
-+
-+/* Our host vertex layout for the fallback path: position (xyz) + color (rgba)
-+ * + texcoord (uv), 36 bytes. (The real VP path feeds raw float4 attrib0.) */
-+typedef struct { float x, y, z; float r, g, b, a; float u, v; } BasicVertex;
-+
-+
-+/* Read one RSX vertex (by absolute vertex index) from guest memory into our
-+ * host layout. Position is attrib 0 (float3+), color is attrib 3 (ubyte4 or
-+ * float4); missing attribs default to opaque white. RSX stores each 32-bit
-+ * component big-endian, so every lane is byte-swapped. */
-+static void read_rsx_vertex(const rsx_state* state, u32 vindex, BasicVertex* out)
-+{
-+    extern uint8_t* vm_base;
-+    extern u32 cellGcmResolveOffset(u32);
-+
-+    out->x = out->y = out->z = 0.0f;
-+    out->r = out->g = out->b = out->a = 1.0f;
-+    out->u = out->v = 0.0f;
-+    if (!state || !vm_base) return;
-+
-+    const rsx_vertex_attrib* pos = &state->vertex_attribs[0];
-+    if (pos->enabled && pos->type == 2 /* float */ && pos->size >= 2) {
-+        u8* src = vm_base + cellGcmResolveOffset(pos->offset + vindex * pos->stride);
-+        out->x = rsx_rd_bef(src);
-+        out->y = rsx_rd_bef(src + 4);
-+        if (pos->size >= 3) out->z = rsx_rd_bef(src + 8);
-+
 +        /* dbgfont (and similar 2D overlays) store screen positions biased far
 +         * outside clip space; their vertex program folds them back to clip
 +         * space using transform constants we don't execute. When a position is
@@ -34832,7 +34866,7 @@ index 68929ed2..01c8b2cc 100644
  
  /* VTX_POS=<N>: print the first fetched position of the first N draws. A guest
   * vertex array that resolves to the wrong memory reads as garbage/denormals, and
-@@ -5484,6 +18018,21 @@ static void vp_attrs_dbg(const rsx_state* state)
+@@ -5484,6 +18040,21 @@ static void vp_attrs_dbg(const rsx_state* state)
          if (a->enabled) fprintf(stderr, "[VPATTR] a%d off=0x%X stride=%u size=%u type=%u freq=%u fmt=0x%08X\n",
                                  i, a->offset, a->stride, a->size, a->type, a->frequency, a->format);
      }
@@ -34854,7 +34888,7 @@ index 68929ed2..01c8b2cc 100644
      /* VP_ATTRS_DUMP=<attr>:<n>: read n entries of that attribute straight out of
       * guest memory. Answers "did the guest write these values, or did our fetch
       * mangle them" without inferring it from the rendered image. */
-@@ -5568,18 +18117,47 @@ static u32 upload_quads_vp(const rsx_state* state, u32 first, u32 count)
+@@ -5568,18 +18139,47 @@ static u32 upload_quads_vp(const rsx_state* state, u32 first, u32 count)
  {
      extern uint8_t* vm_base;
      if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
@@ -34906,7 +34940,7 @@ index 68929ed2..01c8b2cc 100644
          /* quad -> two triangles (perimeter winding) */
          static const int idx[6] = {0,1,2, 0,2,3};
          for (int t = 0; t < 6; t++) { memcpy(&out[o*16], c[idx[t]], sizeof(c[0])); o++; }
-@@ -5591,7 +18169,7 @@ static u32 upload_quads_vp(const rsx_state* state, u32 first, u32 count)
+@@ -5591,7 +18191,7 @@ static u32 upload_quads_vp(const rsx_state* state, u32 first, u32 count)
                      c[k][8].v[0],c[k][8].v[1]);
                fclose(f); } } }
      }
@@ -34915,7 +34949,7 @@ index 68929ed2..01c8b2cc 100644
      return o;
  }
  
-@@ -5602,16 +18180,16 @@ static u32 upload_tris_vp(const rsx_state* state, u32 first, u32 count)
+@@ -5602,16 +18202,16 @@ static u32 upload_tris_vp(const rsx_state* state, u32 first, u32 count)
      extern uint8_t* vm_base;
      s_req_verts += count; s_req_draws++;
      if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
@@ -34936,7 +34970,7 @@ index 68929ed2..01c8b2cc 100644
      { double _tv = perf_on() ? perf_now() : 0.0;
        for (u32 k = 0; k < count; k++)
            read_vp_vertex(state, first + k, &out[k*16]);
-@@ -5655,7 +18233,7 @@ static u32 upload_tris_vp(const rsx_state* state, u32 first, u32 count)
+@@ -5655,7 +18255,7 @@ static u32 upload_tris_vp(const rsx_state* state, u32 first, u32 count)
                  out[k*16+2].v[0],out[k*16+2].v[1],out[k*16+2].v[2],
                  out[k*16+9].v[0],out[k*16+9].v[1],out[k*16+9].v[2],out[k*16+9].v[3]);
            fclose(f); } } }
@@ -34945,7 +34979,7 @@ index 68929ed2..01c8b2cc 100644
      return count;
  }
  
-@@ -5668,24 +18246,41 @@ static u32 upload_strip_vp(const rsx_state* state, u32 first, u32 count, int fan
+@@ -5668,24 +18268,41 @@ static u32 upload_strip_vp(const rsx_state* state, u32 first, u32 count, int fan
  {
      extern uint8_t* vm_base;
      if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
@@ -34998,7 +35032,7 @@ index 68929ed2..01c8b2cc 100644
      return o;
  }
  
-@@ -5701,10 +18296,10 @@ static u32 read_guest_index(const rsx_state* st, u32 k)
+@@ -5701,10 +18318,10 @@ static u32 read_guest_index(const rsx_state* st, u32 k)
      const u8* p = vm_base + base;
      if (((st->index_array_dma >> 4) & 0xF) == 1) {
          p += (u64)k * 2;
@@ -35011,7 +35045,7 @@ index 68929ed2..01c8b2cc 100644
  }
  
  /* Indexed variants of the VP-path uploads. */
-@@ -5714,10 +18309,10 @@ static u32 upload_quads_vp_indexed(const rsx_state* state, u32 first, u32 count)
+@@ -5714,10 +18331,10 @@ static u32 upload_quads_vp_indexed(const rsx_state* state, u32 first, u32 count)
      if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
      if (!state->vertex_attribs[0].enabled) return 0;
      u32 quads = count / 4;
@@ -35025,7 +35059,7 @@ index 68929ed2..01c8b2cc 100644
      u32 o = 0;
      for (u32 q = 0; q < quads; q++) {
          VPSlot c[4][16];
-@@ -5744,7 +18339,7 @@ static u32 upload_quads_vp_indexed(const rsx_state* state, u32 first, u32 count)
+@@ -5744,7 +18361,7 @@ static u32 upload_quads_vp_indexed(const rsx_state* state, u32 first, u32 count)
                  fclose(f);
              } } }
      }
@@ -35034,7 +35068,7 @@ index 68929ed2..01c8b2cc 100644
      return o;
  }
  
-@@ -5755,14 +18350,56 @@ static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
+@@ -5755,14 +18372,56 @@ static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
      if (!state || !vm_base || !s_d3d.vp_vb_mapped) return 0;
      if (!state->vertex_attribs[0].enabled) return 0;
      vp_attrs_dbg(state);
@@ -35094,7 +35128,7 @@ index 68929ed2..01c8b2cc 100644
      { double _tv = perf_on() ? perf_now() : 0.0;
        for (u32 k = 0; k < count; k++)
            read_vp_vertex(state, read_guest_index(state, first + k), &out[k*16]);
-@@ -5957,7 +18594,7 @@ static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
+@@ -5957,7 +18616,7 @@ static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
                  read_guest_index(state, first+2),
                  a0->offset, vbase, nz, a0->stride, a0->size, a0->type,
                  out[0].v[0], out[0].v[1], out[0].v[2], 10); } }
@@ -35103,7 +35137,7 @@ index 68929ed2..01c8b2cc 100644
      return count;
  }
  
-@@ -5967,28 +18604,122 @@ static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
+@@ -5967,28 +18626,122 @@ static u32 upload_tris_vp_indexed(const rsx_state* state, u32 first, u32 count)
   * octopus tentacles -- are indexed strips. */
  static u32 upload_strip_vp_indexed(const rsx_state* state, u32 first, u32 count, int fan)
  {
@@ -35237,7 +35271,7 @@ index 68929ed2..01c8b2cc 100644
      /* RSX_LIVE_FEED_DBG=1: pair with the [feed] method counts so "the FIFO
       * carries no draw batches" can be checked against "the backend is told
       * to draw" in the same run. */
-@@ -5997,6 +18728,7 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -5997,6 +18750,7 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
            if (((++n) % 20000) == 0)
                printf("[backend] arrays callbacks=%lld (prim=%u count=%u)\n", n, primitive, count), fflush(stdout); } }
      (void)ud;
@@ -35245,7 +35279,7 @@ index 68929ed2..01c8b2cc 100644
      /* Log the first 20 calls in detail, then every 1000th to show liveness
       * without flooding. */
      static u64 s_total = 0;
-@@ -6022,10 +18754,14 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6022,10 +18776,14 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
           * off-screen. Untextured VP draws now render via the colour PSO. */
          if (s_d3d.vp_vb_mapped && s_d3d.vp_root_sig) {
              u32 rec = s_d3d.vp_vb_offset;
@@ -35262,7 +35296,7 @@ index 68929ed2..01c8b2cc 100644
                  dr->vertex_count   = emitted;
                  dr->topology       = RSX_TOPOLOGY_TRIANGLES;
                  dr->textured       = s_d3d.tex_bound;
-@@ -6036,6 +18772,8 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6036,6 +18794,8 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                  dr->cull = rsx_cull_key(s_d3d.current_rsx_state);
          dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
              dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
@@ -35271,7 +35305,7 @@ index 68929ed2..01c8b2cc 100644
                  dr->cmask = 0xF;
                  if (s_d3d.current_rsx_state) {
                      u32 _cm = s_d3d.current_rsx_state->color_mask;
-@@ -6046,15 +18784,15 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6046,15 +18806,15 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                  }
                  dr->alpha_ctl = 0;
                  if (s_d3d.current_rsx_state)
@@ -35291,7 +35325,7 @@ index 68929ed2..01c8b2cc 100644
                      dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1;
                      dr->tex[_u].cube  = s_d3d.cur_texs[_u].cube;
                      dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips;
-@@ -6062,10 +18800,14 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6062,10 +18822,14 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                      dr->tex_rt[_u]  = -1;
                  }
                  dr->tex_slot = -1;
@@ -35308,7 +35342,7 @@ index 68929ed2..01c8b2cc 100644
                  if (getenv("BLENDDBG")) { static u32 seen[32]; static int ns=0;
                      u32 k = (dr->blend ? 0x80000000u : 0u) | dr->blend_key;
                      int f=0; for (int i=0;i<ns;i++) if (seen[i]==k) f=1;
-@@ -6073,31 +18815,35 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6073,31 +18837,35 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                          fprintf(stderr, "[BLEND] enable=%d key=0x%X%c",
                                  dr->blend, dr->blend_key, 10); } }
                  dr->rt_off = current_rt_off(&dr->rt_w, &dr->rt_h, dr->rt_mrt);
@@ -35357,7 +35391,7 @@ index 68929ed2..01c8b2cc 100644
          }
          return;
      }
-@@ -6113,14 +18859,22 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6113,14 +18881,22 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
       * zero pixels (it also uploads to vp_vb, leaving the fixed-function vb empty).
       * Geometry already in clip space with no VP -- flOw's injected scene -- must
       * go down the fixed-function passthrough below instead. */
@@ -35382,7 +35416,7 @@ index 68929ed2..01c8b2cc 100644
          /* RSX splits one primitive stream across several DRAW_ARRAYS entries
           * inside a single BEGIN/END (each carries at most 256 vertices), and the
           * hardware concatenates them before assembling primitives. Recording a
-@@ -6130,24 +18884,26 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6130,24 +18906,26 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
           * rendered as spike triangles with a zero texcoord along the tub rim.
           * The batches land contiguously in the vertex buffer, so extending the
           * previous record is all that is needed to restore the stream. */
@@ -35414,7 +35448,7 @@ index 68929ed2..01c8b2cc 100644
              dr->vertex_count   = emitted;
              dr->topology       = RSX_TOPOLOGY_TRIANGLES;
              dr->textured       = s_d3d.tex_bound;
-@@ -6158,6 +18914,8 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6158,6 +18936,8 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
              dr->cull = rsx_cull_key(s_d3d.current_rsx_state);
          dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
              dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
@@ -35423,7 +35457,7 @@ index 68929ed2..01c8b2cc 100644
              dr->cmask = 0xF;
              if (s_d3d.current_rsx_state) {
                  u32 _cm = s_d3d.current_rsx_state->color_mask;
-@@ -6168,15 +18926,15 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6168,15 +18948,15 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
              }
              dr->alpha_ctl = 0;
              if (s_d3d.current_rsx_state)
@@ -35443,7 +35477,7 @@ index 68929ed2..01c8b2cc 100644
                      dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1;
                      dr->tex[_u].cube  = s_d3d.cur_texs[_u].cube;
                      dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips;
-@@ -6184,21 +18942,29 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6184,21 +18964,29 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                  dr->tex_rt[_u]  = -1;
              }
              dr->tex_slot = -1;
@@ -35479,7 +35513,7 @@ index 68929ed2..01c8b2cc 100644
              /* Anchor for merging the next DRAW_ARRAYS batch of this stream. */
              s_d3d.merge_prev_draw  = (primitive == RSX_PRIMITIVE_TRIANGLES);
              s_d3d.merge_first_end  = first + count;
-@@ -6224,20 +18990,28 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6224,20 +19012,28 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
      u32 actual_count  = upload_vertices_from_rsx(first, count);
      if (actual_count == 0) return;
  
@@ -35517,7 +35551,7 @@ index 68929ed2..01c8b2cc 100644
      /* RSX_LIVE_FEED_DBG=1: pair with the [feed] method counts so "the FIFO
       * carries no draw batches" can be checked against "the backend is told
       * to draw" in the same run. */
-@@ -6254,6 +19028,7 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6254,6 +19050,7 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
      }
      if (!s_d3d.pipeline_ready) return;
      if (count == 0 || count > MAX_VERTICES) return;
@@ -35525,7 +35559,7 @@ index 68929ed2..01c8b2cc 100644
      if (!s_d3d.vp_vb_mapped || !s_d3d.vp_root_sig) return;
  
      /* Expand through the VP path (indices resolved CPU-side): QUADS -> two
-@@ -6261,6 +19036,10 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6261,6 +19058,10 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
       * list. Other primitives are skipped rather than drawn wrong. */
      u32 emitted = 0;
      u32 rec = s_d3d.vp_vb_offset;
@@ -35536,7 +35570,7 @@ index 68929ed2..01c8b2cc 100644
      if (primitive == RSX_PRIMITIVE_QUADS)             emitted = upload_quads_vp_indexed(s_d3d.current_rsx_state, first, count);
      else if (primitive == RSX_PRIMITIVE_TRIANGLES)    emitted = upload_tris_vp_indexed(s_d3d.current_rsx_state, first, count);
      else if (primitive == RSX_PRIMITIVE_TRIANGLE_STRIP) emitted = upload_strip_vp_indexed(s_d3d.current_rsx_state, first, count, 0);
-@@ -6271,27 +19050,105 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6271,27 +19072,105 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
              printf("[D3D12] draw_indexed: skipping prim=%u (not wired)\n", primitive);
          return;
      }
@@ -35647,7 +35681,7 @@ index 68929ed2..01c8b2cc 100644
          dr->vertex_count   = emitted;
          dr->topology       = RSX_TOPOLOGY_TRIANGLES;
          dr->textured       = s_d3d.tex_bound;
-@@ -6301,6 +19158,8 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6301,6 +19180,8 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
              ((s_d3d.current_rsx_state->shader_control & 0x40) != 0) : 1;
          dr->cull = rsx_cull_key(s_d3d.current_rsx_state);
          dr->begin_epoch = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->begin_epoch : 0;
@@ -35656,7 +35690,7 @@ index 68929ed2..01c8b2cc 100644
          dr->cmask = 0xF;
          if (s_d3d.current_rsx_state) {
              u32 _cm = s_d3d.current_rsx_state->color_mask;
-@@ -6311,15 +19170,15 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6311,15 +19192,15 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
          }
          dr->alpha_ctl = 0;
          if (s_d3d.current_rsx_state)
@@ -35676,7 +35710,7 @@ index 68929ed2..01c8b2cc 100644
                      dr->tex[_u].ctrl1 = s_d3d.cur_texs[_u].ctrl1;
                      dr->tex[_u].cube  = s_d3d.cur_texs[_u].cube;
                      dr->tex[_u].mips  = s_d3d.cur_texs[_u].mips;
-@@ -6327,27 +19186,127 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
+@@ -6327,27 +19208,127 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
              dr->tex_rt[_u]  = -1;
          }
          dr->tex_slot = -1;
@@ -35810,7 +35844,7 @@ index 68929ed2..01c8b2cc 100644
  static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
  {
      (void)ud;
-@@ -6358,6 +19317,24 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
+@@ -6358,6 +19339,24 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
      u32 height = tex->image_rect & 0xFFFF;
      u32 format = (tex->format >> 8) & 0xFF;
      u32 offset = tex->offset;
@@ -35835,7 +35869,7 @@ index 68929ed2..01c8b2cc 100644
      /* CUBEDBG=1: NV4097_SET_TEXTURE_FORMAT bit 2 is the cubemap flag, and the
       * line above throws it away with the rest of the low byte. Nothing in this
       * backend handles cube textures, so a cubemap bound for an environment
-@@ -6416,14 +19393,27 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
+@@ -6416,14 +19415,27 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
       * as-seen 0xA1 with the LN flag) is wired up so far; other formats fall
       * back to untextured. */
      u32 base_fmt = format & 0x9F;   /* strip LN(0x20)/UN(0x40) flags */
@@ -35865,7 +35899,7 @@ index 68929ed2..01c8b2cc 100644
          /* TEX_RESOLVE_AUTO=1: resolve through the page tables (local-page map
           * then IO table) instead of trusting the format's location bits. A
           * texture the guest built in main memory but tagged local resolves to
-@@ -6464,20 +19454,32 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
+@@ -6464,20 +19476,32 @@ static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
                      }
                  }
              } }
@@ -35900,7 +35934,7 @@ index 68929ed2..01c8b2cc 100644
          s_d3d.cur_texs[unit].set = 1;
      }
      if (base_fmt == 0x81 /* B8 */) {
-@@ -6583,12 +19585,27 @@ static rsx_backend s_d3d12_backend = {0};
+@@ -6583,12 +19607,27 @@ static rsx_backend s_d3d12_backend = {0};
  int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
  {
      memset(&s_d3d, 0, sizeof(s_d3d));
@@ -35932,7 +35966,7 @@ index 68929ed2..01c8b2cc 100644
  
      /* Debug: dump the first N presented frames to BMP if CELLMARK_DUMP is set
       * (its numeric value when > 1, else 24). */
-@@ -6609,7 +19626,8 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
+@@ -6609,7 +19648,8 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
          snprintf(g_rsx_title_base, sizeof(g_rsx_title_base), "%s",
                   title ? title : "ps3recomp");
      }
@@ -35942,7 +35976,7 @@ index 68929ed2..01c8b2cc 100644
      if (!s_d3d.hwnd) {
          printf("[D3D12] ERROR: Window creation failed\n");
          return -1;
-@@ -6636,11 +19654,13 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
+@@ -6636,11 +19676,13 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
      s_d3d12_backend.set_shader        = d3d12_set_shader;
      s_d3d12_backend.set_vertex_attribs = d3d12_set_vertex_attribs;
      s_d3d12_backend.draw_arrays       = d3d12_draw_arrays;
@@ -35956,7 +35990,7 @@ index 68929ed2..01c8b2cc 100644
      s_d3d.initialized = 1;
      s_d3d.last_fps_time = GetTickCount64();
  
-@@ -6652,7 +19672,26 @@ void rsx_d3d12_backend_shutdown(void)
+@@ -6652,7 +19694,26 @@ void rsx_d3d12_backend_shutdown(void)
  {
      if (!s_d3d.initialized) return;
  
@@ -35983,7 +36017,7 @@ index 68929ed2..01c8b2cc 100644
  
      /* Release D3D12 resources */
      if (s_d3d.vertex_buffer) {
-@@ -6662,6 +19701,8 @@ void rsx_d3d12_backend_shutdown(void)
+@@ -6662,6 +19723,8 @@ void rsx_d3d12_backend_shutdown(void)
      if (s_d3d.pipeline_state)        s_d3d.pipeline_state->lpVtbl->Release(s_d3d.pipeline_state);
      if (s_d3d.pipeline_state_lines)  s_d3d.pipeline_state_lines->lpVtbl->Release(s_d3d.pipeline_state_lines);
      if (s_d3d.pipeline_state_points) s_d3d.pipeline_state_points->lpVtbl->Release(s_d3d.pipeline_state_points);
@@ -35992,7 +36026,7 @@ index 68929ed2..01c8b2cc 100644
      if (s_d3d.depth_buffer) s_d3d.depth_buffer->lpVtbl->Release(s_d3d.depth_buffer);
      if (s_d3d.dsv_heap)     s_d3d.dsv_heap->lpVtbl->Release(s_d3d.dsv_heap);
      if (s_d3d.root_signature) s_d3d.root_signature->lpVtbl->Release(s_d3d.root_signature);
-@@ -6671,13 +19712,14 @@ void rsx_d3d12_backend_shutdown(void)
+@@ -6671,13 +19734,14 @@ void rsx_d3d12_backend_shutdown(void)
      for (u32 i = 0; i < FRAME_COUNT; i++) {
          if (s_d3d.cmd_allocators[i]) s_d3d.cmd_allocators[i]->lpVtbl->Release(s_d3d.cmd_allocators[i]);
          if (s_d3d.render_targets[i]) s_d3d.render_targets[i]->lpVtbl->Release(s_d3d.render_targets[i]);
@@ -36008,7 +36042,7 @@ index 68929ed2..01c8b2cc 100644
  
      rsx_set_backend(NULL);
      s_d3d.initialized = 0;
-@@ -6687,6 +19729,7 @@ void rsx_d3d12_backend_shutdown(void)
+@@ -6687,6 +19751,7 @@ void rsx_d3d12_backend_shutdown(void)
  
  int rsx_d3d12_backend_pump_messages(void)
  {
@@ -36016,7 +36050,7 @@ index 68929ed2..01c8b2cc 100644
      MSG msg;
      while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
          if (msg.message == WM_QUIT) return -1;
-@@ -6700,7 +19743,7 @@ void rsx_d3d12_backend_present(void)
+@@ -6700,7 +19765,7 @@ void rsx_d3d12_backend_present(void)
  {
      if (blink_dbg())
          printf("[PRESENT] draws=%u clears_since_last=%u clear_presents=%u\n",
@@ -36025,7 +36059,7 @@ index 68929ed2..01c8b2cc 100644
      s_dbg_clears_since_present = 0;
  
      /* Once frame-boundary presents are active (d3d12_clear presents each
-@@ -6709,8 +19752,22 @@ void rsx_d3d12_backend_present(void)
+@@ -6709,8 +19774,22 @@ void rsx_d3d12_backend_present(void)
       * that partial present right after the FIFO ring recycle was the visible
       * blink. Keep the ticker present solely as the boot-time fallback (before
       * the first framed clear arrives). */
@@ -36050,7 +36084,7 @@ index 68929ed2..01c8b2cc 100644
  
      /* Same display gate as d3d12_present: a batch of offscreen pass work only
       * (render-to-texture) keeps accumulating until its composite arrives.
-@@ -6718,9 +19775,12 @@ void rsx_d3d12_backend_present(void)
+@@ -6718,9 +19797,12 @@ void rsx_d3d12_backend_present(void)
       * empty present is a flip/drain race and wipes the screen for a frame
       * (wave: black flashes and layout flicker between frames). */
      static int s_seen_content = 0;
@@ -36066,7 +36100,7 @@ index 68929ed2..01c8b2cc 100644
              has_display = 1;
              break;
          }
-@@ -6729,7 +19789,7 @@ void rsx_d3d12_backend_present(void)
+@@ -6729,7 +19811,7 @@ void rsx_d3d12_backend_present(void)
        if (gfb < 0) { const char* e = getenv("GCM_GUEST_FB"); gfb = e ? 1 : 0; }
        if (gfb) has_display = 1; }
      if (s_composite_src) has_display = 1;
@@ -36075,7 +36109,7 @@ index 68929ed2..01c8b2cc 100644
  
      /* VP_SUBMIT=<N>: has_display gates render_frame() entirely, so a batch whose
       * records all target an OFFSCREEN rt (rt_off != 0) presents without ever
-@@ -6737,26 +19797,26 @@ void rsx_d3d12_backend_present(void)
+@@ -6737,26 +19819,26 @@ void rsx_d3d12_backend_present(void)
       * reads as "nothing rasterizes" from every downstream check. */
      { static int cap = -1, n = 0;
        if (cap < 0) { const char* e = getenv("VP_SUBMIT"); cap = e ? atoi(e) : 0; }
@@ -36112,7 +36146,7 @@ index 68929ed2..01c8b2cc 100644
              }
              /* The execution loop skips anything without is_vp, so a batch full
               * of !is_vp records is counted, gated and then never drawn. */
-@@ -6767,7 +19827,7 @@ void rsx_d3d12_backend_present(void)
+@@ -6767,7 +19849,7 @@ void rsx_d3d12_backend_present(void)
            fprintf(stderr, "%c", 10); }
          fprintf(stderr, "[PRESENTGATE] records=%u onscreen=%u offscreen=%u clears=%u"
                          " has_display=%d seen_content=%d -> render_frame=%s\n",
@@ -36121,7 +36155,7 @@ index 68929ed2..01c8b2cc 100644
                  s_seen_content, (s_d3d.initialized && has_display) ? "YES" : "SKIPPED"); } }
  
      /* Execute the batch whenever it has draws. Gating the whole call on
-@@ -6775,17 +19835,20 @@ void rsx_d3d12_backend_present(void)
+@@ -6775,17 +19857,20 @@ void rsx_d3d12_backend_present(void)
       * offscreen surface -- was DISCARDED rather than deferred, so the texture
       * it produces was never written and whatever sampled it later read an
       * empty resource. Only the Present needs onscreen content. */
@@ -36145,7 +36179,7 @@ index 68929ed2..01c8b2cc 100644
  #else /* !_WIN32 */
  
  #include <ps3emu/ps3types.h>   /* u32 (header includes above are inside the _WIN32 guard) */
-@@ -6799,7 +19862,13 @@ int rsx_d3d12_backend_init(u32 w, u32 h, const char* t)
+@@ -6799,7 +19884,13 @@ int rsx_d3d12_backend_init(u32 w, u32 h, const char* t)
      return -1;
  }
  void rsx_d3d12_backend_shutdown(void) {}
@@ -55961,6 +55995,78 @@ index 0b235d02..9b472d74 100644
 +}
  #endif
 \ No newline at end of file
+diff --git a/runtime/spu/spu_codegen_helpers.h b/runtime/spu/spu_codegen_helpers.h
+new file mode 100644
+index 00000000..60ee5fe0
+--- /dev/null
++++ b/runtime/spu/spu_codegen_helpers.h
+@@ -0,0 +1,66 @@
++/* Integer-only SIMD helpers. No floating-point policy changes.
++ * Informed by MormonFTP-hub/gt5-recomp 1590f03; original helpers stay available
++ * as (spu_name)(...) for exact comparisons. Enable SPU_CODEGEN_HELPERS. */
++#ifndef SPU_CODEGEN_HELPERS_H
++#define SPU_CODEGEN_HELPERS_H
++#if defined(SPU_CODEGEN_HELPERS) && defined(__SSE4_1__)
++#include <smmintrin.h>
++static inline __m128i spu_cg_load(u128 a) { __m128i r; memcpy(&r,&a,16); return r; }
++static inline u128 spu_cg_store(__m128i a) { u128 r; memcpy(&r,&a,16); return r; }
++static inline u128 spu_cg_nand(u128 a,u128 b) { return spu_cg_store(_mm_xor_si128(_mm_and_si128(spu_cg_load(a),spu_cg_load(b)),_mm_set1_epi32(-1))); }
++static inline u128 spu_cg_nor(u128 a,u128 b) { return spu_cg_store(_mm_xor_si128(_mm_or_si128(spu_cg_load(a),spu_cg_load(b)),_mm_set1_epi32(-1))); }
++static inline u128 spu_cg_andc(u128 a,u128 b) { return spu_cg_store(_mm_andnot_si128(spu_cg_load(b),spu_cg_load(a))); }
++static inline u128 spu_cg_orc(u128 a,u128 b) { return spu_cg_store(_mm_or_si128(spu_cg_load(a),_mm_xor_si128(spu_cg_load(b),_mm_set1_epi32(-1)))); }
++static inline __m128i spu_cg_base(void) { return _mm_setr_epi32(0x10111213,0x14151617,0x18191A1B,0x1C1D1E1F); }
++static inline u128 spu_cg_cbd_pos(int p) {
++    __m128i m=_mm_cmpeq_epi8(_mm_setr_epi8(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15),_mm_set1_epi8((char)((p&15)^3)));
++    return spu_cg_store(_mm_blendv_epi8(spu_cg_base(),_mm_set1_epi8(3),m));
++}
++static inline u128 spu_cg_chd_pos(int p) {
++    __m128i m=_mm_cmpeq_epi16(_mm_setr_epi16(0,1,2,3,4,5,6,7),_mm_set1_epi16((short)(((p&15)>>1)^1)));
++    return spu_cg_store(_mm_blendv_epi8(spu_cg_base(),_mm_set1_epi16(0x0203),m));
++}
++static inline u128 spu_cg_cwd_pos(int p) {
++    __m128i m=_mm_cmpeq_epi32(_mm_setr_epi32(0,1,2,3),_mm_set1_epi32((p>>2)&3));
++    return spu_cg_store(_mm_blendv_epi8(spu_cg_base(),_mm_set1_epi32(0x00010203),m));
++}
++static inline u128 spu_cg_cdd_pos(int p) {
++    __m128i m=_mm_cmpeq_epi64(_mm_set_epi64x(1,0),_mm_set1_epi64x((p>>3)&1));
++    return spu_cg_store(_mm_blendv_epi8(spu_cg_base(),_mm_set1_epi64x(0x0405060700010203LL),m));
++}
++#define SPU_CG_CTL(N) \
++static inline u128 spu_cg_##N(u128 a,int i) { return spu_cg_##N##_pos((int)(a._u32[0]+(uint32_t)i)); }
++SPU_CG_CTL(cbd) SPU_CG_CTL(chd) SPU_CG_CTL(cwd) SPU_CG_CTL(cdd)
++#define SPU_CG_CTLX(N,P) \
++static inline u128 spu_cg_##N(u128 a,u128 b) { return spu_cg_##P##_pos((int)(a._u32[0]+b._u32[0])); }
++SPU_CG_CTLX(cbx,cbd) SPU_CG_CTLX(chx,chd) SPU_CG_CTLX(cwx,cwd) SPU_CG_CTLX(cdx,cdd)
++#undef SPU_CG_CTL
++#undef SPU_CG_CTLX
++static inline u128 spu_cg_shli(u128 a,int s) { return spu_cg_store(_mm_sll_epi32(spu_cg_load(a),_mm_cvtsi32_si128(s&63))); }
++static inline u128 spu_cg_shlhi(u128 a,int s) { return spu_cg_store(_mm_sll_epi16(spu_cg_load(a),_mm_cvtsi32_si128(s&31))); }
++static inline u128 spu_cg_rotmi(u128 a,int s) { return spu_cg_store(_mm_srl_epi32(spu_cg_load(a),_mm_cvtsi32_si128((0u-(unsigned)s)&63))); }
++static inline u128 spu_cg_rotmhi(u128 a,int s) { return spu_cg_store(_mm_srl_epi16(spu_cg_load(a),_mm_cvtsi32_si128((0u-(unsigned)s)&31))); }
++static inline u128 spu_cg_shlqbii(u128 a,int s) { __m128i A=spu_cg_load(a); s&=7; return spu_cg_store(_mm_or_si128(_mm_sll_epi32(A,_mm_cvtsi32_si128(s)),_mm_srl_epi32(_mm_srli_si128(A,4),_mm_cvtsi32_si128(32-s)))); }
++static inline u128 spu_cg_rotqbii(u128 a,int s) { __m128i A=spu_cg_load(a); s&=7; return spu_cg_store(_mm_or_si128(_mm_sll_epi32(A,_mm_cvtsi32_si128(s)),_mm_srl_epi32(_mm_shuffle_epi32(A,0x39),_mm_cvtsi32_si128(32-s)))); }
++static inline u128 spu_cg_rotqmbii(u128 a,int s) { __m128i A=spu_cg_load(a); s=(0u-(unsigned)s)&7; return spu_cg_store(_mm_or_si128(_mm_srl_epi32(A,_mm_cvtsi32_si128(s)),_mm_sll_epi32(_mm_slli_si128(A,4),_mm_cvtsi32_si128(32-s)))); }
++#define spu_nand(...) spu_cg_nand(__VA_ARGS__)
++#define spu_nor(...) spu_cg_nor(__VA_ARGS__)
++#define spu_andc(...) spu_cg_andc(__VA_ARGS__)
++#define spu_orc(...) spu_cg_orc(__VA_ARGS__)
++#define spu_cbd(...) spu_cg_cbd(__VA_ARGS__)
++#define spu_chd(...) spu_cg_chd(__VA_ARGS__)
++#define spu_cwd(...) spu_cg_cwd(__VA_ARGS__)
++#define spu_cdd(...) spu_cg_cdd(__VA_ARGS__)
++#define spu_cbx(...) spu_cg_cbx(__VA_ARGS__)
++#define spu_chx(...) spu_cg_chx(__VA_ARGS__)
++#define spu_cwx(...) spu_cg_cwx(__VA_ARGS__)
++#define spu_cdx(...) spu_cg_cdx(__VA_ARGS__)
++#define spu_shli(...) spu_cg_shli(__VA_ARGS__)
++#define spu_shlhi(...) spu_cg_shlhi(__VA_ARGS__)
++#define spu_rotmi(...) spu_cg_rotmi(__VA_ARGS__)
++#define spu_rotmhi(...) spu_cg_rotmhi(__VA_ARGS__)
++#define spu_shlqbii(...) spu_cg_shlqbii(__VA_ARGS__)
++#define spu_rotqbii(...) spu_cg_rotqbii(__VA_ARGS__)
++#define spu_rotqmbii(...) spu_cg_rotqmbii(__VA_ARGS__)
++#endif
++#endif
 diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
 index 7ac619f3..aef6f852 100644
 --- a/runtime/spu/spu_coherency.c
@@ -60056,311 +60162,13 @@ index 00000000..55c10331
 +#endif
 +}
 diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
-index 0fca7f55..1817a85d 100644
+index 0fca7f55..a4be8f05 100644
 --- a/runtime/spu/spu_helpers.h
 +++ b/runtime/spu/spu_helpers.h
-@@ -1,191 +1,262 @@
--/*
-- * ps3recomp - SPU instruction semantics helpers
-- *
-- * Pure-C, header-only implementation of the per-instruction semantics used
-- * by lifter-generated code. Extracted from spu_lifter.py so the helpers
-- * have one source of truth and can be unit-tested directly (see
-- * runtime/spu/tests/test_spu_helpers.c).
-- *
-- * Each helper is `static inline u128 spu_<mnemonic>(...)`. Naming, lane
-- * widths and big-endian conventions match runtime/spu/spu_context.h.
-- */
--
--#ifndef SPU_HELPERS_H
--#define SPU_HELPERS_H
--
--#include "spu_context.h"
--#include <string.h>
--#include <math.h>
--
--#ifdef __cplusplus
--extern "C" {
--#endif
--
--#ifdef _MSC_VER
--#include <intrin.h>
--static inline int spu_clz32(uint32_t x) {
--    unsigned long idx;
--    if (!x) return 32;
--    _BitScanReverse(&idx, x);
--    return 31 - (int)idx;
--}
--#else
--static inline int spu_clz32(uint32_t x) { return x ? __builtin_clz(x) : 32; }
--#endif
--
--/* Architectural SPU barrier -- the lifted `sync`/`dsync`/`syncc` emission.
-- * SPU ISA v1.2 §13 (+ the per-instruction pages): order all earlier LS and
-- * channel accesses before later ones; LS must be consistent "if it were\n * observed by another entity" (Table 13-6 is exactly this runtime's
-- * host-thread producer -> SPU consumer handoff). A no-op is neither a
-- * compiler nor a CPU barrier -- MSVC at /O2 may reorder plain LS accesses
-- * across an empty statement (the PPU twin of this bug is LESSONS #11d). A
-- * full fence: the locked exchange forces total order and is opaque to the
-- * optimizer. */
--#ifdef _MSC_VER
--static inline void spu_arch_fence(void) { long spu_fence_tmp = 0; _InterlockedExchange(&spu_fence_tmp, 1); }
--#else
--static inline void spu_arch_fence(void) { __atomic_thread_fence(__ATOMIC_SEQ_CST); }
--#endif
--
--/* SPU byte position -> our _u8 index.
-- * Our u128 is HOST-NATIVE little-endian (_u32[i]=SPU word i as a value via
-- * spu_ls_read128's big-endian load), so within each 4-byte word the _u8[]
-- * bytes are reversed vs SPU big-endian byte order. Any op defined in terms of
-- * SPU *byte positions* (quadword byte rotates/shifts, gen-controls, shuffle
-- * insertion) must map SPU byte P to our index W(P). Word-aligned operations
-- * are unaffected (W is identity modulo the within-word reversal). */
--#define SPU_W(P) (((P) & ~3) | (3 - ((P) & 3)))
--
--/* ---- constructors ---- */
--static inline u128 spu_splat_u32(uint32_t v) {
--    u128 r; r._u32[0]=v; r._u32[1]=v; r._u32[2]=v; r._u32[3]=v; return r;
--}
--/* Link register value for brsl/bisl/bisled: the SPU writes the return address
-- * into the PREFERRED word (word 0) and ZEROS the other three slots (matches
-- * RPCS3 v128::from32r, SPUInterpreter.cpp BRSL). Splatting it (the old bug)
-- * corrupts any code that saves/reloads/operates on the full 128-bit link. */
--/* An SPU instruction the lifter could not translate. It emits a bare comment,
-- * so an unsupported opcode on a live path silently does NOTHING and the guest
-- * computes garbage from there on -- which surfaces much later as a wild DMA or
-- * atomic address with no hint of where it came from. Most of these are data
-- * embedded in .text that never executes; this fires only if one actually runs.
-- * One line per site. */
--static inline void spu_unsupported(uint32_t pc, const char* mnemonic)
--{
--    static int warned;
--    if (warned < 64) {
--        warned++;
--        fprintf(stderr, "[spu] UNSUPPORTED %s at LS 0x%05X -- executed, "
--                        "result is wrong from here\n", mnemonic, pc);
--        fflush(stderr);
--    }
--}
--
--static inline u128 spu_link(uint32_t addr) {
--    u128 r; r._u32[0]=addr; r._u32[1]=0; r._u32[2]=0; r._u32[3]=0; return r;
--}
--/* Preferred-slot scalar: value in word 0, remaining slots ZERO. CBEA's scalar
-- * channel convention -- rchcnt returns the count this way (RPCS3 measured
-- * {1,0,0,0} where the old splat gave {1,1,1,1}). Same bug class as spu_link. */
--static inline u128 spu_pref_u32(uint32_t v) {
--    u128 r; r._u32[0]=v; r._u32[1]=0; r._u32[2]=0; r._u32[3]=0; return r;
--}
--static inline u128 spu_splat_u16(uint16_t v) {
--    u128 r; for (int i=0;i<8;i++) r._u16[i]=v; return r;
--}
--static inline u128 spu_splat_u8(uint8_t v) {
--    u128 r; for (int i=0;i<16;i++) r._u8[i]=v; return r;
--}
--static inline u128 spu_zero(void) { u128 r; memset(&r,0,sizeof r); return r; }
--
--/* ---- integer arithmetic (SIMD) ---- */
--static inline u128 spu_a(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]+b._u32[i]; return r; }
--static inline u128 spu_sf(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._u32[i]=b._u32[i]-a._u32[i]; return r; }
--static inline u128 spu_ah(u128 a, u128 b) { u128 r; for(int i=0;i<8;i++) r._u16[i]=a._u16[i]+b._u16[i]; return r; }
--static inline u128 spu_sfh(u128 a, u128 b){ u128 r; for(int i=0;i<8;i++) r._u16[i]=b._u16[i]-a._u16[i]; return r; }
--static inline u128 spu_ai(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]+(uint32_t)imm; return r; }
--static inline u128 spu_ahi(u128 a, int32_t imm){ u128 r; for(int i=0;i<8;i++) r._u16[i]=a._u16[i]+(uint16_t)imm; return r; }
--static inline u128 spu_sfi(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)imm-a._u32[i]; return r; }
--static inline u128 spu_sfhi(u128 a, int32_t imm){ u128 r; for(int i=0;i<8;i++) r._u16[i]=(uint16_t)imm-a._u16[i]; return r; }
--
--/* ---- multiply (low halfword of each word × ... -> 32-bit, per SPU mpy) ----
-- * Sub-lane indexing assumes a little-endian host (matches the recompiler's
-- * target). The "low halfword of word i" in SPU BE semantics is _s16[2i] on
-- * an LE host (NOT _s16[2i+1], which would be correct on a BE host). */
--static inline u128 spu_mpy(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++) r._s32[i]=(int32_t)a._s16[i*2]*(int32_t)b._s16[i*2]; return r; }
--/* mpya: 16x16 signed multiply of low halves + add rc (per word, RRR form). */
--static inline u128 spu_mpya(u128 a, u128 b, u128 c) { u128 r; for(int i=0;i<4;i++) r._s32[i]=(int32_t)a._s16[i*2]*(int32_t)b._s16[i*2]+c._s32[i]; return r; }
--/* sfx: extended subtract rb-ra-1+carry; carry-in = low bit of old rt (RT is 3rd src). */
--static inline u128 spu_sfx(u128 a, u128 b, u128 t) { u128 r; for(int i=0;i<4;i++) r._u32[i]=b._u32[i]+~a._u32[i]+(t._u32[i]&1u); return r; }
--/* FI decodes the base and step fields produced by the hardware estimate
-- * instructions; its second operand is not an ordinary reciprocal float. */
--static inline u128 spu_fi(u128 a, u128 b) {
--    u128 r;
--    for (int i = 0; i < 4; i++) {
--        uint32_t rb = b._u32[i];
--        uint32_t ra = a._u32[i];
--        uint32_t exp = (rb >> 23) & 0xFFu;
--        uint32_t base_bits = rb & 0xFFFFFC00u;
--        float base; memcpy(&base, &base_bits, sizeof base);
--        uint32_t step_frac = rb & 0x3FFu;
--        float step = ldexpf((float)step_frac, (int)exp - 127 - 13);
--        if (base < 0.0f) step = -step;
--        float y = ldexpf((float)(ra & 0x7FFFFu), -19);
--        r._f32[i] = base - step * y;
--    }
--    return r;
--}
--static inline u128 spu_mpyu(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)a._u16[i*2]*(uint32_t)b._u16[i*2]; return r; }
--static inline u128 spu_mpyi(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._s32[i]=(int32_t)a._s16[i*2]*(int16_t)imm; return r; }
--
--/* ---- bitwise logic (whole 128 bits) ---- */
--static inline u128 spu_and(u128 a, u128 b) { u128 r; r._u64[0]=a._u64[0]&b._u64[0]; r._u64[1]=a._u64[1]&b._u64[1]; return r; }
--static inline u128 spu_or(u128 a, u128 b)  { u128 r; r._u64[0]=a._u64[0]|b._u64[0]; r._u64[1]=a._u64[1]|b._u64[1]; return r; }
--static inline u128 spu_xor(u128 a, u128 b) { u128 r; r._u64[0]=a._u64[0]^b._u64[0]; r._u64[1]=a._u64[1]^b._u64[1]; return r; }
--static inline u128 spu_nand(u128 a, u128 b){ u128 r; r._u64[0]=~(a._u64[0]&b._u64[0]); r._u64[1]=~(a._u64[1]&b._u64[1]); return r; }
--static inline u128 spu_nor(u128 a, u128 b) { u128 r; r._u64[0]=~(a._u64[0]|b._u64[0]); r._u64[1]=~(a._u64[1]|b._u64[1]); return r; }
--static inline u128 spu_andc(u128 a, u128 b){ u128 r; r._u64[0]=a._u64[0]&~b._u64[0]; r._u64[1]=a._u64[1]&~b._u64[1]; return r; }
--static inline u128 spu_orc(u128 a, u128 b) { u128 r; r._u64[0]=a._u64[0]|~b._u64[0]; r._u64[1]=a._u64[1]|~b._u64[1]; return r; }
--static inline u128 spu_andi(u128 a, int32_t imm){ u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]&(uint32_t)imm; return r; }
--static inline u128 spu_ori(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]|(uint32_t)imm; return r; }
--static inline u128 spu_xori(u128 a, int32_t imm){ u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]^(uint32_t)imm; return r; }
--
--/* ---- count leading zeros / population count per byte ---- */
--static inline u128 spu_clz(u128 a)  { u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)spu_clz32(a._u32[i]); return r; }
--static inline u128 spu_cntb(u128 a) { u128 r; for(int i=0;i<16;i++){ uint8_t v=a._u8[i],c=0; while(v){c+=v&1;v>>=1;} r._u8[i]=c; } return r; }
--
--/* ---- compares: all-ones / all-zeros per lane ---- */
--static inline u128 spu_ceq(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._u32[i]==b._u32[i])?0xFFFFFFFFu:0; return r; }
--static inline u128 spu_ceqh(u128 a, u128 b) { u128 r; for(int i=0;i<8;i++) r._u16[i]=(a._u16[i]==b._u16[i])?0xFFFFu:0; return r; }
--static inline u128 spu_ceqb(u128 a, u128 b) { u128 r; for(int i=0;i<16;i++) r._u8[i]=(a._u8[i]==b._u8[i])?0xFFu:0; return r; }
--static inline u128 spu_cgt(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._s32[i]>b._s32[i])?0xFFFFFFFFu:0; return r; }
--static inline u128 spu_cgth(u128 a, u128 b) { u128 r; for(int i=0;i<8;i++) r._u16[i]=(a._s16[i]>b._s16[i])?0xFFFFu:0; return r; }
--static inline u128 spu_cgtb(u128 a, u128 b) { u128 r; for(int i=0;i<16;i++) r._u8[i]=(a._s8[i]>b._s8[i])?0xFFu:0; return r; }
--static inline u128 spu_clgt(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._u32[i]>b._u32[i])?0xFFFFFFFFu:0; return r; }
--static inline u128 spu_clgth(u128 a, u128 b){ u128 r; for(int i=0;i<8;i++) r._u16[i]=(a._u16[i]>b._u16[i])?0xFFFFu:0; return r; }
--static inline u128 spu_clgtb(u128 a, u128 b){ u128 r; for(int i=0;i<16;i++) r._u8[i]=(a._u8[i]>b._u8[i])?0xFFu:0; return r; }
--static inline u128 spu_ceqi(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._s32[i]==imm)?0xFFFFFFFFu:0; return r; }
--static inline u128 spu_cgti(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._s32[i]>imm)?0xFFFFFFFFu:0; return r; }
--static inline u128 spu_clgti(u128 a, int32_t imm){ u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._u32[i]>(uint32_t)imm)?0xFFFFFFFFu:0; return r; }
--
--/* ---- select / shuffle ---- */
--static inline u128 spu_selb(u128 a, u128 b, u128 c) {
--    u128 r;
--    r._u64[0]=(a._u64[0]&~c._u64[0])|(b._u64[0]&c._u64[0]);
--    r._u64[1]=(a._u64[1]&~c._u64[1])|(b._u64[1]&c._u64[1]);
--    return r;
--}
--/* shufb special selectors per Cell BE ISA:
-- *   sel & 0xE0 == 0xE0 -> 0x80
-- *   sel & 0xC0 == 0xC0 -> 0xFF
-- *   sel & 0xC0 == 0x80 -> 0x00
-- *   otherwise           -> concat{a,b}[sel & 0x1F] */
-+/*
-+ * ps3recomp - SPU instruction semantics helpers
-+ *
-+ * Pure-C, header-only implementation of the per-instruction semantics used
-+ * by lifter-generated code. Extracted from spu_lifter.py so the helpers
-+ * have one source of truth and can be unit-tested directly (see
-+ * runtime/spu/tests/test_spu_helpers.c).
-+ *
-+ * Each helper is `static inline u128 spu_<mnemonic>(...)`. Naming, lane
-+ * widths and big-endian conventions match runtime/spu/spu_context.h.
-+ */
-+
-+#ifndef SPU_HELPERS_H
-+#define SPU_HELPERS_H
-+
-+#include "spu_context.h"
-+#include <string.h>
-+#include <math.h>
-+
-+#ifdef __cplusplus
-+extern "C" {
-+#endif
-+
-+#ifdef _MSC_VER
-+#include <intrin.h>
-+static inline int spu_clz32(uint32_t x) {
-+    unsigned long idx;
-+    if (!x) return 32;
-+    _BitScanReverse(&idx, x);
-+    return 31 - (int)idx;
-+}
-+#else
-+static inline int spu_clz32(uint32_t x) { return x ? __builtin_clz(x) : 32; }
-+#endif
-+
-+/* Architectural SPU barrier -- the lifted `sync`/`dsync`/`syncc` emission.
-+ * SPU ISA v1.2 §13 (+ the per-instruction pages): order all earlier LS and
-+ * channel accesses before later ones; LS must be consistent "if it were\n * observed by another entity" (Table 13-6 is exactly this runtime's
-+ * host-thread producer -> SPU consumer handoff). A no-op is neither a
-+ * compiler nor a CPU barrier -- MSVC at /O2 may reorder plain LS accesses
-+ * across an empty statement (the PPU twin of this bug is LESSONS #11d). A
-+ * full fence: the locked exchange forces total order and is opaque to the
-+ * optimizer. */
-+#ifdef _MSC_VER
-+static inline void spu_arch_fence(void) { long spu_fence_tmp = 0; _InterlockedExchange(&spu_fence_tmp, 1); }
-+#else
-+static inline void spu_arch_fence(void) { __atomic_thread_fence(__ATOMIC_SEQ_CST); }
-+#endif
-+
-+/* SPU byte position -> our _u8 index.
-+ * Our u128 is HOST-NATIVE little-endian (_u32[i]=SPU word i as a value via
-+ * spu_ls_read128's big-endian load), so within each 4-byte word the _u8[]
-+ * bytes are reversed vs SPU big-endian byte order. Any op defined in terms of
-+ * SPU *byte positions* (quadword byte rotates/shifts, gen-controls, shuffle
-+ * insertion) must map SPU byte P to our index W(P). Word-aligned operations
-+ * are unaffected (W is identity modulo the within-word reversal). */
-+#define SPU_W(P) (((P) & ~3) | (3 - ((P) & 3)))
-+
-+/* ---- constructors ---- */
-+static inline u128 spu_splat_u32(uint32_t v) {
-+    u128 r; r._u32[0]=v; r._u32[1]=v; r._u32[2]=v; r._u32[3]=v; return r;
-+}
-+/* Link register value for brsl/bisl/bisled: the SPU writes the return address
-+ * into the PREFERRED word (word 0) and ZEROS the other three slots (matches
-+ * RPCS3 v128::from32r, SPUInterpreter.cpp BRSL). Splatting it (the old bug)
-+ * corrupts any code that saves/reloads/operates on the full 128-bit link. */
-+/* An SPU instruction the lifter could not translate. It emits a bare comment,
-+ * so an unsupported opcode on a live path silently does NOTHING and the guest
-+ * computes garbage from there on -- which surfaces much later as a wild DMA or
-+ * atomic address with no hint of where it came from. Most of these are data
-+ * embedded in .text that never executes; this fires only if one actually runs.
-+ * One line per site. */
-+static inline void spu_unsupported(uint32_t pc, const char* mnemonic)
-+{
-+    static int warned;
-+    if (warned < 64) {
-+        warned++;
-+        fprintf(stderr, "[spu] UNSUPPORTED %s at LS 0x%05X -- executed, "
-+                        "result is wrong from here\n", mnemonic, pc);
-+        fflush(stderr);
-+    }
-+}
-+
-+static inline u128 spu_link(uint32_t addr) {
-+    u128 r; r._u32[0]=addr; r._u32[1]=0; r._u32[2]=0; r._u32[3]=0; return r;
-+}
-+/* Preferred-slot scalar: value in word 0, remaining slots ZERO. CBEA's scalar
-+ * channel convention -- rchcnt returns the count this way (RPCS3 measured
-+ * {1,0,0,0} where the old splat gave {1,1,1,1}). Same bug class as spu_link. */
-+static inline u128 spu_pref_u32(uint32_t v) {
-+    u128 r; r._u32[0]=v; r._u32[1]=0; r._u32[2]=0; r._u32[3]=0; return r;
-+}
-+static inline u128 spu_splat_u16(uint16_t v) {
-+    u128 r; for (int i=0;i<8;i++) r._u16[i]=v; return r;
-+}
-+static inline u128 spu_splat_u8(uint8_t v) {
-+    u128 r; for (int i=0;i<16;i++) r._u8[i]=v; return r;
-+}
-+static inline u128 spu_zero(void) { u128 r; memset(&r,0,sizeof r); return r; }
-+
-+/* ---- integer arithmetic (SIMD) ---- */
-+static inline u128 spu_a(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]+b._u32[i]; return r; }
-+static inline u128 spu_sf(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._u32[i]=b._u32[i]-a._u32[i]; return r; }
-+static inline u128 spu_ah(u128 a, u128 b) { u128 r; for(int i=0;i<8;i++) r._u16[i]=a._u16[i]+b._u16[i]; return r; }
-+static inline u128 spu_sfh(u128 a, u128 b){ u128 r; for(int i=0;i<8;i++) r._u16[i]=b._u16[i]-a._u16[i]; return r; }
-+static inline u128 spu_ai(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]+(uint32_t)imm; return r; }
-+static inline u128 spu_ahi(u128 a, int32_t imm){ u128 r; for(int i=0;i<8;i++) r._u16[i]=a._u16[i]+(uint16_t)imm; return r; }
-+static inline u128 spu_sfi(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)imm-a._u32[i]; return r; }
-+static inline u128 spu_sfhi(u128 a, int32_t imm){ u128 r; for(int i=0;i<8;i++) r._u16[i]=(uint16_t)imm-a._u16[i]; return r; }
-+
-+/* ---- multiply (low halfword of each word × ... -> 32-bit, per SPU mpy) ----
-+ * Sub-lane indexing assumes a little-endian host (matches the recompiler's
-+ * target). The "low halfword of word i" in SPU BE semantics is _s16[2i] on
-+ * an LE host (NOT _s16[2i+1], which would be correct on a BE host). */
-+static inline u128 spu_mpy(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++) r._s32[i]=(int32_t)a._s16[i*2]*(int32_t)b._s16[i*2]; return r; }
-+/* mpya: 16x16 signed multiply of low halves + add rc (per word, RRR form). */
-+static inline u128 spu_mpya(u128 a, u128 b, u128 c) { u128 r; for(int i=0;i<4;i++) r._s32[i]=(int32_t)a._s16[i*2]*(int32_t)b._s16[i*2]+c._s32[i]; return r; }
-+/* sfx: extended subtract rb-ra-1+carry; carry-in = low bit of old rt (RT is 3rd src). */
-+static inline u128 spu_sfx(u128 a, u128 b, u128 t) { u128 r; for(int i=0;i<4;i++) r._u32[i]=b._u32[i]+~a._u32[i]+(t._u32[i]&1u); return r; }
+@@ -117,9 +117,60 @@ static inline u128 spu_mpy(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++) r._s3
+ static inline u128 spu_mpya(u128 a, u128 b, u128 c) { u128 r; for(int i=0;i<4;i++) r._s32[i]=(int32_t)a._s16[i*2]*(int32_t)b._s16[i*2]+c._s32[i]; return r; }
+ /* sfx: extended subtract rb-ra-1+carry; carry-in = low bit of old rt (RT is 3rd src). */
+ static inline u128 spu_sfx(u128 a, u128 b, u128 t) { u128 r; for(int i=0;i<4;i++) r._u32[i]=b._u32[i]+~a._u32[i]+(t._u32[i]&1u); return r; }
 +/* Exact powers of two, built from their bits, for the scale factors below.
 + * ldexpf and exp2 were C-library calls: eight per fi instruction, which
 + * follows every reciprocal estimate, about 4.5% of GT5 Prologue's render jobs
@@ -60387,8 +60195,8 @@ index 0fca7f55..1817a85d 100644
 +#else
 +#define SPU__EXP2I(n) spu__pow2d(n)
 +#endif
-+/* FI decodes the base and step fields produced by the hardware estimate
-+ * instructions; its second operand is not an ordinary reciprocal float. */
+ /* FI decodes the base and step fields produced by the hardware estimate
+  * instructions; its second operand is not an ordinary reciprocal float. */
 +static inline u128 spu_fi_scalar(u128 a, u128 b);
 +#if (defined(_M_X64) || defined(__x86_64__)) && !defined(SPU_FI_SCALAR)
 +#include <emmintrin.h>
@@ -60399,7 +60207,7 @@ index 0fca7f55..1817a85d 100644
 + * scalar form takes the whole word then. Bit-identical otherwise; was 7% of
 + * the race's one-SPU workloads as a called four-lane loop.
 + * -DSPU_FI_SCALAR builds the scalar form only. */
-+static inline u128 spu_fi(u128 a, u128 b) {
+ static inline u128 spu_fi(u128 a, u128 b) {
 +    __m128i bi, ai; memcpy(&bi, &b, 16); memcpy(&ai, &a, 16);
 +    __m128i ex = _mm_and_si128(_mm_srli_epi32(bi, 23), _mm_set1_epi32(0xFF));
 +    if (_mm_movemask_epi8(_mm_cmplt_epi32(ex, _mm_set1_epi32(14)))) return spu_fi_scalar(a, b);
@@ -60415,72 +60223,35 @@ index 0fca7f55..1817a85d 100644
 +static inline u128 spu_fi(u128 a, u128 b) { return spu_fi_scalar(a, b); }
 +#endif
 +static inline u128 spu_fi_scalar(u128 a, u128 b) {
-+    u128 r;
-+    for (int i = 0; i < 4; i++) {
-+        uint32_t rb = b._u32[i];
-+        uint32_t ra = a._u32[i];
-+        uint32_t exp = (rb >> 23) & 0xFFu;
-+        uint32_t base_bits = rb & 0xFFFFFC00u;
-+        float base; memcpy(&base, &base_bits, sizeof base);
-+        uint32_t step_frac = rb & 0x3FFu;
+     u128 r;
+     for (int i = 0; i < 4; i++) {
+         uint32_t rb = b._u32[i];
+@@ -128,9 +179,9 @@ static inline u128 spu_fi(u128 a, u128 b) {
+         uint32_t base_bits = rb & 0xFFFFFC00u;
+         float base; memcpy(&base, &base_bits, sizeof base);
+         uint32_t step_frac = rb & 0x3FFu;
+-        float step = ldexpf((float)step_frac, (int)exp - 127 - 13);
 +        float step = spu__ldexpf((float)step_frac, (int)exp - 127 - 13);
-+        if (base < 0.0f) step = -step;
+         if (base < 0.0f) step = -step;
+-        float y = ldexpf((float)(ra & 0x7FFFFu), -19);
 +        float y = spu__ldexpf((float)(ra & 0x7FFFFu), -19);
-+        r._f32[i] = base - step * y;
-+    }
-+    return r;
-+}
-+static inline u128 spu_mpyu(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)a._u16[i*2]*(uint32_t)b._u16[i*2]; return r; }
-+static inline u128 spu_mpyi(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._s32[i]=(int32_t)a._s16[i*2]*(int16_t)imm; return r; }
-+
-+/* ---- bitwise logic (whole 128 bits) ---- */
-+static inline u128 spu_and(u128 a, u128 b) { u128 r; r._u64[0]=a._u64[0]&b._u64[0]; r._u64[1]=a._u64[1]&b._u64[1]; return r; }
-+static inline u128 spu_or(u128 a, u128 b)  { u128 r; r._u64[0]=a._u64[0]|b._u64[0]; r._u64[1]=a._u64[1]|b._u64[1]; return r; }
-+static inline u128 spu_xor(u128 a, u128 b) { u128 r; r._u64[0]=a._u64[0]^b._u64[0]; r._u64[1]=a._u64[1]^b._u64[1]; return r; }
-+static inline u128 spu_nand(u128 a, u128 b){ u128 r; r._u64[0]=~(a._u64[0]&b._u64[0]); r._u64[1]=~(a._u64[1]&b._u64[1]); return r; }
-+static inline u128 spu_nor(u128 a, u128 b) { u128 r; r._u64[0]=~(a._u64[0]|b._u64[0]); r._u64[1]=~(a._u64[1]|b._u64[1]); return r; }
-+static inline u128 spu_andc(u128 a, u128 b){ u128 r; r._u64[0]=a._u64[0]&~b._u64[0]; r._u64[1]=a._u64[1]&~b._u64[1]; return r; }
-+static inline u128 spu_orc(u128 a, u128 b) { u128 r; r._u64[0]=a._u64[0]|~b._u64[0]; r._u64[1]=a._u64[1]|~b._u64[1]; return r; }
-+static inline u128 spu_andi(u128 a, int32_t imm){ u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]&(uint32_t)imm; return r; }
-+static inline u128 spu_ori(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]|(uint32_t)imm; return r; }
-+static inline u128 spu_xori(u128 a, int32_t imm){ u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]^(uint32_t)imm; return r; }
-+
-+/* ---- count leading zeros / population count per byte ---- */
-+static inline u128 spu_clz(u128 a)  { u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)spu_clz32(a._u32[i]); return r; }
-+static inline u128 spu_cntb(u128 a) { u128 r; for(int i=0;i<16;i++){ uint8_t v=a._u8[i],c=0; while(v){c+=v&1;v>>=1;} r._u8[i]=c; } return r; }
-+
-+/* ---- compares: all-ones / all-zeros per lane ---- */
-+static inline u128 spu_ceq(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._u32[i]==b._u32[i])?0xFFFFFFFFu:0; return r; }
-+static inline u128 spu_ceqh(u128 a, u128 b) { u128 r; for(int i=0;i<8;i++) r._u16[i]=(a._u16[i]==b._u16[i])?0xFFFFu:0; return r; }
-+static inline u128 spu_ceqb(u128 a, u128 b) { u128 r; for(int i=0;i<16;i++) r._u8[i]=(a._u8[i]==b._u8[i])?0xFFu:0; return r; }
-+static inline u128 spu_cgt(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._s32[i]>b._s32[i])?0xFFFFFFFFu:0; return r; }
-+static inline u128 spu_cgth(u128 a, u128 b) { u128 r; for(int i=0;i<8;i++) r._u16[i]=(a._s16[i]>b._s16[i])?0xFFFFu:0; return r; }
-+static inline u128 spu_cgtb(u128 a, u128 b) { u128 r; for(int i=0;i<16;i++) r._u8[i]=(a._s8[i]>b._s8[i])?0xFFu:0; return r; }
-+static inline u128 spu_clgt(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._u32[i]>b._u32[i])?0xFFFFFFFFu:0; return r; }
-+static inline u128 spu_clgth(u128 a, u128 b){ u128 r; for(int i=0;i<8;i++) r._u16[i]=(a._u16[i]>b._u16[i])?0xFFFFu:0; return r; }
-+static inline u128 spu_clgtb(u128 a, u128 b){ u128 r; for(int i=0;i<16;i++) r._u8[i]=(a._u8[i]>b._u8[i])?0xFFu:0; return r; }
-+static inline u128 spu_ceqi(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._s32[i]==imm)?0xFFFFFFFFu:0; return r; }
-+static inline u128 spu_cgti(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._s32[i]>imm)?0xFFFFFFFFu:0; return r; }
-+static inline u128 spu_clgti(u128 a, int32_t imm){ u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._u32[i]>(uint32_t)imm)?0xFFFFFFFFu:0; return r; }
-+
-+/* ---- select / shuffle ---- */
-+static inline u128 spu_selb(u128 a, u128 b, u128 c) {
-+    u128 r;
-+    r._u64[0]=(a._u64[0]&~c._u64[0])|(b._u64[0]&c._u64[0]);
-+    r._u64[1]=(a._u64[1]&~c._u64[1])|(b._u64[1]&c._u64[1]);
-+    return r;
-+}
-+/* shufb special selectors per Cell BE ISA:
-+ *   sel & 0xE0 == 0xE0 -> 0x80
-+ *   sel & 0xC0 == 0xC0 -> 0xFF
-+ *   sel & 0xC0 == 0x80 -> 0x00
-+ *   otherwise           -> concat{a,b}[sel & 0x1F] */
- #if defined(__SSE4_1__)
- #include <smmintrin.h>
- /* pshufb version: one of the hottest SPU ops (~11% of GH3's FMOD mixer task
-  * as the byte loop). SPU byte P lives at host byte SPU_W(P), i.e. the bytes
-  * of each 32-bit word reversed, so swap into SPU order, select, swap back. */
--static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
+         r._f32[i] = base - step * y;
+     }
+     return r;
+@@ -180,28 +231,49 @@ static inline u128 spu_selb(u128 a, u128 b, u128 c) {
+  *   sel & 0xC0 == 0xC0 -> 0xFF
+  *   sel & 0xC0 == 0x80 -> 0x00
+  *   otherwise           -> concat{a,b}[sel & 0x1F] */
+-#if defined(__SSE4_1__)
+-#include <smmintrin.h>
+-/* pshufb version: one of the hottest SPU ops (~11% of GH3's FMOD mixer task
+- * as the byte loop). SPU byte P lives at host byte SPU_W(P), i.e. the bytes
+- * of each 32-bit word reversed, so swap into SPU order, select, swap back. */
++#if defined(__SSE4_1__)
++#include <smmintrin.h>
++/* pshufb version: one of the hottest SPU ops (~11% of GH3's FMOD mixer task
++ * as the byte loop). SPU byte P lives at host byte SPU_W(P), i.e. the bytes
++ * of each 32-bit word reversed, so swap into SPU order, select, swap back. */
 +#if !defined(SPU_SHUFB_SWAP)
 +/* SPU byte P is host byte SPU_W(P) = P ^ 3, and the control's bytes sit at the
 + * same host positions as the result's, so nothing needs swapping: host result
@@ -60501,17 +60272,49 @@ index 0fca7f55..1817a85d 100644
 +    u128 out; memcpy(&out, &r, 16); return out;
 +}
 +#else
-+static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
-     const __m128i sw = _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12);
-     __m128i A, B, C; memcpy(&A, &a, 16); memcpy(&B, &b, 16); memcpy(&C, &c, 16);
-     A = _mm_shuffle_epi8(A, sw); B = _mm_shuffle_epi8(B, sw); C = _mm_shuffle_epi8(C, sw);
-@@ -200,29 +271,30 @@ static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
-     r = _mm_shuffle_epi8(_mm_blendv_epi8(r, special, m80), sw);
-     u128 out; memcpy(&out, &r, 16); return out;
- }
+ static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
+-    const __m128i sw = _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12);
+-    __m128i A, B, C; memcpy(&A, &a, 16); memcpy(&B, &b, 16); memcpy(&C, &c, 16);
+-    A = _mm_shuffle_epi8(A, sw); B = _mm_shuffle_epi8(B, sw); C = _mm_shuffle_epi8(C, sw);
+-    const __m128i idx = _mm_and_si128(C, _mm_set1_epi8(0x0F));
+-    const __m128i fromb = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8(0x10)), _mm_set1_epi8(0x10));
+-    __m128i r = _mm_blendv_epi8(_mm_shuffle_epi8(A, idx), _mm_shuffle_epi8(B, idx), fromb);
+-    /* Special selectors: 10x -> 0x00, 110 -> 0xFF, 111 -> 0x80. */
+-    const __m128i m80 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0x80)), _mm_set1_epi8((char)0x80));
+-    const __m128i mC0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xC0)), _mm_set1_epi8((char)0xC0));
+-    const __m128i mE0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xE0)), _mm_set1_epi8((char)0xE0));
+-    const __m128i special = _mm_blendv_epi8(mC0, _mm_set1_epi8((char)0x80), mE0);
+-    r = _mm_shuffle_epi8(_mm_blendv_epi8(r, special, m80), sw);
+-    u128 out; memcpy(&out, &r, 16); return out;
+-}
+-/* The byte loop stays as the reference (tests/test_spu_shufb.c checks both). */
+-static inline u128 spu_shufb_ref(u128 a, u128 b, u128 c) {
++    const __m128i sw = _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12);
++    __m128i A, B, C; memcpy(&A, &a, 16); memcpy(&B, &b, 16); memcpy(&C, &c, 16);
++    A = _mm_shuffle_epi8(A, sw); B = _mm_shuffle_epi8(B, sw); C = _mm_shuffle_epi8(C, sw);
++    const __m128i idx = _mm_and_si128(C, _mm_set1_epi8(0x0F));
++    const __m128i fromb = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8(0x10)), _mm_set1_epi8(0x10));
++    __m128i r = _mm_blendv_epi8(_mm_shuffle_epi8(A, idx), _mm_shuffle_epi8(B, idx), fromb);
++    /* Special selectors: 10x -> 0x00, 110 -> 0xFF, 111 -> 0x80. */
++    const __m128i m80 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0x80)), _mm_set1_epi8((char)0x80));
++    const __m128i mC0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xC0)), _mm_set1_epi8((char)0xC0));
++    const __m128i mE0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xE0)), _mm_set1_epi8((char)0xE0));
++    const __m128i special = _mm_blendv_epi8(mC0, _mm_set1_epi8((char)0x80), mE0);
++    r = _mm_shuffle_epi8(_mm_blendv_epi8(r, special, m80), sw);
++    u128 out; memcpy(&out, &r, 16); return out;
++}
 +#endif
- /* The byte loop stays as the reference (tests/test_spu_shufb.c checks both). */
- static inline u128 spu_shufb_ref(u128 a, u128 b, u128 c) {
++/* The byte loop stays as the reference (tests/test_spu_shufb.c checks both). */
++static inline u128 spu_shufb_ref(u128 a, u128 b, u128 c) {
+     /* shufb is defined on SPU byte positions. Our u128 is host-native LE, so SPU
+      * byte P lives at _u8[SPU_W(P)]; map every access (the concat source, the
+      * control, and the result) through SPU_W so a control supplied as an immediate
+@@ -223,31 +295,31 @@ static inline u128 spu_shufb_ref(u128 a, u128 b, u128 c) {
+     }
+     return r;
+ }
+-#else
+-static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
 -    /* shufb is defined on SPU byte positions. Our u128 is host-native LE, so SPU
 -     * byte P lives at _u8[SPU_W(P)]; map every access (the concat source, the
 -     * control, and the result) through SPU_W so a control supplied as an immediate
@@ -60533,6 +60336,10 @@ index 0fca7f55..1817a85d 100644
 -    }
 -    return r;
 -}
+-#define spu_shufb_ref spu_shufb
+-#endif
++#else
++static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
 +    /* shufb is defined on SPU byte positions. Our u128 is host-native LE, so SPU
 +     * byte P lives at _u8[SPU_W(P)]; map every access (the concat source, the
 +     * control, and the result) through SPU_W so a control supplied as an immediate
@@ -60554,406 +60361,17 @@ index 0fca7f55..1817a85d 100644
 +    }
 +    return r;
 +}
- #else
- static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
-     /* shufb is defined on SPU byte positions. Our u128 is host-native LE, so SPU
-@@ -248,387 +320,453 @@ static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
- }
- #define spu_shufb_ref spu_shufb
- #endif
--
--/* ---- shift / rotate immediate (word lanes) ---- */
--static inline u128 spu_shli(u128 a, int sh)  { u128 r; sh&=0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]<<sh); return r; }
--static inline u128 spu_shlhi(u128 a, int sh) { u128 r; sh&=0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]<<sh); return r; }
--static inline u128 spu_roti(u128 a, int sh)  { u128 r; sh&=31; for(int i=0;i<4;i++) r._u32[i]= sh ? ((a._u32[i]<<sh)|(a._u32[i]>>(32-sh))) : a._u32[i]; return r; }
--static inline u128 spu_rothi(u128 a, int sh) { u128 r; sh&=15; for(int i=0;i<8;i++) r._u16[i]=(uint16_t)((a._u16[i]<<sh)|(a._u16[i]>>(16-sh))); return r; }
--static inline u128 spu_rotmi(u128 a, int i7)  { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]>>sh); return r; }
--static inline u128 spu_rotmai(u128 a, int i7) { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._s32[i]=(sh>31)?(a._s32[i]>>31):(a._s32[i]>>sh); return r; }
--static inline u128 spu_rotmhi(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); return r; }
++#define spu_shufb_ref spu_shufb
++#endif
+ 
+ /* ---- shift / rotate immediate (word lanes) ---- */
+ static inline u128 spu_shli(u128 a, int sh)  { u128 r; sh&=0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]<<sh); return r; }
+@@ -257,8 +329,58 @@ static inline u128 spu_rothi(u128 a, int sh) { u128 r; sh&=15; for(int i=0;i<8;i
+ static inline u128 spu_rotmi(u128 a, int i7)  { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]>>sh); return r; }
+ static inline u128 spu_rotmai(u128 a, int i7) { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._s32[i]=(sh>31)?(a._s32[i]>>31):(a._s32[i]>>sh); return r; }
+ static inline u128 spu_rotmhi(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); return r; }
 -static inline u128 spu_shlqbyi(u128 a, int sh) { u128 r=spu_zero(); sh&=0x1F; for(int i=0;i<16;i++){ int s=i+sh; if(s<16) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
 -static inline u128 spu_rotqbyi(u128 a, int sh) { u128 r; sh&=0x0F; for(int i=0;i<16;i++) r._u8[SPU_W(i)]=a._u8[SPU_W((i+sh)&0x0F)]; return r; }
--/* Bit-level quadword shifts/rotates operate on the WHOLE 128-bit big-endian
-- * value. Our _u64[0]/_u64[1] are word-SCRAMBLED (host-LE: _u64[0] = word0 |
-- * word1<<32, but SPU's MS half is word0<<32 | word1), so native shifts on them
-- * corrupt any bits crossing a 32-bit boundary. Assemble the logical hi/lo halves
-- * with _u32[0] as most-significant, shift, then disassemble. */
--static inline u128 spu_shlqbii(u128 a, int sh) { sh&=7; if(!sh) return a;
--    uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
--    uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh);
--    u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
--static inline u128 spu_rotqbii(u128 a, int sh) { sh&=7; if(!sh) return a;
--    uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
--    uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh)|(hi>>(64-sh));
--    u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
--
--/* ---- single-precision float (4 lanes) ---- */
--static inline u128 spu_fa(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._f32[i]=a._f32[i]+b._f32[i]; return r; }
--static inline u128 spu_fs(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._f32[i]=a._f32[i]-b._f32[i]; return r; }
--
--/* RI8 scale: float-to-int uses 2^(173-i8), int-to-float 2^(i8-155).
-- * The canonical immediates 173 and 155 are identity conversions. */
--static inline u128 spu_cflts(u128 a, int i8){ u128 r; double f=exp2((double)(173-i8));
--    for(int i=0;i<4;i++){ double v=(double)a._f32[i]*f; if(v>2147483647.0)v=2147483647.0; if(v<-2147483648.0)v=-2147483648.0; r._s32[i]=(int32_t)v; } return r; }
--static inline u128 spu_cfltu(u128 a, int i8){ u128 r; double f=exp2((double)(173-i8));
--    for(int i=0;i<4;i++){ double v=(double)a._f32[i]*f; if(v<0)v=0; if(v>4294967295.0)v=4294967295.0; r._u32[i]=(uint32_t)v; } return r; }
--static inline u128 spu_csflt(u128 a, int i8){ u128 r; double f=exp2((double)(i8-155));
--    for(int i=0;i<4;i++) r._f32[i]=(float)((double)a._s32[i]*f); return r; }
--static inline u128 spu_cuflt(u128 a, int i8){ u128 r; double f=exp2((double)(i8-155));
--    for(int i=0;i<4;i++) r._f32[i]=(float)((double)a._u32[i]*f); return r; }
--static inline u128 spu_fm(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._f32[i]=a._f32[i]*b._f32[i]; return r; }
--static inline u128 spu_fma(u128 a, u128 b, u128 c)  { u128 r; for(int i=0;i<4;i++) r._f32[i]=fmaf(a._f32[i], b._f32[i], c._f32[i]); return r; }
--static inline u128 spu_fms(u128 a, u128 b, u128 c)  { u128 r; for(int i=0;i<4;i++) r._f32[i]=fmaf(a._f32[i], b._f32[i], -c._f32[i]); return r; }
--static inline u128 spu_fnms(u128 a, u128 b, u128 c) { u128 r; for(int i=0;i<4;i++) r._f32[i]=fmaf(a._f32[i], -b._f32[i], c._f32[i]); return r; }
--static inline u128 spu_fceq(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._f32[i]==b._f32[i])?0xFFFFFFFFu:0; return r; }
--static inline u128 spu_fcgt(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._f32[i]>b._f32[i])?0xFFFFFFFFu:0; return r; }
--
--/* ---- SPU double-precision (2 doubles/reg; dword i = words 2i(high),2i+1(low)).
-- * Reassemble via _u32 -- our u128 is host-LE, so a naive _f64[i] would SWAP the
-- * two words. Semantics from RPCS3 SPUInterpreter (DFASM / DFMA / FESD / FRDS). ---- */
--static inline double spu__dget(u128 r, int i) {
--    uint64_t u = ((uint64_t)r._u32[i*2] << 32) | r._u32[i*2+1];
--    double d; memcpy(&d, &u, sizeof d); return d;
--}
--static inline void spu__dset(u128* r, int i, double d) {
--    uint64_t u; memcpy(&u, &d, sizeof u);
--    r->_u32[i*2] = (uint32_t)(u >> 32); r->_u32[i*2+1] = (uint32_t)u;
--}
--static inline u128 spu_dfa(u128 a, u128 b) { u128 r; for(int i=0;i<2;i++) spu__dset(&r,i, spu__dget(a,i)+spu__dget(b,i)); return r; }
--static inline u128 spu_dfs(u128 a, u128 b) { u128 r; for(int i=0;i<2;i++) spu__dset(&r,i, spu__dget(a,i)-spu__dget(b,i)); return r; }
--static inline u128 spu_dfm(u128 a, u128 b) { u128 r; for(int i=0;i<2;i++) spu__dset(&r,i, spu__dget(a,i)*spu__dget(b,i)); return r; }
--/* double FMA family: c = rt (accumulator, 3-register). */
--static inline u128 spu_dfma(u128 a, u128 b, u128 t)  { u128 r; for(int i=0;i<2;i++) spu__dset(&r,i, spu__dget(a,i)*spu__dget(b,i)+spu__dget(t,i)); return r; }
--static inline u128 spu_dfms(u128 a, u128 b, u128 t)  { u128 r; for(int i=0;i<2;i++) spu__dset(&r,i, spu__dget(a,i)*spu__dget(b,i)-spu__dget(t,i)); return r; }
--static inline u128 spu_dfnms(u128 a, u128 b, u128 t) { u128 r; for(int i=0;i<2;i++) spu__dset(&r,i, spu__dget(t,i)-spu__dget(a,i)*spu__dget(b,i)); return r; }
--static inline u128 spu_dfnma(u128 a, u128 b, u128 t) { u128 r; for(int i=0;i<2;i++) spu__dset(&r,i, -(spu__dget(a,i)*spu__dget(b,i)+spu__dget(t,i))); return r; }
--/* double compares -> per-lane 64-bit mask (RPCS3 stubs these; sane impl here). */
--static inline u128 spu_dfceq(u128 a, u128 b)  { u128 r; for(int i=0;i<2;i++){ uint64_t m=(spu__dget(a,i)==spu__dget(b,i))?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } return r; }
--static inline u128 spu_dfcmeq(u128 a, u128 b) { u128 r; for(int i=0;i<2;i++){ double x=spu__dget(a,i),y=spu__dget(b,i); if(x<0)x=-x; if(y<0)y=-y; uint64_t m=(x==y)?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } return r; }
--/* Singles occupy preferred words 0 and 2 when converting doubleword lanes. */
--static inline u128 spu_fesd(u128 a) { u128 r; memset(&r,0,sizeof r); for(int i=0;i<2;i++) spu__dset(&r,i,(double)a._f32[i*2]); return r; }
--static inline u128 spu_frds(u128 a) { u128 r; memset(&r,0,sizeof r); for(int i=0;i<2;i++) r._f32[i*2]=(float)spu__dget(a,i); return r; }
--/* mpyhhu: high-16 x high-16 of each word, unsigned, full 32-bit product. */
--static inline u128 spu_mpyhhu(u128 a, u128 b){ u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)a._u16[2*i+1]*(uint32_t)b._u16[2*i+1]; return r; }
--/* cgx: extended carry-generate, carry-in = low bit of old rt (RPCS3 CGX). */
--static inline u128 spu_cgx(u128 a, u128 b, u128 t){ u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)(((uint64_t)(t._u32[i]&1u)+a._u32[i]+b._u32[i])>>32); return r; }
--
--/* ---- remaining SPU ISA ops (RPCS3 SPUInterpreter: EQV/ABSDB/AVGB/MPYHHA/
-- * MPYHHAU/DFCGT/DFCMGT/XORBI/DFTSV). Completes the lifter's opcode coverage. ---- */
--static inline u128 spu_eqv(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++) r._u32[i]=~(a._u32[i]^b._u32[i]); return r; }
--static inline u128 spu_xorbi(u128 a, int32_t imm){ u128 r; for(int i=0;i<16;i++) r._u8[i]=(uint8_t)(a._u8[i]^(uint8_t)imm); return r; }
--static inline u128 spu_absdb(u128 a, u128 b)  { u128 r; for(int i=0;i<16;i++){ uint8_t x=a._u8[i],y=b._u8[i]; r._u8[i]=(uint8_t)(x>y?x-y:y-x); } return r; }
--static inline u128 spu_avgb(u128 a, u128 b)   { u128 r; for(int i=0;i<16;i++) r._u8[i]=(uint8_t)(((uint32_t)a._u8[i]+(uint32_t)b._u8[i]+1u)>>1); return r; }
--/* mpyhha/mpyhhau: high-16 x high-16, ACCUMULATE into rt (3-register). */
--static inline u128 spu_mpyhha(u128 a, u128 b, u128 t)  { u128 r; for(int i=0;i<4;i++) r._s32[i]=t._s32[i]+(int32_t)a._s16[2*i+1]*(int32_t)b._s16[2*i+1]; return r; }
--static inline u128 spu_mpyhhau(u128 a, u128 b, u128 t) { u128 r; for(int i=0;i<4;i++) r._u32[i]=t._u32[i]+(uint32_t)a._u16[2*i+1]*(uint32_t)b._u16[2*i+1]; return r; }
--/* double compare greater (RPCS3 stubs these; sane impl) -> per-lane mask. */
--static inline u128 spu_dfcgt(u128 a, u128 b)  { u128 r; for(int i=0;i<2;i++){ uint64_t m=(spu__dget(a,i)>spu__dget(b,i))?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } return r; }
--static inline u128 spu_dfcmgt(u128 a, u128 b) { u128 r; for(int i=0;i<2;i++){ double x=spu__dget(a,i),y=spu__dget(b,i); if(x<0)x=-x; if(y<0)y=-y; uint64_t m=(x>y)?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } return r; }
--/* dftsv: double test special value -- RPCS3 stubs (fatal); 0 = no special. */
--static inline u128 spu_dftsv(u128 a, int32_t imm){ (void)a; (void)imm; u128 r; memset(&r,0,sizeof r); return r; }
--
--/* ---- Phase 2: register-variable shifts/rotates ---- */
--static inline u128 spu_shl(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++){ uint32_t sh=b._u32[i]&0x3F; r._u32[i]=(sh>31)?0:(a._u32[i]<<sh); } return r; }
--static inline u128 spu_shlh(u128 a, u128 b)  { u128 r; for(int i=0;i<8;i++){ uint32_t sh=b._u16[i]&0x1F; r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]<<sh); } return r; }
--static inline u128 spu_rot(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++){ uint32_t sh=b._u32[i]&31; r._u32[i]= sh ? ((a._u32[i]<<sh)|(a._u32[i]>>(32-sh))) : a._u32[i]; } return r; }
--static inline u128 spu_roth(u128 a, u128 b)  { u128 r; for(int i=0;i<8;i++){ uint32_t sh=b._u16[i]&15; r._u16[i]= sh ? (uint16_t)((a._u16[i]<<sh)|(a._u16[i]>>(16-sh))) : a._u16[i]; } return r; }
--static inline u128 spu_shlqbi(u128 a, u128 b){ int sh=b._u32[0]&7; if(!sh) return a;
--    uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
--    uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh);
--    u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
--static inline u128 spu_rotqbi(u128 a, u128 b){ int sh=b._u32[0]&7; if(!sh) return a;
--    uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
--    uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh)|(hi>>(64-sh));
--    u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
--static inline u128 spu_shlqby(u128 a, u128 b){ int sh=b._u32[0]&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i+sh; if(s<16) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
--static inline u128 spu_rotqby(u128 a, u128 b){ int sh=b._u32[0]&0x0F; u128 r; for(int i=0;i<16;i++) r._u8[SPU_W(i)]=a._u8[SPU_W((i+sh)&0x0F)]; return r; }
--static inline u128 spu_shlqbybi(u128 a, u128 b){ int sh=(b._u32[0]>>3)&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i+sh; if(s<16) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
--static inline u128 spu_rotqbybi(u128 a, u128 b){ int sh=(b._u32[0]>>3)&0x0F; u128 r; for(int i=0;i<16;i++) r._u8[SPU_W(i)]=a._u8[SPU_W((i+sh)&0x0F)]; return r; }
--
--/* ---- Phase 2: rotmahi ---- */
--static inline u128 spu_rotmahi(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._s16[i]=(sh>15)?(a._s16[i]>>15):(a._s16[i]>>sh); return r; }
--
--/* ---- Phase 2: byte/half immediate compares ---- */
--static inline u128 spu_ceqbi(u128 a, int32_t imm)  { u128 r; uint8_t v=(uint8_t)imm; for(int i=0;i<16;i++) r._u8[i]=(a._u8[i]==v)?0xFFu:0; return r; }
--static inline u128 spu_ceqhi(u128 a, int32_t imm)  { u128 r; int16_t v=(int16_t)imm; for(int i=0;i<8;i++) r._u16[i]=(a._s16[i]==v)?0xFFFFu:0; return r; }
--static inline u128 spu_clgtbi(u128 a, int32_t imm) { u128 r; uint8_t v=(uint8_t)imm; for(int i=0;i<16;i++) r._u8[i]=(a._u8[i]>v)?0xFFu:0; return r; }
--static inline u128 spu_clgthi(u128 a, int32_t imm) { u128 r; uint16_t v=(uint16_t)imm; for(int i=0;i<8;i++) r._u16[i]=(a._u16[i]>v)?0xFFFFu:0; return r; }
--static inline u128 spu_cgthi(u128 a, int32_t imm)  { u128 r; int16_t v=(int16_t)imm; for(int i=0;i<8;i++) r._u16[i]=(a._s16[i]>v)?0xFFFFu:0; return r; }
--static inline u128 spu_cgtbi(u128 a, int32_t imm)  { u128 r; int8_t v=(int8_t)imm; for(int i=0;i<16;i++) r._u8[i]=(a._s8[i]>v)?0xFFu:0; return r; }
--
--/* ---- Phase 2: misc one-offs ---- */
--static inline u128 spu_fscrrd(u128 a) { (void)a; return spu_zero(); }
--static inline u128 spu_gb(u128 a) {
--    uint32_t v = ((a._u32[0]&1)<<3)|((a._u32[1]&1)<<2)|((a._u32[2]&1)<<1)|(a._u32[3]&1);
--    u128 r = spu_zero(); r._u32[0]=v; return r;
--}
--static inline u128 spu_gbh(u128 a) {
--    /* gather LSB of each SPU halfword H into bit (7-H). SPU halfword H maps to
--     * our _u16[H^1] (the within-word halfword swap of the value layout). */
--    uint32_t v=0; for(int i=0;i<8;i++) v |= ((uint32_t)(a._u16[i^1]&1) << (7-i));
--    u128 r = spu_zero(); r._u32[0]=v; return r;
--}
--/* gather LSB of each SPU byte i into bit (15-i); exact inverse of spu_fsmb.
-- * SPU byte i lives at our _u8[SPU_W(i)] (byte-reversed within each word). */
--static inline u128 spu_gbb(u128 a) {
--    uint32_t v=0; for(int i=0;i<16;i++) v |= ((uint32_t)(a._u8[SPU_W(i)]&1) << (15-i));
--    u128 r = spu_zero(); r._u32[0]=v; return r;
--}
--static inline u128 spu_cg(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)(((uint64_t)a._u32[i]+(uint64_t)b._u32[i])>>32); return r; }
--/* sumb: sum the 4 bytes of each word. Per CBEA, RT halfword 2i (the HIGH half of
-- * word i) = sum of RB's 4 bytes of word i; halfword 2i+1 (LOW half) = sum of RA's
-- * 4 bytes of word i. Computed on word VALUES so byte order is irrelevant. */
--static inline u128 spu_sumb(u128 a, u128 b) {
--    u128 r;
--    for(int i=0;i<4;i++) {
--        uint32_t wa=a._u32[i], wb=b._u32[i];
--        uint32_t sa=((wa>>24)&0xFF)+((wa>>16)&0xFF)+((wa>>8)&0xFF)+(wa&0xFF);
--        uint32_t sb=((wb>>24)&0xFF)+((wb>>16)&0xFF)+((wb>>8)&0xFF)+(wb&0xFF);
--        r._u32[i]=(sb<<16)|sa;
--    }
--    return r;
--}
--/* Borrow generate: carry-out of (b + ~a + 1) == (b >= a unsigned ? 1 : 0).
-- * The subtract-side sibling of cg; pairs with sf/sfx for extended subtraction. */
--static inline u128 spu_bg(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)(((uint64_t)b._u32[i]+(uint64_t)(~a._u32[i])+1u)>>32); return r; }
--static inline u128 spu_addx(u128 a, u128 b, u128 t) { u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]+b._u32[i]+(t._u32[i]&1); return r; }
--/* LE host: high half of word i = _s16[2i+1], low half = _s16[2i]. */
--static inline u128 spu_mpyh(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._s32[i]=((int32_t)a._s16[2*i+1] * (int32_t)b._s16[2*i]) << 16; return r; }
--static inline u128 spu_mpyhh(u128 a, u128 b){ u128 r; for(int i=0;i<4;i++) r._s32[i]=(int32_t)a._s16[2*i+1] * (int32_t)b._s16[2*i+1]; return r; }
--static inline u128 spu_mpys(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++){ int32_t p=(int32_t)a._s16[2*i]*(int32_t)b._s16[2*i]; r._s32[i]=(int16_t)(p>>16); } return r; }
--static inline u128 spu_mpyui(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)a._u16[2*i]*(uint32_t)(uint16_t)imm; return r; }
--static inline u128 spu_fcmeq(u128 a, u128 b){ u128 r; for(int i=0;i<4;i++){ float fa=fabsf(a._f32[i]),fb=fabsf(b._f32[i]); r._u32[i]=(fa==fb)?0xFFFFFFFFu:0; } return r; }
--static inline u128 spu_fcmgt(u128 a, u128 b){ u128 r; for(int i=0;i<4;i++){ float fa=fabsf(a._f32[i]),fb=fabsf(b._f32[i]); r._u32[i]=(fa>fb)?0xFFFFFFFFu:0; } return r; }
--static const uint32_t spu_frest_fraction_lut[32] = {
--    0x7FFBE0, 0x7F87A6, 0x70EF72, 0x708B40, 0x638B12, 0x633AEA, 0x5792C4, 0x574AA0,
--    0x4CCA7E, 0x4C9262, 0x430A44, 0x42D62A, 0x3A2E12, 0x39FDFA, 0x3215E4, 0x31F1D2,
--    0x2AA9BE, 0x2A85AC, 0x23D59A, 0x23BD8E, 0x1D8576, 0x1D8576, 0x17AD5A, 0x17AD5A,
--    0x124543, 0x124543, 0x0D392D, 0x0D392D, 0x08851A, 0x08851A, 0x041D07, 0x041D07
--};
--
--static const uint32_t spu_frsqest_fraction_lut[64] = {
--    0x350160, 0x34E954, 0x2F993D, 0x2F993D, 0x2AA523, 0x2AA523, 0x26190D, 0x26190D,
--    0x21E4F9, 0x21E4F9, 0x1E00E9, 0x1E00E9, 0x1A5CD9, 0x1A5CD9, 0x16F8CB, 0x16F8CB,
--    0x13CCC0, 0x13CCC0, 0x10CCB3, 0x10CCB3, 0x0E00AA, 0x0E00AA, 0x0B58A1, 0x0B58A1,
--    0x08D498, 0x08D498, 0x067491, 0x067491, 0x043089, 0x043089, 0x020C83, 0x020C83,
--    0x7FFDF4, 0x7FD1DE, 0x7859C8, 0x783DBA, 0x71559C, 0x71559C, 0x6AE57C, 0x6AE57C,
--    0x64F561, 0x64F561, 0x5F7149, 0x5F7149, 0x5A4D33, 0x5A4D33, 0x55811F, 0x55811F,
--    0x51050F, 0x51050F, 0x4CC8FE, 0x4CC8FE, 0x48D0F0, 0x48D0F0, 0x4510E4, 0x4510E4,
--    0x4180D7, 0x4180D7, 0x3E24CC, 0x3E24CC, 0x3AF4C3, 0x3AF4C3, 0x37E8BA, 0x37E8BA
--};
--
--static inline u128 spu_frsqest(u128 a) {
--    u128 r;
--    for (int i = 0; i < 4; i++) {
--        uint32_t bits = a._u32[i];
--        uint32_t exp  = (bits >> 23) & 0xFFu;
--        uint32_t frac_idx = (bits >> 18) & 0x3Fu;
--        uint32_t rexp = (exp == 0u) ? 0xFFu : (190u - (exp + 1u) / 2u);
--        uint32_t fraction = spu_frsqest_fraction_lut[frac_idx];
--        uint32_t out = (rexp << 23) | (fraction & 0x7FFFFFu);
--        memcpy(&r._f32[i], &out, sizeof out);
--    }
--    return r;
--}
--/* frest: reciprocal estimate (refined by the following spu_fi Newton step).
-- * Full-precision 1/x is exact after fi and >= HW-estimate accuracy. */
--static inline u128 spu_frest(u128 a) {
--    u128 r;
--    for (int i = 0; i < 4; i++) {
--        uint32_t bits = a._u32[i];
--        uint32_t sign = bits & 0x80000000u;
--        uint32_t exp  = (bits >> 23) & 0xFFu;
--        uint32_t frac_idx = (bits >> 18) & 0x1Fu;
--        uint32_t out;
--        if (exp == 0u) {
--            /* zero or denormal operand: ISA p.215 "1/0 is defined to give the
--             * maximum SPU single-precision extended-range fp number", sign of
--             * the (zero) input preserved. Same bucket for true denormals
--             * (their biased exponent field is also 0). */
--            out = sign | 0x7FFFFFFFu;
--        } else {
--            /* result biased exponent = 253 - input biased exponent (253 =
--             * 2*127-1, i.e. reciprocal negates the unbiased exponent),
--             * clamped to 0 on underflow (ISA p.215 "Big: if |x|>=2^126,
--             * 1/x underflows to zero"). Verified bit-exact against RPCS3's
--             * raw 256-entry spu_frest_exponent_lut for all 256 inputs. */
--            uint32_t rexp = (exp >= 253u) ? 0u : (253u - exp);
--            uint32_t fraction = spu_frest_fraction_lut[frac_idx];
--            out = sign | (rexp << 23) | (fraction & 0x7FFFFFu);
--        }
--        memcpy(&r._f32[i], &out, sizeof out);
--    }
--    return r;
--}
--
--/* ---- Phase 3: sign extension ----
-- * LE host: low sub-lane = _u8[2i] / _s16[2i] / _s32[2i] (the byte/half/word
-- * at the *lower* storage address). Same caveat as the mpy family. */
--static inline u128 spu_xsbh(u128 a) { u128 r; for(int i=0;i<8;i++) r._s16[i] = (int8_t)a._u8[2*i]; return r; }
--static inline u128 spu_xshw(u128 a) { u128 r; for(int i=0;i<4;i++) r._s32[i] = (int16_t)a._s16[2*i]; return r; }
--/* xswd: rt.doubleword[d] = sign_extend_64(ra.word[2d+1]) -- the ODD word of
-- * each doubleword, because that is the low half in big-endian order.
-- *
-- * This read the EVEN words (2d) and wrote the result through _s64, which is a
-- * host little-endian lane: writing it puts the value in _u32[2d] (SPU word 2d,
-- * the HIGH half) and the sign fill in _u32[2d+1]. Both halves were therefore
-- * wrong, and the common case -- a small positive value -- came out as ZERO.
-- *
-- * You Don't Know Jack's FMOD mixer hit exactly that: a compiler-generated
-- * 64-bit multiply helper received `1 * 0` instead of `1 * 16`, so the mixer's
-- * block count was zero and it stopped on its own assert. Unlike its siblings
-- * xsbh/xshw, whose source and destination swaps cancel, nothing cancels here.
-- * Write the two words explicitly. */
--static inline u128 spu_xswd(u128 a) {
--    u128 r;
--    for (int d = 0; d < 2; d++) {
--        int32_t v = (int32_t)a._u32[2*d + 1];
--        r._u32[2*d]     = (uint32_t)(v >> 31);   /* sign fill (high word) */
--        r._u32[2*d + 1] = (uint32_t)v;           /* value      (low word) */
--    }
--    return r;
--}
--
--/* ---- Phase 3: OR across ---- */
--static inline u128 spu_orx(u128 a) {
--    u128 r = spu_zero();
--    r._u32[0] = a._u32[0] | a._u32[1] | a._u32[2] | a._u32[3];
--    return r;
--}
--
--/* ---- Phase 3: form-select mask from bits ---- */
--static inline u128 spu_fsm(u128 a) {
--    u128 r; uint32_t v = a._u32[0] & 0xF;
--    for(int i=0;i<4;i++) r._u32[i] = ((v>>(3-i))&1) ? 0xFFFFFFFFu : 0;
--    return r;
--}
--/* fsmh: per-halfword mask from 8 bits. SPU halfword H <- bit (7-H); store at
-- * our _u16[H^1] (within-word halfword swap of the value layout). Per-halfword
-- * both bytes are identical so byte order within a halfword is irrelevant, but
-- * the halfword ORDER within each word must be swapped. */
--static inline u128 spu_fsmh(u128 a) {
--    u128 r; uint32_t v = a._u32[0] & 0xFF;
--    for(int i=0;i<8;i++) r._u16[i^1] = ((v>>(7-i))&1) ? 0xFFFFu : 0;
--    return r;
--}
--/* fsmb/fsmbi: per-byte mask from 16 bits. SPU byte position P <- bit (15-P);
-- * store at our _u8[SPU_W(P)] (byte-reversed within each word). A bit set at SPU
-- * byte P must land at our _u8[SPU_W(P)] so that downstream word arithmetic (e.g.
-- * andbi(fsmbi(0x101),-128) building a +0x80 EA offset in the low byte of words
-- * 1,3) places the value in the correct byte lane. Raw _u8[P] would put 0x80 in
-- * the high byte (bit 31) instead -> wrong DMA EA. */
--static inline u128 spu_fsmb(u128 a) {
--    u128 r; uint32_t v = a._u32[0] & 0xFFFF;
--    for(int i=0;i<16;i++) r._u8[SPU_W(i)] = ((v>>(15-i))&1) ? 0xFFu : 0;
--    return r;
--}
--static inline u128 spu_fsmbi(int32_t imm) {
--    u128 r; uint32_t v = imm & 0xFFFF;
--    for(int i=0;i<16;i++) r._u8[SPU_W(i)] = ((v>>(15-i))&1) ? 0xFFu : 0;
--    return r;
--}
--
--/* ---- Phase 3: constant generators (insertion shuffle patterns) ---- */
--/* Generate-controls (cbd/chd/cwd/cdd) — insertion selectors for the (now
-- * SPU-byte-correct) shufb. Each builds a control in TRUE SPU byte order: the
-- * base selects b's SPU byte t at result SPU byte t (selector 0x10+t), and the
-- * insert positions select a's preferred scalar bytes -- SPU byte 3 for a byte
-- * (selector 0x03), SPU bytes 2,3 for a halfword (0x02,0x03), SPU bytes 0..3 for
-- * a word, 0..7 for a doubleword. Every store is mapped through SPU_W to land at
-- * the right host index. Verified to compose correctly with the fixed shufb for
-- * both cbd-generated and immediate/LS-constant controls. */
--static inline u128 spu_cbd_pos(int pos) {
--    u128 r; for(int t=0;t<16;t++) r._u8[SPU_W(t)] = (uint8_t)(0x10 + t);
--    r._u8[SPU_W(pos & 0xF)] = 0x03;                 /* a's preferred byte = SPU byte 3 */
--    return r;
--}
--static inline u128 spu_chd_pos(int pos) {
--    u128 r; for(int t=0;t<16;t++) r._u8[SPU_W(t)] = (uint8_t)(0x10 + t);
--    int p = (pos & 0xF) & ~1;                       /* SPU halfword byte positions p, p+1 */
--    r._u8[SPU_W(p)]   = 0x02;                        /* a SPU byte 2 (hi byte of preferred hw) */
--    r._u8[SPU_W(p+1)] = 0x03;                        /* a SPU byte 3 (lo byte) */
--    return r;
--}
--static inline u128 spu_cwd_pos(int pos) {
--    u128 r; for(int t=0;t<16;t++) r._u8[SPU_W(t)] = (uint8_t)(0x10 + t);
--    int p = (pos & 0xF) & ~3;
--    for(int k=0;k<4;k++) r._u8[SPU_W(p+k)] = (uint8_t)k;   /* a SPU bytes 0..3 (preferred word) */
--    return r;
--}
--static inline u128 spu_cdd_pos(int pos) {
--    u128 r; for(int t=0;t<16;t++) r._u8[SPU_W(t)] = (uint8_t)(0x10 + t);
--    int p = (pos & 0xF) & ~7;
--    for(int k=0;k<8;k++) r._u8[SPU_W(p+k)] = (uint8_t)k;   /* a SPU bytes 0..7 (preferred dword) */
--    return r;
--}
--static inline u128 spu_cbd(u128 a, int i7){ return spu_cbd_pos((int)a._u32[0]+i7); }
--static inline u128 spu_chd(u128 a, int i7){ return spu_chd_pos((int)a._u32[0]+i7); }
--static inline u128 spu_cwd(u128 a, int i7){ return spu_cwd_pos((int)a._u32[0]+i7); }
--static inline u128 spu_cdd(u128 a, int i7){ return spu_cdd_pos((int)a._u32[0]+i7); }
--static inline u128 spu_cbx(u128 a, u128 b){ return spu_cbd_pos((int)(a._u32[0]+b._u32[0])); }
--static inline u128 spu_chx(u128 a, u128 b){ return spu_chd_pos((int)(a._u32[0]+b._u32[0])); }
--static inline u128 spu_cwx(u128 a, u128 b){ return spu_cwd_pos((int)(a._u32[0]+b._u32[0])); }
--static inline u128 spu_cdx(u128 a, u128 b){ return spu_cdd_pos((int)(a._u32[0]+b._u32[0])); }
--
--/* ---- Phase 3: rotate-and-mask family ---- */
--static inline u128 spu_rotm(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++){ uint32_t sh=(0-b._u32[i])&0x3F; r._u32[i]=(sh>31)?0:(a._u32[i]>>sh); } return r; }
--static inline u128 spu_rotma(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++){ uint32_t sh=(0-b._u32[i])&0x3F; r._s32[i]=(sh>31)?(a._s32[i]>>31):(a._s32[i]>>sh); } return r; }
--static inline u128 spu_rothm(u128 a, u128 b)  { u128 r; for(int i=0;i<8;i++){ uint32_t sh=(0-b._u16[i])&0x1F; r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); } return r; }
--static inline u128 spu_rothma(u128 a, u128 b) { u128 r; for(int i=0;i<8;i++){ uint32_t sh=(0-b._u16[i])&0x1F; r._s16[i]=(sh>15)?(a._s16[i]>>15):(a._s16[i]>>sh); } return r; }
--static inline u128 spu_rothmi(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); return r; }
--static inline u128 spu_rotqmbi(u128 a, u128 b)   { int sh=(0-(int)b._u32[0])&7; if(!sh) return a;
--    uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
--    uint64_t nlo=(lo>>sh)|(hi<<(64-sh)), nhi=(hi>>sh);
--    u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
--static inline u128 spu_rotqmby(u128 a, u128 b)   { int sh=(0-(int)b._u32[0])&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i-sh; if(s>=0) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
--static inline u128 spu_rotqmbybi(u128 a, u128 b) { int sh=(0-((int)b._u32[0]>>3))&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i-sh; if(s>=0) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
--static inline u128 spu_rotqmbii(u128 a, int i7)  { int sh=(0-i7)&7; if(!sh) return a;
--    uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
--    uint64_t nlo=(lo>>sh)|(hi<<(64-sh)), nhi=(hi>>sh);
--    u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
--static inline u128 spu_rotqmbyi(u128 a, int i7)  { int sh=(0-i7)&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i-sh; if(s>=0) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
--
--/* ---- Phase 3: halfword/byte immediate logic ---- */
--static inline u128 spu_andhi(u128 a, int32_t imm) { u128 r; uint16_t v=(uint16_t)imm; for(int i=0;i<8;i++) r._u16[i]=a._u16[i]&v; return r; }
--static inline u128 spu_andbi(u128 a, int32_t imm) { u128 r; uint8_t  v=(uint8_t)imm;  for(int i=0;i<16;i++) r._u8[i]=a._u8[i]&v;   return r; }
--static inline u128 spu_orhi(u128 a, int32_t imm)  { u128 r; uint16_t v=(uint16_t)imm; for(int i=0;i<8;i++) r._u16[i]=a._u16[i]|v; return r; }
--static inline u128 spu_orbi(u128 a, int32_t imm)  { u128 r; uint8_t  v=(uint8_t)imm;  for(int i=0;i<16;i++) r._u8[i]=a._u8[i]|v;   return r; }
--static inline u128 spu_xorhi(u128 a, int32_t imm) { u128 r; uint16_t v=(uint16_t)imm; for(int i=0;i<8;i++) r._u16[i]=a._u16[i]^v; return r; }
--
--/* ---- Phase 3: borrow-generate extended ---- */
--static inline u128 spu_bgx(u128 a, u128 b, u128 t) {
--    u128 r;
--    for(int i=0;i<4;i++) {
--        uint64_t s = (uint64_t)b._u32[i] + (uint64_t)(~a._u32[i]) + (uint64_t)(t._u32[i]&1);
--        r._u32[i] = (uint32_t)(s >> 32);
--    }
--    return r;
--}
--
--/* ---- Phase 3: mfspr stub ---- */
--static inline u128 spu_mfspr(u128 a) { (void)a; return spu_zero(); }
--
--/* ---- immediate loaders ---- */
--static inline u128 spu_il(int32_t imm)   { return spu_splat_u32((uint32_t)imm); }
--static inline u128 spu_ila(uint32_t i18) { return spu_splat_u32(i18 & 0x3FFFF); }
--static inline u128 spu_ilh(uint16_t imm) { return spu_splat_u16(imm); }
--static inline u128 spu_ilhu(uint16_t imm){ return spu_splat_u32((uint32_t)imm << 16); }
--static inline u128 spu_iohl(u128 a, uint16_t imm){ u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]|(uint32_t)imm; return r; }
--
--#ifdef __cplusplus
--}
--#endif
--
--#endif /* SPU_HELPERS_H */
-+
-+/* ---- shift / rotate immediate (word lanes) ---- */
-+static inline u128 spu_shli(u128 a, int sh)  { u128 r; sh&=0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]<<sh); return r; }
-+static inline u128 spu_shlhi(u128 a, int sh) { u128 r; sh&=0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]<<sh); return r; }
-+static inline u128 spu_roti(u128 a, int sh)  { u128 r; sh&=31; for(int i=0;i<4;i++) r._u32[i]= sh ? ((a._u32[i]<<sh)|(a._u32[i]>>(32-sh))) : a._u32[i]; return r; }
-+static inline u128 spu_rothi(u128 a, int sh) { u128 r; sh&=15; for(int i=0;i<8;i++) r._u16[i]=(uint16_t)((a._u16[i]<<sh)|(a._u16[i]>>(16-sh))); return r; }
-+static inline u128 spu_rotmi(u128 a, int i7)  { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]>>sh); return r; }
-+static inline u128 spu_rotmai(u128 a, int i7) { u128 r; int sh=(0-i7)&0x3F; for(int i=0;i<4;i++) r._s32[i]=(sh>31)?(a._s32[i]>>31):(a._s32[i]>>sh); return r; }
-+static inline u128 spu_rotmhi(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); return r; }
 +/* Byte rotates and shifts of the whole quadword. As loops over SPU_W these
 + * were most of what was left of GT5 Prologue's sound mixer once the larger
 + * costs were gone: its filter loop does a rotqby and two shlqbyi per audio
@@ -61006,35 +60424,29 @@ index 0fca7f55..1817a85d 100644
 +static inline u128 spu_shlqbyi(u128 a, int sh) { return spu_shlqbyi_ref(a, sh); }
 +static inline u128 spu_rotqbyi(u128 a, int sh) { return spu_rotqbyi_ref(a, sh); }
 +#endif
-+/* Bit-level quadword shifts/rotates operate on the WHOLE 128-bit big-endian
-+ * value. Our _u64[0]/_u64[1] are word-SCRAMBLED (host-LE: _u64[0] = word0 |
-+ * word1<<32, but SPU's MS half is word0<<32 | word1), so native shifts on them
-+ * corrupt any bits crossing a 32-bit boundary. Assemble the logical hi/lo halves
-+ * with _u32[0] as most-significant, shift, then disassemble. */
-+static inline u128 spu_shlqbii(u128 a, int sh) { sh&=7; if(!sh) return a;
-+    uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
-+    uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh);
-+    u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
-+static inline u128 spu_rotqbii(u128 a, int sh) { sh&=7; if(!sh) return a;
-+    uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
-+    uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh)|(hi>>(64-sh));
-+    u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
-+
-+/* ---- single-precision float (4 lanes) ---- */
-+static inline u128 spu_fa(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._f32[i]=a._f32[i]+b._f32[i]; return r; }
-+static inline u128 spu_fs(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._f32[i]=a._f32[i]-b._f32[i]; return r; }
-+
-+/* RI8 scale: float-to-int uses 2^(173-i8), int-to-float 2^(i8-155).
-+ * The canonical immediates 173 and 155 are identity conversions. */
+ /* Bit-level quadword shifts/rotates operate on the WHOLE 128-bit big-endian
+  * value. Our _u64[0]/_u64[1] are word-SCRAMBLED (host-LE: _u64[0] = word0 |
+  * word1<<32, but SPU's MS half is word0<<32 | word1), so native shifts on them
+@@ -279,18 +401,29 @@ static inline u128 spu_fs(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._f32[
+ 
+ /* RI8 scale: float-to-int uses 2^(173-i8), int-to-float 2^(i8-155).
+  * The canonical immediates 173 and 155 are identity conversions. */
+-static inline u128 spu_cflts(u128 a, int i8){ u128 r; double f=exp2((double)(173-i8));
 +static inline u128 spu_cflts(u128 a, int i8){ u128 r; double f=SPU__EXP2I(173-i8);
-+    for(int i=0;i<4;i++){ double v=(double)a._f32[i]*f; if(v>2147483647.0)v=2147483647.0; if(v<-2147483648.0)v=-2147483648.0; r._s32[i]=(int32_t)v; } return r; }
+     for(int i=0;i<4;i++){ double v=(double)a._f32[i]*f; if(v>2147483647.0)v=2147483647.0; if(v<-2147483648.0)v=-2147483648.0; r._s32[i]=(int32_t)v; } return r; }
+-static inline u128 spu_cfltu(u128 a, int i8){ u128 r; double f=exp2((double)(173-i8));
 +static inline u128 spu_cfltu(u128 a, int i8){ u128 r; double f=SPU__EXP2I(173-i8);
-+    for(int i=0;i<4;i++){ double v=(double)a._f32[i]*f; if(v<0)v=0; if(v>4294967295.0)v=4294967295.0; r._u32[i]=(uint32_t)v; } return r; }
+     for(int i=0;i<4;i++){ double v=(double)a._f32[i]*f; if(v<0)v=0; if(v>4294967295.0)v=4294967295.0; r._u32[i]=(uint32_t)v; } return r; }
+-static inline u128 spu_csflt(u128 a, int i8){ u128 r; double f=exp2((double)(i8-155));
 +static inline u128 spu_csflt(u128 a, int i8){ u128 r; double f=SPU__EXP2I(i8-155);
-+    for(int i=0;i<4;i++) r._f32[i]=(float)((double)a._s32[i]*f); return r; }
+     for(int i=0;i<4;i++) r._f32[i]=(float)((double)a._s32[i]*f); return r; }
+-static inline u128 spu_cuflt(u128 a, int i8){ u128 r; double f=exp2((double)(i8-155));
 +static inline u128 spu_cuflt(u128 a, int i8){ u128 r; double f=SPU__EXP2I(i8-155);
-+    for(int i=0;i<4;i++) r._f32[i]=(float)((double)a._u32[i]*f); return r; }
-+static inline u128 spu_fm(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._f32[i]=a._f32[i]*b._f32[i]; return r; }
+     for(int i=0;i<4;i++) r._f32[i]=(float)((double)a._u32[i]*f); return r; }
+ static inline u128 spu_fm(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._f32[i]=a._f32[i]*b._f32[i]; return r; }
+-static inline u128 spu_fma(u128 a, u128 b, u128 c)  { u128 r; for(int i=0;i<4;i++) r._f32[i]=fmaf(a._f32[i], b._f32[i], c._f32[i]); return r; }
+-static inline u128 spu_fms(u128 a, u128 b, u128 c)  { u128 r; for(int i=0;i<4;i++) r._f32[i]=fmaf(a._f32[i], b._f32[i], -c._f32[i]); return r; }
+-static inline u128 spu_fnms(u128 a, u128 b, u128 c) { u128 r; for(int i=0;i<4;i++) r._f32[i]=fmaf(a._f32[i], -b._f32[i], c._f32[i]); return r; }
 +/* Without -mfma the compiler turns fmaf() into a call to the C library's
 + * software version, four calls per instruction: in GT5 Prologue's sound mixer
 + * job that was most of the time spent outside the executable. The product of
@@ -61049,352 +60461,30 @@ index 0fca7f55..1817a85d 100644
 +static inline u128 spu_fma(u128 a, u128 b, u128 c)  { u128 r; for(int i=0;i<4;i++) r._f32[i]=SPU__FMAF(a._f32[i], b._f32[i], c._f32[i]); return r; }
 +static inline u128 spu_fms(u128 a, u128 b, u128 c)  { u128 r; for(int i=0;i<4;i++) r._f32[i]=SPU__FMAF(a._f32[i], b._f32[i], -c._f32[i]); return r; }
 +static inline u128 spu_fnms(u128 a, u128 b, u128 c) { u128 r; for(int i=0;i<4;i++) r._f32[i]=SPU__FMAF(a._f32[i], -b._f32[i], c._f32[i]); return r; }
-+static inline u128 spu_fceq(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._f32[i]==b._f32[i])?0xFFFFFFFFu:0; return r; }
-+static inline u128 spu_fcgt(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._f32[i]>b._f32[i])?0xFFFFFFFFu:0; return r; }
-+
-+/* ---- SPU double-precision (2 doubles/reg; dword i = words 2i(high),2i+1(low)).
-+ * Reassemble via _u32 -- our u128 is host-LE, so a naive _f64[i] would SWAP the
-+ * two words. Semantics from RPCS3 SPUInterpreter (DFASM / DFMA / FESD / FRDS). ---- */
-+static inline double spu__dget(u128 r, int i) {
-+    uint64_t u = ((uint64_t)r._u32[i*2] << 32) | r._u32[i*2+1];
-+    double d; memcpy(&d, &u, sizeof d); return d;
-+}
-+static inline void spu__dset(u128* r, int i, double d) {
-+    uint64_t u; memcpy(&u, &d, sizeof u);
-+    r->_u32[i*2] = (uint32_t)(u >> 32); r->_u32[i*2+1] = (uint32_t)u;
-+}
-+static inline u128 spu_dfa(u128 a, u128 b) { u128 r; for(int i=0;i<2;i++) spu__dset(&r,i, spu__dget(a,i)+spu__dget(b,i)); return r; }
-+static inline u128 spu_dfs(u128 a, u128 b) { u128 r; for(int i=0;i<2;i++) spu__dset(&r,i, spu__dget(a,i)-spu__dget(b,i)); return r; }
-+static inline u128 spu_dfm(u128 a, u128 b) { u128 r; for(int i=0;i<2;i++) spu__dset(&r,i, spu__dget(a,i)*spu__dget(b,i)); return r; }
-+/* double FMA family: c = rt (accumulator, 3-register). */
-+static inline u128 spu_dfma(u128 a, u128 b, u128 t)  { u128 r; for(int i=0;i<2;i++) spu__dset(&r,i, spu__dget(a,i)*spu__dget(b,i)+spu__dget(t,i)); return r; }
-+static inline u128 spu_dfms(u128 a, u128 b, u128 t)  { u128 r; for(int i=0;i<2;i++) spu__dset(&r,i, spu__dget(a,i)*spu__dget(b,i)-spu__dget(t,i)); return r; }
-+static inline u128 spu_dfnms(u128 a, u128 b, u128 t) { u128 r; for(int i=0;i<2;i++) spu__dset(&r,i, spu__dget(t,i)-spu__dget(a,i)*spu__dget(b,i)); return r; }
-+static inline u128 spu_dfnma(u128 a, u128 b, u128 t) { u128 r; for(int i=0;i<2;i++) spu__dset(&r,i, -(spu__dget(a,i)*spu__dget(b,i)+spu__dget(t,i))); return r; }
-+/* double compares -> per-lane 64-bit mask (RPCS3 stubs these; sane impl here). */
-+static inline u128 spu_dfceq(u128 a, u128 b)  { u128 r; for(int i=0;i<2;i++){ uint64_t m=(spu__dget(a,i)==spu__dget(b,i))?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } return r; }
-+static inline u128 spu_dfcmeq(u128 a, u128 b) { u128 r; for(int i=0;i<2;i++){ double x=spu__dget(a,i),y=spu__dget(b,i); if(x<0)x=-x; if(y<0)y=-y; uint64_t m=(x==y)?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } return r; }
-+/* Singles occupy preferred words 0 and 2 when converting doubleword lanes. */
-+static inline u128 spu_fesd(u128 a) { u128 r; memset(&r,0,sizeof r); for(int i=0;i<2;i++) spu__dset(&r,i,(double)a._f32[i*2]); return r; }
-+static inline u128 spu_frds(u128 a) { u128 r; memset(&r,0,sizeof r); for(int i=0;i<2;i++) r._f32[i*2]=(float)spu__dget(a,i); return r; }
-+/* mpyhhu: high-16 x high-16 of each word, unsigned, full 32-bit product. */
-+static inline u128 spu_mpyhhu(u128 a, u128 b){ u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)a._u16[2*i+1]*(uint32_t)b._u16[2*i+1]; return r; }
-+/* cgx: extended carry-generate, carry-in = low bit of old rt (RPCS3 CGX). */
-+static inline u128 spu_cgx(u128 a, u128 b, u128 t){ u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)(((uint64_t)(t._u32[i]&1u)+a._u32[i]+b._u32[i])>>32); return r; }
-+
-+/* ---- remaining SPU ISA ops (RPCS3 SPUInterpreter: EQV/ABSDB/AVGB/MPYHHA/
-+ * MPYHHAU/DFCGT/DFCMGT/XORBI/DFTSV). Completes the lifter's opcode coverage. ---- */
-+static inline u128 spu_eqv(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++) r._u32[i]=~(a._u32[i]^b._u32[i]); return r; }
-+static inline u128 spu_xorbi(u128 a, int32_t imm){ u128 r; for(int i=0;i<16;i++) r._u8[i]=(uint8_t)(a._u8[i]^(uint8_t)imm); return r; }
-+static inline u128 spu_absdb(u128 a, u128 b)  { u128 r; for(int i=0;i<16;i++){ uint8_t x=a._u8[i],y=b._u8[i]; r._u8[i]=(uint8_t)(x>y?x-y:y-x); } return r; }
-+static inline u128 spu_avgb(u128 a, u128 b)   { u128 r; for(int i=0;i<16;i++) r._u8[i]=(uint8_t)(((uint32_t)a._u8[i]+(uint32_t)b._u8[i]+1u)>>1); return r; }
-+/* mpyhha/mpyhhau: high-16 x high-16, ACCUMULATE into rt (3-register). */
-+static inline u128 spu_mpyhha(u128 a, u128 b, u128 t)  { u128 r; for(int i=0;i<4;i++) r._s32[i]=t._s32[i]+(int32_t)a._s16[2*i+1]*(int32_t)b._s16[2*i+1]; return r; }
-+static inline u128 spu_mpyhhau(u128 a, u128 b, u128 t) { u128 r; for(int i=0;i<4;i++) r._u32[i]=t._u32[i]+(uint32_t)a._u16[2*i+1]*(uint32_t)b._u16[2*i+1]; return r; }
-+/* double compare greater (RPCS3 stubs these; sane impl) -> per-lane mask. */
-+static inline u128 spu_dfcgt(u128 a, u128 b)  { u128 r; for(int i=0;i<2;i++){ uint64_t m=(spu__dget(a,i)>spu__dget(b,i))?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } return r; }
-+static inline u128 spu_dfcmgt(u128 a, u128 b) { u128 r; for(int i=0;i<2;i++){ double x=spu__dget(a,i),y=spu__dget(b,i); if(x<0)x=-x; if(y<0)y=-y; uint64_t m=(x>y)?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } return r; }
-+/* dftsv: double test special value -- RPCS3 stubs (fatal); 0 = no special. */
-+static inline u128 spu_dftsv(u128 a, int32_t imm){ (void)a; (void)imm; u128 r; memset(&r,0,sizeof r); return r; }
-+
-+/* ---- Phase 2: register-variable shifts/rotates ---- */
-+static inline u128 spu_shl(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++){ uint32_t sh=b._u32[i]&0x3F; r._u32[i]=(sh>31)?0:(a._u32[i]<<sh); } return r; }
-+static inline u128 spu_shlh(u128 a, u128 b)  { u128 r; for(int i=0;i<8;i++){ uint32_t sh=b._u16[i]&0x1F; r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]<<sh); } return r; }
-+static inline u128 spu_rot(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++){ uint32_t sh=b._u32[i]&31; r._u32[i]= sh ? ((a._u32[i]<<sh)|(a._u32[i]>>(32-sh))) : a._u32[i]; } return r; }
-+static inline u128 spu_roth(u128 a, u128 b)  { u128 r; for(int i=0;i<8;i++){ uint32_t sh=b._u16[i]&15; r._u16[i]= sh ? (uint16_t)((a._u16[i]<<sh)|(a._u16[i]>>(16-sh))) : a._u16[i]; } return r; }
-+static inline u128 spu_shlqbi(u128 a, u128 b){ int sh=b._u32[0]&7; if(!sh) return a;
-+    uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
-+    uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh);
-+    u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
-+static inline u128 spu_rotqbi(u128 a, u128 b){ int sh=b._u32[0]&7; if(!sh) return a;
-+    uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
-+    uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh)|(hi>>(64-sh));
-+    u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
-+static inline u128 spu_shlqby(u128 a, u128 b){ int sh=b._u32[0]&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i+sh; if(s<16) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
+ static inline u128 spu_fceq(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._f32[i]==b._f32[i])?0xFFFFFFFFu:0; return r; }
+ static inline u128 spu_fcgt(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(a._f32[i]>b._f32[i])?0xFFFFFFFFu:0; return r; }
+ 
+@@ -353,7 +486,12 @@ static inline u128 spu_rotqbi(u128 a, u128 b){ int sh=b._u32[0]&7; if(!sh) retur
+     uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh)|(hi>>(64-sh));
+     u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
+ static inline u128 spu_shlqby(u128 a, u128 b){ int sh=b._u32[0]&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i+sh; if(s<16) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
+-static inline u128 spu_rotqby(u128 a, u128 b){ int sh=b._u32[0]&0x0F; u128 r; for(int i=0;i<16;i++) r._u8[SPU_W(i)]=a._u8[SPU_W((i+sh)&0x0F)]; return r; }
 +static inline u128 spu_rotqby_ref(u128 a, u128 b){ int sh=b._u32[0]&0x0F; u128 r; for(int i=0;i<16;i++) r._u8[SPU_W(i)]=a._u8[SPU_W((i+sh)&0x0F)]; return r; }
 +#if defined(__SSE4_1__)
 +static inline u128 spu_rotqby(u128 a, u128 b){ int sh=b._u32[0]&0x0F; if (!sh) return a; return spu__pshufb_tab(a, sh); }
 +#else
 +static inline u128 spu_rotqby(u128 a, u128 b){ return spu_rotqby_ref(a, b); }
 +#endif
-+static inline u128 spu_shlqbybi(u128 a, u128 b){ int sh=(b._u32[0]>>3)&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i+sh; if(s<16) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
-+static inline u128 spu_rotqbybi(u128 a, u128 b){ int sh=(b._u32[0]>>3)&0x0F; u128 r; for(int i=0;i<16;i++) r._u8[SPU_W(i)]=a._u8[SPU_W((i+sh)&0x0F)]; return r; }
+ static inline u128 spu_shlqbybi(u128 a, u128 b){ int sh=(b._u32[0]>>3)&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i+sh; if(s<16) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
+ static inline u128 spu_rotqbybi(u128 a, u128 b){ int sh=(b._u32[0]>>3)&0x0F; u128 r; for(int i=0;i<16;i++) r._u8[SPU_W(i)]=a._u8[SPU_W((i+sh)&0x0F)]; return r; }
+ 
+@@ -631,4 +769,6 @@ static inline u128 spu_iohl(u128 a, uint16_t imm){ u128 r; for(int i=0;i<4;i++)
+ }
+ #endif
+ 
++#include "spu_codegen_helpers.h"
 +
-+/* ---- Phase 2: rotmahi ---- */
-+static inline u128 spu_rotmahi(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._s16[i]=(sh>15)?(a._s16[i]>>15):(a._s16[i]>>sh); return r; }
-+
-+/* ---- Phase 2: byte/half immediate compares ---- */
-+static inline u128 spu_ceqbi(u128 a, int32_t imm)  { u128 r; uint8_t v=(uint8_t)imm; for(int i=0;i<16;i++) r._u8[i]=(a._u8[i]==v)?0xFFu:0; return r; }
-+static inline u128 spu_ceqhi(u128 a, int32_t imm)  { u128 r; int16_t v=(int16_t)imm; for(int i=0;i<8;i++) r._u16[i]=(a._s16[i]==v)?0xFFFFu:0; return r; }
-+static inline u128 spu_clgtbi(u128 a, int32_t imm) { u128 r; uint8_t v=(uint8_t)imm; for(int i=0;i<16;i++) r._u8[i]=(a._u8[i]>v)?0xFFu:0; return r; }
-+static inline u128 spu_clgthi(u128 a, int32_t imm) { u128 r; uint16_t v=(uint16_t)imm; for(int i=0;i<8;i++) r._u16[i]=(a._u16[i]>v)?0xFFFFu:0; return r; }
-+static inline u128 spu_cgthi(u128 a, int32_t imm)  { u128 r; int16_t v=(int16_t)imm; for(int i=0;i<8;i++) r._u16[i]=(a._s16[i]>v)?0xFFFFu:0; return r; }
-+static inline u128 spu_cgtbi(u128 a, int32_t imm)  { u128 r; int8_t v=(int8_t)imm; for(int i=0;i<16;i++) r._u8[i]=(a._s8[i]>v)?0xFFu:0; return r; }
-+
-+/* ---- Phase 2: misc one-offs ---- */
-+static inline u128 spu_fscrrd(u128 a) { (void)a; return spu_zero(); }
-+static inline u128 spu_gb(u128 a) {
-+    uint32_t v = ((a._u32[0]&1)<<3)|((a._u32[1]&1)<<2)|((a._u32[2]&1)<<1)|(a._u32[3]&1);
-+    u128 r = spu_zero(); r._u32[0]=v; return r;
-+}
-+static inline u128 spu_gbh(u128 a) {
-+    /* gather LSB of each SPU halfword H into bit (7-H). SPU halfword H maps to
-+     * our _u16[H^1] (the within-word halfword swap of the value layout). */
-+    uint32_t v=0; for(int i=0;i<8;i++) v |= ((uint32_t)(a._u16[i^1]&1) << (7-i));
-+    u128 r = spu_zero(); r._u32[0]=v; return r;
-+}
-+/* gather LSB of each SPU byte i into bit (15-i); exact inverse of spu_fsmb.
-+ * SPU byte i lives at our _u8[SPU_W(i)] (byte-reversed within each word). */
-+static inline u128 spu_gbb(u128 a) {
-+    uint32_t v=0; for(int i=0;i<16;i++) v |= ((uint32_t)(a._u8[SPU_W(i)]&1) << (15-i));
-+    u128 r = spu_zero(); r._u32[0]=v; return r;
-+}
-+static inline u128 spu_cg(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)(((uint64_t)a._u32[i]+(uint64_t)b._u32[i])>>32); return r; }
-+/* sumb: sum the 4 bytes of each word. Per CBEA, RT halfword 2i (the HIGH half of
-+ * word i) = sum of RB's 4 bytes of word i; halfword 2i+1 (LOW half) = sum of RA's
-+ * 4 bytes of word i. Computed on word VALUES so byte order is irrelevant. */
-+static inline u128 spu_sumb(u128 a, u128 b) {
-+    u128 r;
-+    for(int i=0;i<4;i++) {
-+        uint32_t wa=a._u32[i], wb=b._u32[i];
-+        uint32_t sa=((wa>>24)&0xFF)+((wa>>16)&0xFF)+((wa>>8)&0xFF)+(wa&0xFF);
-+        uint32_t sb=((wb>>24)&0xFF)+((wb>>16)&0xFF)+((wb>>8)&0xFF)+(wb&0xFF);
-+        r._u32[i]=(sb<<16)|sa;
-+    }
-+    return r;
-+}
-+/* Borrow generate: carry-out of (b + ~a + 1) == (b >= a unsigned ? 1 : 0).
-+ * The subtract-side sibling of cg; pairs with sf/sfx for extended subtraction. */
-+static inline u128 spu_bg(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)(((uint64_t)b._u32[i]+(uint64_t)(~a._u32[i])+1u)>>32); return r; }
-+static inline u128 spu_addx(u128 a, u128 b, u128 t) { u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]+b._u32[i]+(t._u32[i]&1); return r; }
-+/* LE host: high half of word i = _s16[2i+1], low half = _s16[2i]. */
-+static inline u128 spu_mpyh(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++) r._s32[i]=((int32_t)a._s16[2*i+1] * (int32_t)b._s16[2*i]) << 16; return r; }
-+static inline u128 spu_mpyhh(u128 a, u128 b){ u128 r; for(int i=0;i<4;i++) r._s32[i]=(int32_t)a._s16[2*i+1] * (int32_t)b._s16[2*i+1]; return r; }
-+static inline u128 spu_mpys(u128 a, u128 b) { u128 r; for(int i=0;i<4;i++){ int32_t p=(int32_t)a._s16[2*i]*(int32_t)b._s16[2*i]; r._s32[i]=(int16_t)(p>>16); } return r; }
-+static inline u128 spu_mpyui(u128 a, int32_t imm) { u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)a._u16[2*i]*(uint32_t)(uint16_t)imm; return r; }
-+static inline u128 spu_fcmeq(u128 a, u128 b){ u128 r; for(int i=0;i<4;i++){ float fa=fabsf(a._f32[i]),fb=fabsf(b._f32[i]); r._u32[i]=(fa==fb)?0xFFFFFFFFu:0; } return r; }
-+static inline u128 spu_fcmgt(u128 a, u128 b){ u128 r; for(int i=0;i<4;i++){ float fa=fabsf(a._f32[i]),fb=fabsf(b._f32[i]); r._u32[i]=(fa>fb)?0xFFFFFFFFu:0; } return r; }
-+static const uint32_t spu_frest_fraction_lut[32] = {
-+    0x7FFBE0, 0x7F87A6, 0x70EF72, 0x708B40, 0x638B12, 0x633AEA, 0x5792C4, 0x574AA0,
-+    0x4CCA7E, 0x4C9262, 0x430A44, 0x42D62A, 0x3A2E12, 0x39FDFA, 0x3215E4, 0x31F1D2,
-+    0x2AA9BE, 0x2A85AC, 0x23D59A, 0x23BD8E, 0x1D8576, 0x1D8576, 0x17AD5A, 0x17AD5A,
-+    0x124543, 0x124543, 0x0D392D, 0x0D392D, 0x08851A, 0x08851A, 0x041D07, 0x041D07
-+};
-+
-+static const uint32_t spu_frsqest_fraction_lut[64] = {
-+    0x350160, 0x34E954, 0x2F993D, 0x2F993D, 0x2AA523, 0x2AA523, 0x26190D, 0x26190D,
-+    0x21E4F9, 0x21E4F9, 0x1E00E9, 0x1E00E9, 0x1A5CD9, 0x1A5CD9, 0x16F8CB, 0x16F8CB,
-+    0x13CCC0, 0x13CCC0, 0x10CCB3, 0x10CCB3, 0x0E00AA, 0x0E00AA, 0x0B58A1, 0x0B58A1,
-+    0x08D498, 0x08D498, 0x067491, 0x067491, 0x043089, 0x043089, 0x020C83, 0x020C83,
-+    0x7FFDF4, 0x7FD1DE, 0x7859C8, 0x783DBA, 0x71559C, 0x71559C, 0x6AE57C, 0x6AE57C,
-+    0x64F561, 0x64F561, 0x5F7149, 0x5F7149, 0x5A4D33, 0x5A4D33, 0x55811F, 0x55811F,
-+    0x51050F, 0x51050F, 0x4CC8FE, 0x4CC8FE, 0x48D0F0, 0x48D0F0, 0x4510E4, 0x4510E4,
-+    0x4180D7, 0x4180D7, 0x3E24CC, 0x3E24CC, 0x3AF4C3, 0x3AF4C3, 0x37E8BA, 0x37E8BA
-+};
-+
-+static inline u128 spu_frsqest(u128 a) {
-+    u128 r;
-+    for (int i = 0; i < 4; i++) {
-+        uint32_t bits = a._u32[i];
-+        uint32_t exp  = (bits >> 23) & 0xFFu;
-+        uint32_t frac_idx = (bits >> 18) & 0x3Fu;
-+        uint32_t rexp = (exp == 0u) ? 0xFFu : (190u - (exp + 1u) / 2u);
-+        uint32_t fraction = spu_frsqest_fraction_lut[frac_idx];
-+        uint32_t out = (rexp << 23) | (fraction & 0x7FFFFFu);
-+        memcpy(&r._f32[i], &out, sizeof out);
-+    }
-+    return r;
-+}
-+/* frest: reciprocal estimate (refined by the following spu_fi Newton step).
-+ * Full-precision 1/x is exact after fi and >= HW-estimate accuracy. */
-+static inline u128 spu_frest(u128 a) {
-+    u128 r;
-+    for (int i = 0; i < 4; i++) {
-+        uint32_t bits = a._u32[i];
-+        uint32_t sign = bits & 0x80000000u;
-+        uint32_t exp  = (bits >> 23) & 0xFFu;
-+        uint32_t frac_idx = (bits >> 18) & 0x1Fu;
-+        uint32_t out;
-+        if (exp == 0u) {
-+            /* zero or denormal operand: ISA p.215 "1/0 is defined to give the
-+             * maximum SPU single-precision extended-range fp number", sign of
-+             * the (zero) input preserved. Same bucket for true denormals
-+             * (their biased exponent field is also 0). */
-+            out = sign | 0x7FFFFFFFu;
-+        } else {
-+            /* result biased exponent = 253 - input biased exponent (253 =
-+             * 2*127-1, i.e. reciprocal negates the unbiased exponent),
-+             * clamped to 0 on underflow (ISA p.215 "Big: if |x|>=2^126,
-+             * 1/x underflows to zero"). Verified bit-exact against RPCS3's
-+             * raw 256-entry spu_frest_exponent_lut for all 256 inputs. */
-+            uint32_t rexp = (exp >= 253u) ? 0u : (253u - exp);
-+            uint32_t fraction = spu_frest_fraction_lut[frac_idx];
-+            out = sign | (rexp << 23) | (fraction & 0x7FFFFFu);
-+        }
-+        memcpy(&r._f32[i], &out, sizeof out);
-+    }
-+    return r;
-+}
-+
-+/* ---- Phase 3: sign extension ----
-+ * LE host: low sub-lane = _u8[2i] / _s16[2i] / _s32[2i] (the byte/half/word
-+ * at the *lower* storage address). Same caveat as the mpy family. */
-+static inline u128 spu_xsbh(u128 a) { u128 r; for(int i=0;i<8;i++) r._s16[i] = (int8_t)a._u8[2*i]; return r; }
-+static inline u128 spu_xshw(u128 a) { u128 r; for(int i=0;i<4;i++) r._s32[i] = (int16_t)a._s16[2*i]; return r; }
-+/* xswd: rt.doubleword[d] = sign_extend_64(ra.word[2d+1]) -- the ODD word of
-+ * each doubleword, because that is the low half in big-endian order.
-+ *
-+ * This read the EVEN words (2d) and wrote the result through _s64, which is a
-+ * host little-endian lane: writing it puts the value in _u32[2d] (SPU word 2d,
-+ * the HIGH half) and the sign fill in _u32[2d+1]. Both halves were therefore
-+ * wrong, and the common case -- a small positive value -- came out as ZERO.
-+ *
-+ * You Don't Know Jack's FMOD mixer hit exactly that: a compiler-generated
-+ * 64-bit multiply helper received `1 * 0` instead of `1 * 16`, so the mixer's
-+ * block count was zero and it stopped on its own assert. Unlike its siblings
-+ * xsbh/xshw, whose source and destination swaps cancel, nothing cancels here.
-+ * Write the two words explicitly. */
-+static inline u128 spu_xswd(u128 a) {
-+    u128 r;
-+    for (int d = 0; d < 2; d++) {
-+        int32_t v = (int32_t)a._u32[2*d + 1];
-+        r._u32[2*d]     = (uint32_t)(v >> 31);   /* sign fill (high word) */
-+        r._u32[2*d + 1] = (uint32_t)v;           /* value      (low word) */
-+    }
-+    return r;
-+}
-+
-+/* ---- Phase 3: OR across ---- */
-+static inline u128 spu_orx(u128 a) {
-+    u128 r = spu_zero();
-+    r._u32[0] = a._u32[0] | a._u32[1] | a._u32[2] | a._u32[3];
-+    return r;
-+}
-+
-+/* ---- Phase 3: form-select mask from bits ---- */
-+static inline u128 spu_fsm(u128 a) {
-+    u128 r; uint32_t v = a._u32[0] & 0xF;
-+    for(int i=0;i<4;i++) r._u32[i] = ((v>>(3-i))&1) ? 0xFFFFFFFFu : 0;
-+    return r;
-+}
-+/* fsmh: per-halfword mask from 8 bits. SPU halfword H <- bit (7-H); store at
-+ * our _u16[H^1] (within-word halfword swap of the value layout). Per-halfword
-+ * both bytes are identical so byte order within a halfword is irrelevant, but
-+ * the halfword ORDER within each word must be swapped. */
-+static inline u128 spu_fsmh(u128 a) {
-+    u128 r; uint32_t v = a._u32[0] & 0xFF;
-+    for(int i=0;i<8;i++) r._u16[i^1] = ((v>>(7-i))&1) ? 0xFFFFu : 0;
-+    return r;
-+}
-+/* fsmb/fsmbi: per-byte mask from 16 bits. SPU byte position P <- bit (15-P);
-+ * store at our _u8[SPU_W(P)] (byte-reversed within each word). A bit set at SPU
-+ * byte P must land at our _u8[SPU_W(P)] so that downstream word arithmetic (e.g.
-+ * andbi(fsmbi(0x101),-128) building a +0x80 EA offset in the low byte of words
-+ * 1,3) places the value in the correct byte lane. Raw _u8[P] would put 0x80 in
-+ * the high byte (bit 31) instead -> wrong DMA EA. */
-+static inline u128 spu_fsmb(u128 a) {
-+    u128 r; uint32_t v = a._u32[0] & 0xFFFF;
-+    for(int i=0;i<16;i++) r._u8[SPU_W(i)] = ((v>>(15-i))&1) ? 0xFFu : 0;
-+    return r;
-+}
-+static inline u128 spu_fsmbi(int32_t imm) {
-+    u128 r; uint32_t v = imm & 0xFFFF;
-+    for(int i=0;i<16;i++) r._u8[SPU_W(i)] = ((v>>(15-i))&1) ? 0xFFu : 0;
-+    return r;
-+}
-+
-+/* ---- Phase 3: constant generators (insertion shuffle patterns) ---- */
-+/* Generate-controls (cbd/chd/cwd/cdd) — insertion selectors for the (now
-+ * SPU-byte-correct) shufb. Each builds a control in TRUE SPU byte order: the
-+ * base selects b's SPU byte t at result SPU byte t (selector 0x10+t), and the
-+ * insert positions select a's preferred scalar bytes -- SPU byte 3 for a byte
-+ * (selector 0x03), SPU bytes 2,3 for a halfword (0x02,0x03), SPU bytes 0..3 for
-+ * a word, 0..7 for a doubleword. Every store is mapped through SPU_W to land at
-+ * the right host index. Verified to compose correctly with the fixed shufb for
-+ * both cbd-generated and immediate/LS-constant controls. */
-+static inline u128 spu_cbd_pos(int pos) {
-+    u128 r; for(int t=0;t<16;t++) r._u8[SPU_W(t)] = (uint8_t)(0x10 + t);
-+    r._u8[SPU_W(pos & 0xF)] = 0x03;                 /* a's preferred byte = SPU byte 3 */
-+    return r;
-+}
-+static inline u128 spu_chd_pos(int pos) {
-+    u128 r; for(int t=0;t<16;t++) r._u8[SPU_W(t)] = (uint8_t)(0x10 + t);
-+    int p = (pos & 0xF) & ~1;                       /* SPU halfword byte positions p, p+1 */
-+    r._u8[SPU_W(p)]   = 0x02;                        /* a SPU byte 2 (hi byte of preferred hw) */
-+    r._u8[SPU_W(p+1)] = 0x03;                        /* a SPU byte 3 (lo byte) */
-+    return r;
-+}
-+static inline u128 spu_cwd_pos(int pos) {
-+    u128 r; for(int t=0;t<16;t++) r._u8[SPU_W(t)] = (uint8_t)(0x10 + t);
-+    int p = (pos & 0xF) & ~3;
-+    for(int k=0;k<4;k++) r._u8[SPU_W(p+k)] = (uint8_t)k;   /* a SPU bytes 0..3 (preferred word) */
-+    return r;
-+}
-+static inline u128 spu_cdd_pos(int pos) {
-+    u128 r; for(int t=0;t<16;t++) r._u8[SPU_W(t)] = (uint8_t)(0x10 + t);
-+    int p = (pos & 0xF) & ~7;
-+    for(int k=0;k<8;k++) r._u8[SPU_W(p+k)] = (uint8_t)k;   /* a SPU bytes 0..7 (preferred dword) */
-+    return r;
-+}
-+static inline u128 spu_cbd(u128 a, int i7){ return spu_cbd_pos((int)a._u32[0]+i7); }
-+static inline u128 spu_chd(u128 a, int i7){ return spu_chd_pos((int)a._u32[0]+i7); }
-+static inline u128 spu_cwd(u128 a, int i7){ return spu_cwd_pos((int)a._u32[0]+i7); }
-+static inline u128 spu_cdd(u128 a, int i7){ return spu_cdd_pos((int)a._u32[0]+i7); }
-+static inline u128 spu_cbx(u128 a, u128 b){ return spu_cbd_pos((int)(a._u32[0]+b._u32[0])); }
-+static inline u128 spu_chx(u128 a, u128 b){ return spu_chd_pos((int)(a._u32[0]+b._u32[0])); }
-+static inline u128 spu_cwx(u128 a, u128 b){ return spu_cwd_pos((int)(a._u32[0]+b._u32[0])); }
-+static inline u128 spu_cdx(u128 a, u128 b){ return spu_cdd_pos((int)(a._u32[0]+b._u32[0])); }
-+
-+/* ---- Phase 3: rotate-and-mask family ---- */
-+static inline u128 spu_rotm(u128 a, u128 b)   { u128 r; for(int i=0;i<4;i++){ uint32_t sh=(0-b._u32[i])&0x3F; r._u32[i]=(sh>31)?0:(a._u32[i]>>sh); } return r; }
-+static inline u128 spu_rotma(u128 a, u128 b)  { u128 r; for(int i=0;i<4;i++){ uint32_t sh=(0-b._u32[i])&0x3F; r._s32[i]=(sh>31)?(a._s32[i]>>31):(a._s32[i]>>sh); } return r; }
-+static inline u128 spu_rothm(u128 a, u128 b)  { u128 r; for(int i=0;i<8;i++){ uint32_t sh=(0-b._u16[i])&0x1F; r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); } return r; }
-+static inline u128 spu_rothma(u128 a, u128 b) { u128 r; for(int i=0;i<8;i++){ uint32_t sh=(0-b._u16[i])&0x1F; r._s16[i]=(sh>15)?(a._s16[i]>>15):(a._s16[i]>>sh); } return r; }
-+static inline u128 spu_rothmi(u128 a, int i7) { u128 r; int sh=(0-i7)&0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]>>sh); return r; }
-+static inline u128 spu_rotqmbi(u128 a, u128 b)   { int sh=(0-(int)b._u32[0])&7; if(!sh) return a;
-+    uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
-+    uint64_t nlo=(lo>>sh)|(hi<<(64-sh)), nhi=(hi>>sh);
-+    u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
-+static inline u128 spu_rotqmby(u128 a, u128 b)   { int sh=(0-(int)b._u32[0])&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i-sh; if(s>=0) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
-+static inline u128 spu_rotqmbybi(u128 a, u128 b) { int sh=(0-((int)b._u32[0]>>3))&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i-sh; if(s>=0) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
-+static inline u128 spu_rotqmbii(u128 a, int i7)  { int sh=(0-i7)&7; if(!sh) return a;
-+    uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
-+    uint64_t nlo=(lo>>sh)|(hi<<(64-sh)), nhi=(hi>>sh);
-+    u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
-+static inline u128 spu_rotqmbyi(u128 a, int i7)  { int sh=(0-i7)&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i-sh; if(s>=0) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
-+
-+/* ---- Phase 3: halfword/byte immediate logic ---- */
-+static inline u128 spu_andhi(u128 a, int32_t imm) { u128 r; uint16_t v=(uint16_t)imm; for(int i=0;i<8;i++) r._u16[i]=a._u16[i]&v; return r; }
-+static inline u128 spu_andbi(u128 a, int32_t imm) { u128 r; uint8_t  v=(uint8_t)imm;  for(int i=0;i<16;i++) r._u8[i]=a._u8[i]&v;   return r; }
-+static inline u128 spu_orhi(u128 a, int32_t imm)  { u128 r; uint16_t v=(uint16_t)imm; for(int i=0;i<8;i++) r._u16[i]=a._u16[i]|v; return r; }
-+static inline u128 spu_orbi(u128 a, int32_t imm)  { u128 r; uint8_t  v=(uint8_t)imm;  for(int i=0;i<16;i++) r._u8[i]=a._u8[i]|v;   return r; }
-+static inline u128 spu_xorhi(u128 a, int32_t imm) { u128 r; uint16_t v=(uint16_t)imm; for(int i=0;i<8;i++) r._u16[i]=a._u16[i]^v; return r; }
-+
-+/* ---- Phase 3: borrow-generate extended ---- */
-+static inline u128 spu_bgx(u128 a, u128 b, u128 t) {
-+    u128 r;
-+    for(int i=0;i<4;i++) {
-+        uint64_t s = (uint64_t)b._u32[i] + (uint64_t)(~a._u32[i]) + (uint64_t)(t._u32[i]&1);
-+        r._u32[i] = (uint32_t)(s >> 32);
-+    }
-+    return r;
-+}
-+
-+/* ---- Phase 3: mfspr stub ---- */
-+static inline u128 spu_mfspr(u128 a) { (void)a; return spu_zero(); }
-+
-+/* ---- immediate loaders ---- */
-+static inline u128 spu_il(int32_t imm)   { return spu_splat_u32((uint32_t)imm); }
-+static inline u128 spu_ila(uint32_t i18) { return spu_splat_u32(i18 & 0x3FFFF); }
-+static inline u128 spu_ilh(uint16_t imm) { return spu_splat_u16(imm); }
-+static inline u128 spu_ilhu(uint16_t imm){ return spu_splat_u32((uint32_t)imm << 16); }
-+static inline u128 spu_iohl(u128 a, uint16_t imm){ u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]|(uint32_t)imm; return r; }
-+
-+#ifdef __cplusplus
-+}
-+#endif
-+
-+#endif /* SPU_HELPERS_H */
+ #endif /* SPU_HELPERS_H */
 diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
 index e9f59deb..3ea718e6 100644
 --- a/runtime/spu/spu_interp.c

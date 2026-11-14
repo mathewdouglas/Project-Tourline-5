@@ -80,7 +80,7 @@ int main(int argc, char** argv)
 #else
     _putenv("GT5P_SPU_REGION=0");
 #endif
-#ifdef BENCH_RP
+#if defined(BENCH_RP) && (!defined(BENCH_RP_MODE) || BENCH_RP_MODE)
     _putenv("GT5P_SPU_REGPROMO=1");
 #else
     _putenv("GT5P_SPU_REGPROMO=0");
@@ -124,11 +124,16 @@ int main(int argc, char** argv)
                 void (*t)(spu_context*) = g_spu_trampoline_fn; g_spu_trampoline_fn = NULL; t(&s_ctx);
             }
             QueryPerformanceCounter(&t1);
-            if (s_bench_bad || (!s_bench_left && s_ctx.pc != ret)) { fprintf(stderr, "state %d: ended at pc 0x%X, expected 0x%X (bad=%d)\n", k, s_ctx.pc, ret, s_bench_bad); return 1; }
+            if (s_bench_bad
+#ifndef BENCH_BLOCK
+                || (!s_bench_left && s_ctx.pc != ret)
+#endif
+                ) { fprintf(stderr, "state %d: ended at pc 0x%X, expected 0x%X (bad=%d)\n", k, s_ctx.pc, ret, s_bench_bad); return 1; }
             const double us = (double)(t1.QuadPart - t0.QuadPart) * 1e6 / (double)qf.QuadPart;
             if (nb < 64) best[nb++] = us;
             const uint32_t endpc = s_ctx.pc;
-            const uint64_t hh = fnv(&endpc, 4, fnv(s_ctx.ls_store, SPU_LS_SIZE, fnv(s_ctx.gpr, sizeof s_ctx.gpr, 1469598103934665603ULL)));
+            uint64_t hh = fnv(&endpc, 4, fnv(s_ctx.ls_store, SPU_LS_SIZE, fnv(s_ctx.gpr, sizeof s_ctx.gpr, 1469598103934665603ULL)));
+            hh=fnv(&s_ctx.int_enable,sizeof s_ctx.int_enable,hh);
             if (r && hh != hash) { fprintf(stderr, "state %d: not deterministic\n", k); return 1; }
             hash = hh;
         }

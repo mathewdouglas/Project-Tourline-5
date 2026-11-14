@@ -1,0 +1,357 @@
+diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
+--- a/runtime/spu/spu_helpers.h
++++ b/runtime/spu/spu_helpers.h
+@@ -252,7 +252,11 @@
+     const __m128i spec = _mm_setr_epi8(0,0,0,0, 0,0,0,0, 0,0,0,0,
+                                        (char)0xFF,(char)0xFF,(char)0x80,(char)0x80);
+     const __m128i hi = _mm_and_si128(_mm_srli_epi16(C, 4), _mm_set1_epi8(0x0F));
++    #ifdef SPU_SHUFB_OR
++    r = _mm_or_si128(r, _mm_shuffle_epi8(spec, hi));
++#else
+     r = _mm_blendv_epi8(r, _mm_shuffle_epi8(spec, hi), C);
++#endif
+     u128 out; memcpy(&out, &r, 16); return out;
+ }
+ #else
+@@ -770,5 +774,6 @@
+ #endif
+ 
+ #include "spu_codegen_helpers.h"
++#include "spu_codegen_ls.h"
+ 
+ #endif /* SPU_HELPERS_H */
+diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
+--- a/runtime/spu/spu_workload.c
++++ b/runtime/spu/spu_workload.c
+@@ -807,30 +807,14 @@
+ static void* spu_async_thread(void* p) { spu_async_run((spu_async_job*)p); return NULL; }
+ #endif
+ 
++#include "spu_job_fingerprint.h"
++
+ int spu_workload_dispatch_job(const uint8_t* image, uint32_t image_size,
+                               uint32_t job_ea, uint32_t job_desc_size)
+ {
+     if (!image || image_size == 0) return 0;
+ 
+-    /* The fingerprint is a byte-at-a-time hash of the whole binary, and a
+-     * sound chain dispatches the same few binaries thousands of times a
+-     * second. Remember it per (address, size), checked against a sparse
+-     * sample of the bytes so a binary replaced in place is still noticed. */
+-    uint64_t fp = 0;
+-    { static struct { const uint8_t* p; uint32_t n; uint64_t chk, fp; } memo[16];
+-      static unsigned next;
+-      uint64_t chk = 1469598103934665603ULL;
+-      for (uint32_t i = 0; i < image_size && i < 256; i += 8) { chk ^= image[i]; chk *= 1099511628211ULL; }
+-      for (uint32_t i = 256; i < image_size; i += 2039) { chk ^= image[i]; chk *= 1099511628211ULL; }
+-      int hit = -1;
+-      for (int i = 0; i < 16; i++)
+-          if (memo[i].p == image && memo[i].n == image_size && memo[i].chk == chk) { hit = i; break; }
+-      if (hit >= 0) fp = memo[hit].fp;
+-      else {
+-          fp = spu_workload_fingerprint(image, image_size);
+-          unsigned k = next++ & 15u;
+-          memo[k].p = image; memo[k].n = image_size; memo[k].chk = chk; memo[k].fp = fp;
+-      } }
++    uint64_t fp = spu_job_fingerprint(image, image_size);
+     spu_lifted_entry_fn fn = NULL;
+     int image_id = 0;
+     for (unsigned i = 0; i < s_registry_count; i++)
+diff --git a/runtime/spu/spu_job_fingerprint.h b/runtime/spu/spu_job_fingerprint.h
+new file mode 100644
+--- /dev/null
++++ b/runtime/spu/spu_job_fingerprint.h
+@@ -0,0 +1,76 @@
++/* Per-worker job fingerprint memo. Sparse validation retains the existing
++ * dispatch policy; SPU_JOB_FP_VERIFY=1 measures missed in-place mutations.
++ * Thread-local ownership avoids racing entries between job-chain walkers. */
++#ifndef SPU_JOB_FINGERPRINT_H
++#define SPU_JOB_FINGERPRINT_H
++#include <stdint.h>
++#include <stddef.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++#ifndef SPU_JOB_FP_HASH
++#define SPU_JOB_FP_HASH spu_workload_fingerprint
++#endif
++#if defined(_MSC_VER)
++#define SPU_JOB_FP_TLS __declspec(thread)
++#else
++#define SPU_JOB_FP_TLS _Thread_local
++#endif
++
++static uint64_t spu_job_fingerprint(const uint8_t* image, uint32_t size)
++{
++    enum { MAX_SLOTS = 256 };
++    static SPU_JOB_FP_TLS struct {
++        struct { const uint8_t* p; uint32_t n; uint64_t chk, fp; } memo[MAX_SLOTS];
++        unsigned slots, next;
++        int stats, verify;
++        const char* trace;
++        unsigned long long calls, hits, misses, hashed_bytes, stale;
++    } c;
++    if (!c.slots) {
++        const char* s = getenv("SPU_JOB_FP_SLOTS");
++        int n = s ? atoi(s) : 16;
++        c.slots = n > 0 && n <= MAX_SLOTS ? (unsigned)n : 16u;
++        c.stats = getenv("SPU_JOB_FP_STATS") && atoi(getenv("SPU_JOB_FP_STATS"));
++        c.verify = getenv("SPU_JOB_FP_VERIFY") && atoi(getenv("SPU_JOB_FP_VERIFY"));
++        c.trace = getenv("SPU_JOB_FP_TRACE");
++    }
++    uint64_t chk = 1469598103934665603ULL, fp = 0;
++    for (uint32_t i = 0; i < size && i < 256; i += 8) { chk ^= image[i]; chk *= 1099511628211ULL; }
++    for (uint32_t i = 256; i < size; i += 2039) { chk ^= image[i]; chk *= 1099511628211ULL; }
++    unsigned k;
++    for (k = 0; k < c.slots; k++)
++        if (c.memo[k].p == image && c.memo[k].n == size && c.memo[k].chk == chk) break;
++    c.calls++;
++    if (k < c.slots) {
++        c.hits++;
++        fp = c.memo[k].fp;
++        if (c.verify) {
++            uint64_t actual = SPU_JOB_FP_HASH(image, size);
++            c.hashed_bytes += size;
++            if (actual != fp) { c.stale++; c.memo[k].fp = fp = actual; }
++        }
++    } else {
++        c.misses++;
++        fp = SPU_JOB_FP_HASH(image, size);
++        c.hashed_bytes += size;
++        k = c.next++ % c.slots;
++        c.memo[k].p = image; c.memo[k].n = size;
++        c.memo[k].chk = chk; c.memo[k].fp = fp;
++    }
++    /* Trace is deliberately diagnostic-only. One append per dispatch, so it
++     * can perturb timings; replay it offline instead of quoting trace-run FPS. */
++    if (c.trace && *c.trace) {
++        FILE* f = fopen(c.trace, "a");
++        if (f) {
++            fprintf(f, "%p %p %u %016llX %016llX\n", (void*)&c, (const void*)image,
++                    size, (unsigned long long)chk, (unsigned long long)fp);
++            fclose(f);
++        }
++    }
++    if (c.stats && !(c.calls & 16383u))
++        fprintf(stderr, "[spu-job-fp] worker=%p slots=%u calls=%llu hits=%llu misses=%llu hashed_bytes=%llu stale=%llu\n",
++                (void*)&c, c.slots, c.calls, c.hits, c.misses, c.hashed_bytes, c.stale);
++    return fp;
++}
++#endif
+diff --git a/runtime/spu/spu_codegen_ls.h b/runtime/spu/spu_codegen_ls.h
+new file mode 100644
+--- /dev/null
++++ b/runtime/spu/spu_codegen_ls.h
+@@ -0,0 +1,30 @@
++/* LS access with an explicit base, for optional lazy-locals experiments.
++ * Same alignment, mask and endian conversion as the production accessors.
++ * Register-reading diagnostics require the original, uncached source. */
++#ifndef SPU_CODEGEN_LS_H
++#define SPU_CODEGEN_LS_H
++#ifdef SPU_LS_NO_PROBES
++static inline u128 spu_codegen_lq(const uint8_t* ls,uint32_t addr) {
++    u128 r; const uint8_t* p=ls+(addr&(SPU_LS_MASK&~15u));
++    for(int i=0;i<4;i++) {
++        uint32_t w;memcpy(&w,p+4*i,4);
++#if SPU_LS_FAST
++        r._u32[i]=SPU_BSWAP32(w);
++#else
++        r._u32[i]=((uint32_t)p[4*i]<<24)|((uint32_t)p[4*i+1]<<16)|((uint32_t)p[4*i+2]<<8)|p[4*i+3];
++#endif
++    }
++    return r;
++}
++static inline void spu_codegen_sq(uint8_t* ls,uint32_t addr,u128 value) {
++    uint8_t* p=ls+(addr&(SPU_LS_MASK&~15u));
++    for(int i=0;i<4;i++) {
++#if SPU_LS_FAST
++        uint32_t w=SPU_BSWAP32(value._u32[i]);memcpy(p+4*i,&w,4);
++#else
++        uint32_t w=value._u32[i];p[4*i]=(uint8_t)(w>>24);p[4*i+1]=(uint8_t)(w>>16);p[4*i+2]=(uint8_t)(w>>8);p[4*i+3]=(uint8_t)w;
++#endif
++    }
++}
++#endif
++#endif
+diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
+--- a/tools/spu_lifter.py
++++ b/tools/spu_lifter.py
+@@ -480,11 +480,14 @@
+ 
+ class SPULifter:
+     def __init__(self, trace: bool = False, prefix: str = "",
+-                 regcache: bool = False):
++                 regcache: bool = False, regcache_lazy: bool = False):
+         self.functions: list[LiftedFunction] = []
+         # Per-instruction tracing reads ctx->gpr after every instruction, which
+         # the cache would leave stale, so the two do not combine.
+-        self.regcache = regcache and not trace
++        self.regcache = (regcache or regcache_lazy) and not trace
++        self.regcache_lazy = regcache_lazy and not trace
++        self.regcache_exclude = set()
++        self.regcache_ls = False
+         self.call_targets: set[int] = set()
+         self.branch_targets: set[int] = set()
+         self.unsupported: dict[str, int] = {}
+@@ -580,7 +583,13 @@
+         if self.regcache:
+             # Falling off the end returns to the dispatcher like any exit.
+             func.body_lines.append(f"    {_RC_EXIT};")
+-            self._apply_regcache(func)
++            if start in self.regcache_exclude:
++                func.body_lines = [_RC_MARK.sub("", b) for b in func.body_lines]
++            elif self.regcache_lazy:
++                from spu_regcache_lazy import localize
++                func.body_lines = localize(func.body_lines, cache_ls=self.regcache_ls)
++            else:
++                self._apply_regcache(func)
+         else:
+             func.body_lines = [_RC_MARK.sub("", b) for b in func.body_lines]
+         self.functions.append(func)
+@@ -1144,6 +1153,10 @@
+ 
+     def emit_source(self,header_name: str) -> str:
+         lines = [SOURCE_PREAMBLE.format(header_name=header_name), ""]
++        if self.regcache_lazy:
++            lines += ["#ifndef SPU_LS_NO_PROBES",
++                      '#error "Lazy register locals require SPU_LS_NO_PROBES; use the original lift for register-reading diagnostics"',
++                      "#endif", ""]
+         for f in self.functions:
+             lines.append(f"void {f.name}(spu_context* ctx) {{")
+             for b in f.body_lines:
+@@ -1213,6 +1226,9 @@
+                    help="Emit spu_trace_pc/spu_trace_rt around each instruction "
+                         "for §3 diff-vs-RPCS3 validation. Output goes to stderr "
+                         "unless spu_trace_init(path) is called by the harness.")
++    p.add_argument("--regcache-ls", action="store_true", help="Cache LS base with lazy locals, reloading after runtime calls")
++    p.add_argument("--regcache-lazy", action="store_true", help="Experimental first-use register locals")
++    p.add_argument("--regcache-exclude", default="", help="Comma-separated functions retained for native/region post-patches")
+     p.add_argument("--regcache", action="store_true",
+                    help="Keep each function's guest registers in C locals and "
+                         "sync ctx->gpr only at exits and around runtime calls "
+@@ -1345,7 +1361,9 @@
+     insns = disassemble_spu(data, base)
+ 
+     lifter = SPULifter(trace=args.trace, prefix=args.symbol_prefix,
+-                       regcache=args.regcache)
++                       regcache=args.regcache, regcache_lazy=args.regcache_lazy)
++    lifter.regcache_ls = args.regcache_ls
++    lifter.regcache_exclude = {int(v, 0) for v in args.regcache_exclude.split(",") if v}
+     lifter.bi_r0_jump = compute_bi_r0_jumps(insns, bounds)
+     if lifter.bi_r0_jump:
+         print(f"  {len(lifter.bi_r0_jump)} `bi $r0` computed-jump site(s) "
+diff --git a/tools/spu_regcache_lazy.py b/tools/spu_regcache_lazy.py
+new file mode 100644
+--- /dev/null
++++ b/tools/spu_regcache_lazy.py
+@@ -0,0 +1,110 @@
++"""Lazy SPU register locals; control-flow approach informed by gt5-recomp 1590f03.
++
++Unlike the eager cache, this loads on first use and invalidates after calls.
++Context-visible exits/calls still publish dirty registers. Internal branch
++edges reconcile locals explicitly, retaining loop-carried values.
++"""
++import re
++
++GPR = re.compile(r'ctx->gpr\[(\d+)\]')
++SET = re.compile(r'ctx->gpr\[(\d+)\]\s*=(?!=)')
++MARK = re.compile(r'(/\*@[XOI]\*/)|(goto loc_[0-9A-F]{8};)')
++
++
++def localize(lines, cache_ls=False):
++    ls_used=cache_ls and any('spu_ls_read128(ctx,' in l or 'spu_ls_write128(ctx,' in l for l in lines)
++    if ls_used:
++        lines=[l.replace('spu_ls_read128(ctx,','spu_codegen_lq(_cg_ls,').replace('spu_ls_write128(ctx,','spu_codegen_sq(_cg_ls,') for l in lines]
++    used, written, gotos = set(), set(), {}
++    for i, line in enumerate(lines):
++        used.update(map(int, GPR.findall(line)))
++        written.update(map(int, SET.findall(line)))
++        for target in re.findall(r'goto (loc_[0-9A-F]{8});', line):
++            gotos.setdefault(target, []).append(i)
++    labels = {line.strip()[:-1]: i for i, line in enumerate(lines)
++              if re.fullmatch(r'loc_[0-9A-F]{8}:', line.strip())}
++    loops = {}
++    for target, sites in gotos.items():
++        if target not in labels:
++            raise ValueError(f'unresolved register-cache edge {target}')
++        head = labels[target]
++        back = [site for site in sites if site >= head]
++        if back:
++            loops[target] = {int(n) for line in lines[head:max(back)+1] for n in GPR.findall(line)}
++
++    def stores(regs):
++        return ''.join(f'ctx->gpr[{n}] = r{n}; ' for n in sorted(regs))
++
++    def loads(regs):
++        return ''.join(f'r{n} = ctx->gpr[{n}]; ' for n in sorted(regs))
++
++    out = ['    u128 ' + ', '.join(f'r{n}' for n in sorted(used)) + ';'] if used else []
++    if ls_used: out.insert(0,'    uint8_t* _cg_ls = ctx->ls;')
++    available, dirty = set(), set()
++    incoming, forward, edges = {}, {}, {}
++    falls = True
++    for line in lines:
++        label = line.strip()
++        if re.fullmatch(r'loc_[0-9A-F]{8}:', label):
++            name = label[:-1]
++            states = [a for _, a, _ in forward.get(name, [])]
++            if falls:
++                states.append(available)
++            common = set.intersection(*states) if states else set()
++            if name in loops:
++                common &= loops[name]
++            for key, a, d in forward.get(name, []):
++                edges[key] = stores(d - common)
++            if falls and dirty - common:
++                out.append('    ' + stores(dirty - common))
++            available, dirty = set(common), common & written
++            incoming[name] = frozenset(common)
++            out.append(line)
++            falls = True
++            continue
++        # Loads must precede the line, so conditions and RHS values see the
++        # incoming state (including instructions whose destination is a source).
++        assignments = {m.start() for m in SET.finditer(line)}
++        reads = {int(m.group(1)) for m in GPR.finditer(line) if m.start() not in assignments}
++        # Current lifter only emits writes after @I (channel result). Reject a
++        # future shape that would require a load at a different scope/position.
++        reload_at = line.find('/*@I*/')
++        if reload_at >= 0:
++            tail = line[reload_at:]
++            targets = {m.start() for m in SET.finditer(tail)}
++            if any(m.start() not in targets for m in GPR.finditer(tail)):
++                raise ValueError('register read after runtime reload: ' + line)
++        pre = loads(reads - available)
++        available |= reads
++        parts = MARK.split(line)
++        result = []
++        for i in range(0, len(parts), 3):
++            text = parts[i]
++            writes = set(map(int, SET.findall(text)))
++            available |= writes
++            dirty |= writes
++            result.append(GPR.sub(lambda m: 'r'+m.group(1), text))
++            if i+1 >= len(parts):
++                break
++            mark, jump = parts[i+1:i+3]
++            if mark == '/*@X*/':
++                result.append(stores(dirty))
++            elif mark == '/*@O*/':
++                result.append(stores(dirty))
++                dirty = set()
++            elif mark == '/*@I*/':
++                if ls_used: result.append('_cg_ls = ctx->ls; ')
++                available, dirty = set(), set()
++            elif jump:
++                target = jump[len('goto '):-1]
++                if target in incoming:
++                    held = incoming[target]
++                    code = stores(dirty-held) + loads(held-available)
++                else:
++                    code = f'@EDGE{sum(map(len, forward.values()))}@'
++                    forward.setdefault(target, []).append((code,set(available),set(dirty)))
++                result.append('{ '+code+jump+' }')
++        body = ''.join(result)
++        out.append(body[:len(body)-len(body.lstrip())]+pre+body.lstrip() if pre else body)
++        falls = not re.fullmatch(r'\s*goto loc_[0-9A-F]{8};\s*', line)
++    return [re.sub(r'@EDGE\d+@',lambda m: edges[m.group()], line) for line in out]

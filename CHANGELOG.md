@@ -6,6 +6,11 @@ versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Faster integer SPU helpers.** SIMD forms of integer bitwise operations,
+  control masks and shifts reduced CPU work in matched short-route tests:
+  median FPS +3.7% at High Speed Ring and +5.6% at rainy Eiger. Eiger's p99
+  frame time did not improve. CMake `GT5P_SPU_CODEGEN_HELPERS=OFF` rolls back;
+  larger register-local/calling-convention experiments remain off.
 - **Pipelines for a new place are built on several threads.** Draws waiting
   for a pipeline were served by one thread; up to three helper threads now
   share the work (kept off the game's own CPUs), the pipelines the most draws
@@ -20,6 +25,10 @@ versions follow [SemVer](https://semver.org/).
   keep the normal priority. `RSX_SHADER_WORKER_PRIO_RACE=same` turns it off.
 
 ### Fixed
+- **Course Maker's flickering map panel.** A partial display clear now clears
+  its rectangle in order instead of presenting half a frame. Checked at
+  720p/16:9; ultrawide map placement and clipped labels remain open.
+  `RSX_SCISSORED_CLEAR=0` restores the old path.
 - **Arcade car list: the frame-rate dip when a car appears.** The page's
   render work ran on one of its four SPU lanes for the first 8-14 frames
   with a car (the others had been parked while the list was empty), at

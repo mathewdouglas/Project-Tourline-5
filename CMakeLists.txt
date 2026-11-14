@@ -169,9 +169,23 @@ set(PS3RECOMP_PPU_SOURCES
 # policy module (the WWS job manager), embedded in EMAIN.ELF rather than loaded
 # from a data file -- see src/gen/spu_workloads.c.
 option(GT5P_ENABLE_SPU "Compile and register the lifted SPU images" ON)
+set(GT5P_SPU_GENERATED_DIR "${CMAKE_SOURCE_DIR}/generated/spu_lifted" CACHE PATH
+    "Lifted SPU source directory (private codegen experiments may override)")
+option(GT5P_SPU_CODEGEN_HELPERS "Integer SIMD SPU helpers (OFF for rollback)" ON)
+option(GT5P_SPU_SHUFB_OR "Experimental SPU shuffle final OR" OFF)
+if(GT5P_ENABLE_SPU AND GT5P_SPU_CODEGEN_HELPERS AND
+   NOT EXISTS "${PS3RECOMP_DIR}/runtime/spu/spu_codegen_helpers.h")
+    message(FATAL_ERROR "SPU SIMD helpers require the current runtime patch; see docs/spu-codegen.md")
+endif()
+if(GT5P_ENABLE_SPU AND GT5P_SPU_SHUFB_OR)
+    file(READ "${PS3RECOMP_DIR}/runtime/spu/spu_helpers.h" spu_helper_text)
+    if(NOT spu_helper_text MATCHES "SPU_SHUFB_OR")
+        message(FATAL_ERROR "Shuffle OR requires the private candidate runtime; see docs/spu-codegen.md")
+    endif()
+endif()
 if(GT5P_ENABLE_SPU)
     file(GLOB GT5P_SPU_LIFTED CONFIGURE_DEPENDS
-        "${CMAKE_SOURCE_DIR}/generated/spu_lifted/*/spu_recomp.c")
+        "${GT5P_SPU_GENERATED_DIR}/*/spu_recomp.c")
     list(LENGTH GT5P_SPU_LIFTED N_SPU)
     message(STATUS "lifted SPU images: ${N_SPU}")
     set(GT5P_SPU_SOURCES "${CMAKE_SOURCE_DIR}/${GT5P_SPU_REGISTRY}" ${GT5P_SPU_LIFTED})
@@ -201,6 +215,17 @@ if(GT5P_ENABLE_SPU)
 else()
     set(GT5P_SPU_SOURCES "")
 endif()
+if(GT5P_ENABLE_SPU)
+    foreach(spu_source IN LISTS GT5P_SPU_LIFTED)
+        if(GT5P_SPU_CODEGEN_HELPERS)
+            set_property(SOURCE "${spu_source}" APPEND PROPERTY COMPILE_DEFINITIONS SPU_CODEGEN_HELPERS)
+        endif()
+        if(GT5P_SPU_SHUFB_OR)
+            set_property(SOURCE "${spu_source}" APPEND PROPERTY COMPILE_DEFINITIONS SPU_SHUFB_OR)
+        endif()
+    endforeach()
+endif()
+
 
 add_executable(gt5p
     src/main.cpp
@@ -314,10 +339,10 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
         foreach(i RANGE ${math_last})
             string(JSON image GET "${math_images}" ${i})
             list(APPEND audio_math_images "${image}")
-            set_property(SOURCE "${CMAKE_SOURCE_DIR}/generated/spu_lifted/${image}/spu_recomp.c"
+            set_property(SOURCE "${GT5P_SPU_GENERATED_DIR}/${image}/spu_recomp.c"
                 APPEND PROPERTY COMPILE_OPTIONS
                 "/FI${CMAKE_SOURCE_DIR}/src/gt5p_spu_audio_math.h")
-            set_property(SOURCE "${CMAKE_SOURCE_DIR}/generated/spu_lifted/${image}/spu_recomp.c"
+            set_property(SOURCE "${GT5P_SPU_GENERATED_DIR}/${image}/spu_recomp.c"
                 APPEND PROPERTY COMPILE_DEFINITIONS "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>")
         endforeach()
     endif()
@@ -345,7 +370,7 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
     endif()
     set(GT5P_AUDIO_NATIVE_AVAILABLE TRUE)
     foreach(image IN LISTS audio_images)
-        set(image_dir "${CMAKE_SOURCE_DIR}/generated/spu_lifted/${image}")
+        set(image_dir "${GT5P_SPU_GENERATED_DIR}/${image}")
         if(NOT EXISTS "${image_dir}/spu_recomp.c" OR NOT EXISTS "${image_dir}/spu_recomp.h")
             set(GT5P_AUDIO_NATIVE_AVAILABLE FALSE)
         endif()
@@ -353,7 +378,7 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
     if(GT5P_AUDIO_NATIVE_AVAILABLE)
         file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/gt5p_audio_images.inc" CONTENT "${audio_manifest}" @ONLY)
         foreach(image IN LISTS audio_images)
-            set(image_dir "${CMAKE_SOURCE_DIR}/generated/spu_lifted/${image}")
+            set(image_dir "${GT5P_SPU_GENERATED_DIR}/${image}")
             file(READ "${image_dir}/spu_recomp.h" image_header)
             string(REGEX MATCHALL "gt5p_${image}_[A-Za-z0-9_]+" image_symbols "${image_header}")
             list(REMOVE_DUPLICATES image_symbols)
@@ -366,11 +391,17 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
             set(native_source "${CMAKE_BINARY_DIR}/audio_native_${image}.c")
             file(CONFIGURE OUTPUT "${native_source}" CONTENT "${wrapper}" @ONLY)
             target_sources(gt5p PRIVATE "${native_source}")
+            if(GT5P_SPU_CODEGEN_HELPERS)
+                set_property(SOURCE "${native_source}" APPEND PROPERTY COMPILE_DEFINITIONS SPU_CODEGEN_HELPERS)
+            endif()
+            if(GT5P_SPU_SHUFB_OR)
+                set_property(SOURCE "${native_source}" APPEND PROPERTY COMPILE_DEFINITIONS SPU_SHUFB_OR)
+            endif()
             set_source_files_properties("${native_source}" PROPERTIES
                 COMPILE_OPTIONS "-msse4.1;-mfma"
                 INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu")
             if(NOT GT5P_SPU_PROBES)
-                set_source_files_properties("${native_source}" PROPERTIES COMPILE_DEFINITIONS "SPU_LS_NO_PROBES")
+                set_property(SOURCE "${native_source}" APPEND PROPERTY COMPILE_DEFINITIONS "SPU_LS_NO_PROBES")
             endif()
             if(image IN_LIST audio_math_images)
                 # Both portable and FMA aliases need the same semantics. The

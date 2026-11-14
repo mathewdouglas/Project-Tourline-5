@@ -75,6 +75,17 @@ add a new translation switch outside those prefixes to `fplk_epoch`. Not ported:
 sets after an MSAA change (GT5 relearns them in the first race). Test:
 `scripts/test/texture_heap_alloc_native.py`.
 
+**SPU integer helpers (2026-11-14).** Integer-only SIMD bitwise/control-mask/
+shift helpers default on (`GT5P_SPU_CODEGEN_HELPERS=OFF` at CMake configure
+for rollback). Matching non-PGO 720p repeats: HSR +3.7%, Eiger rain +5.6%,
+car list +2.4% (overlapping runs); Eiger p99 did not improve. Larger lazy-local/
+System V/cached-LS variants regressed HSR and remain private/off; the existing
+16-entry fingerprint memo already fits the traced route. Existing Eiger
+regions and audio arithmetic policy are preserved. No re-lift is required.
+See [docs/spu-codegen.md](docs/spu-codegen.md) for evidence, exact-test coverage,
+rollback and optional experiment reproduction. Regenerate PGO profiles before
+releasing changed sources.
+
 **Race pack and helper prewarm (GT5 Phase 35, run in game in Phase 36).** The
 loading gate prepares the learned race set on four helper threads
 (`RSX_RACE_PREWARM_THREADS`, `=1` old) from one file,
@@ -115,6 +126,7 @@ crashes the game on purpose. Test: `scripts/test/player_setup.py` (end).
 texture bound at an offset with no IO mapping (the backend then reads VRAM
 instead); `RSX_IO_UNMAPPED=0` off, `=2` check mode. None at High Speed Ring.
 See progress-gt5.md, 2026-11-12.
+
 
 **Game sound fixed (2026-11-14).** Menus and races were silent: the DSP
 image `j9804ABA8` produced NaN PCM from two SPU arithmetic differences (0 x
@@ -192,6 +204,13 @@ long holds. Tests: `scripts/test/fzhunt.ps1` (live), `lockline_inversion.py`.
 `ui_aspect_16_9_float` and `scene_camera_aspect_16_9_float` are measured for
 v104 in `config/targets.json`. Race, car list and menu checked at 1080p/1440p;
 other modes are unchecked. Never reuse these addresses for another executable.
+
+**Course Maker (2026-11-14).** Its map-panel colour/depth clear no longer
+presents half a frame: scissored display clears are ordered rectangle ops
+(`RSX_SCISSORED_CLEAR=0` rollback; `scripts/test/scissored_clear.py`). Private
+720p live checks pass at 16:9; 21:9 stops flickering but still has a misplaced
+map and clipped right labels. Those aspect-dependent defects remain open.
+See [docs/course-maker-investigation.md](docs/course-maker-investigation.md).
 
 **GT5 CPU work (Phase 40).** Five measured SPU-progress wait loops now yield
 (`spin_waits`; run `scripts/spin_patch.py` after lifting). GT5 audio uses target-specific CPU-dispatched FMA images

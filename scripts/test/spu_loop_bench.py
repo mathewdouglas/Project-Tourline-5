@@ -28,6 +28,8 @@ ap.add_argument("--reps", type=int, default=9)
 ap.add_argument("--runtime", default=os.environ.get("PS3RECOMP_DIR", str(root.parent / "ps3recomp-tourline5")))
 ap.add_argument("--ranges", default="", help="entry:lo:hi,... (hex): an indirect branch out of the range ends that routine's run")
 ap.add_argument("--count", action="store_true", help="count entries of every lifted function (first variant only)")
+ap.add_argument("--strip-native", action="store_true", help="replay lifted fallbacks instead of external native hooks")
+ap.add_argument("--block", action="store_true", help="stop at the captured block's first external transfer")
 ap.add_argument("--variant", action="append", default=[], help="NAME=-Dflag,... ; runtime=<dir>, rp=a:b, region=a:b+c:d (regions of functions, hex)")
 a = ap.parse_args()
 variants = a.variant or ["base="]
@@ -48,20 +50,33 @@ results = []
 for v in variants:
     name, _, flags = v.partition("=")
     defs, rt, rp, region, allr = [], a.runtime, [], [], True
+    source_override = None
     for f in filter(None, flags.split(",")):
         if f.startswith("runtime="): rt = f[len("runtime="):]
+        elif f.startswith("source="): source_override = Path(f[len("source="):]).resolve()
         elif f.startswith("rp="): rp = [int(x, 16) for x in f[3:].split(":")]
         elif f.startswith("region="): region = [[int(x, 16) for x in g.split(":")] for g in f[7:].split("+")]
         elif f.startswith("regionw="): region, allr = [[int(x, 16) for x in g.split(":")] for g in f[8:].split("+")], False
         else: defs.append(f)
     out = folder / name
     out.mkdir()
-    src_v = lifted
+    src_v = source_override or lifted
+    if a.strip_native:
+        clean = "\n".join(l for l in src_v.read_text(encoding="utf-8").split("\n") if "/* spu_native_patch */" not in l)
+        src_v = out / "without-native.c"
+        src_v.write_text(clean, encoding="utf-8")
+    if a.block:
+        sys.path.insert(0,str(root/'scripts'))
+        import spu_regpromo
+        stopped="\n".join(spu_regpromo.stopify(l) for l in src_v.read_text(encoding='utf-8').split('\n'))
+        src_v=out/'block.c'
+        src_v.write_text(stopped,encoding='utf-8')
+        defs.append('/DBENCH_BLOCK')
     if rp:
         # Register promotion (scripts/spu_regpromo.py) of these functions, on.
         sys.path.insert(0, str(root / "scripts"))
         import spu_regpromo
-        text, report = spu_regpromo.patch_image(a.image, rp, lifted.read_text(encoding="utf-8"))
+        text, report = spu_regpromo.patch_image(a.image, rp, src_v.read_text(encoding="utf-8"))
         print(f"{name}: " + "; ".join(report))
         src_v = out / "promoted.c"
         src_v.write_text(text, encoding="utf-8")
