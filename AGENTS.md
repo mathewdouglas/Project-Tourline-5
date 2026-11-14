@@ -64,6 +64,13 @@ all compiler-dependent caches under `dxc-1.8.2502-sm60-v1/`; do not move old FXC
 recipes into it. See [docs/dxc.md](docs/dxc.md) and Phase 34 for the synthetic
 differences, live checks and offline preparation contract.
 
+**2.11 update executable (planned, branch `feat/gt5-v211`).** Plan in
+[docs/plan-gt5-v211.md](docs/plan-gt5-v211.md): a second target
+`BCUS98114-v211` for the master mod's base. 2.11 is the last content
+update, not the last update (2.17). No 2.11 inputs are on this machine yet;
+never upgrade the 01.04 RPCS3 install in place. Every v104 value is listed
+there with how to re-derive it; carry none across.
+
 **Prologue renderer ports (GT5 Phase 47).** All default on, measured at High Speed Ring:
 `RSX_PSO_FAST_LOOKUP` (learned table `warmup-v1/fp-lookup-gt5-v1-<tag>.bin`: a miss whose mapped
 pipeline is resident skips HLSL/DXBC; `=0` off, `=2` checks every mapping, 0 mismatches), placed
