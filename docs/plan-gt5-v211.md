@@ -407,10 +407,10 @@ but still uses the 6.2 GiB once, so the virtual install is preferred.
 Switches: `PS3_FS_VOLMAP=0` stores real files as today, and `=2` checks each
 served read against a real copy when one exists.
 
-**Status (2026-11-14, T23 in progress).** Built differently from items 1
-and 4 above: conversion happens after the fact, not by watching the
-install's reads and writes. The game installs real files as today, and the
-launcher then replaces verified copies.
+**Status (2026-11-15, T23 in progress).** Both ways are built. The game's
+own first-boot install stores records as it runs, and is accepted
+automatically (item 1; see "The first-boot install records as it runs"
+below). The launcher converts installs that already exist (item 4).
 
 - **Runtime** (`libs/filesystem/volmap.c` and hooks in `cellFs.c`, in the
   compatibility patch).
@@ -468,9 +468,65 @@ launcher then replaces verified copies.
   - One failed open, `PDIPFS/K/7M`, also appears in the 0.1.5 release
     smoke run without records.
   - Not measured: load time against full copies on a matched shader cache.
+- **The first-boot install records as it runs (2026-11-15).** Item 1 above,
+  now built. The game's own install stores records instead of copies, and
+  every player gets the install without being asked.
+  - **What the install does (`PAD_FILE_LOG=2`, run `fb2`).** For each
+    file it creates `PDIPFS/<name>.psctmp99999`, sizes it with `Truncate`,
+    opens `GT.VOL` and the temp file, reads the entry and writes the same
+    bytes, closes both and renames the temp file. Afterwards it opens the
+    last file once read-only.
+  - **Runtime: install recording** (`cellFs.c`, `PS3_FS_VOLMAP_INSTALL=0`
+    off; needs `PS3_FS_VOLMAP` on).
+    - A write whose bytes equal what the same thread just read from a disc
+      volume (`/dev_bdvd/...`), contiguous from position 0, is not stored.
+      The descriptor keeps the range, CRC and head/tail bytes.
+    - At close, a file exactly that long and at least 4 KiB becomes a record.
+    - Anything else first writes the remembered bytes for real and carries
+      on as an ordinary file:
+      - a write of other bytes;
+      - a read, `ftruncate` or short `fstat` through that descriptor;
+      - another open, truncate or rename of the same path;
+      - a file left a different length.
+  - **Runtime: the prompt** (`cellPad.c`, `PAD_AUTO_INSTALL=<marker>`, set
+    by `src/main.cpp` from `install_prompt_file` in `config/targets.json`;
+    `GT5P_AUTO_INSTALL=0` off).
+    - When the title's stat of `installed00.dat` fails, its "Data
+      Installation Recommendation" dialog comes up with the cursor on Yes.
+      Cross is pressed 3 s later, then every 2 s until the first
+      `.psctmp` file is created (at most 15 s).
+    - When the marker is created, "Installation complete" waits for OK. The
+      title opens no files while it waits, so Cross is pressed 1.5 s later,
+      then every 2 s until it opens any other file.
+    - An installed boot finds the marker and nothing is pressed.
+  - **Measured on private first-boot copies** (package files only, no save;
+    test exes in `scratch/vmbuild` linked from the 0.1.5 objects):
+
+    | Run | Install | Stored | Input |
+    | --- | --- | --- | --- |
+    | `fb2`: full copies (old runtime) | 427 s, 15,104 files | 6.5 GB | scripted Cross |
+    | `fb3`: install recording | 342 s | 232 MB | scripted Cross |
+    | `fb4`: recording + `PAD_AUTO_INSTALL` from `main.cpp` | 295 s | 240 MB | none |
+
+    - `fb3` and `fb4` were compared file by file with `fb2` (records read
+      from `GT.VOL`). All 31,540 files are identical, and 12,115 records
+      stand for 6.20 GiB.
+    - `fb4` went on unattended past "Installation complete" to the save
+      creation and the GT5 logo.
+    - The remaining time is the game's own per-file work and its 6.2 GB of
+      reads from `GT.VOL`.
+  - Test: `scripts/test/volmap_fs.py` now runs the install sequence through
+    the real `cellFs.c`. A plain copy becomes a record. Changed bytes, a
+    read through a second descriptor mid-copy and a file under 4 KiB are
+    stored in full. With `PS3_FS_VOLMAP_INSTALL=0`, everything is stored in
+    full.
+  - The launcher's conversion remains for imported installs (RPCS3) and
+    installs made before this change.
 - **Still open.**
   - The launcher's own conversion (`link_installed_data`) has not been run;
     only `volmap.py` has, and the two share the format and method.
+  - Not yet run: a race on data installed by recording (the `vm1` race used
+    converted data, which has the same records).
   - A launcher restore path for `PT5_VOLMAP=0` after conversion. Until then,
     use `volmap.py restore`.
   - A player-setup test that drives the launcher's import with records.

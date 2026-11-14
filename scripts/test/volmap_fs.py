@@ -44,6 +44,7 @@ for rel, data in {'A/1': entries[0], 'A/2': entries[1], 'B/3': blob(6000),
 (work / 'expected').mkdir()
 (work / 'expected/A1').write_bytes(entries[0])
 (work / 'expected/A2').write_bytes(entries[1])
+(work / 'expected/offsets').write_text(f'{offsets[0]} {offsets[3]}\n')
 originals = {p: p.read_bytes() for p in pfs.rglob('*') if p.is_file()}
 
 
@@ -94,6 +95,11 @@ def harness(mode, **env):
 
 
 harness('off', PS3_FS_VOLMAP='0')
+# The game's own install, recorded as it runs (cellFs install recording).
+harness('install')
+shutil.rmtree(pfs / 'I')
+harness('install', PS3_FS_VOLMAP_INSTALL='0')
+shutil.rmtree(pfs / 'I')
 pristine = volume.read_bytes()
 mid = bytearray(pristine)
 mid[offsets[0] + 5000] ^= 0xFF

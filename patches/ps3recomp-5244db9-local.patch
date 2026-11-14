@@ -4972,7 +4972,7 @@ index 00000000..e8aa9f7a
 +
 +#endif
 diff --git a/libs/filesystem/cellFs.c b/libs/filesystem/cellFs.c
-index 5166a47d..df0baa82 100644
+index 5166a47d..a6c989c1 100644
 --- a/libs/filesystem/cellFs.c
 +++ b/libs/filesystem/cellFs.c
 @@ -6,6 +6,7 @@
@@ -5125,7 +5125,7 @@ index 5166a47d..df0baa82 100644
  /* ---------------------------------------------------------------------------
   * Host stat -> CellFsStat conversion
   * -----------------------------------------------------------------------*/
-@@ -304,6 +408,11 @@ typedef struct {
+@@ -304,6 +408,24 @@ typedef struct {
      char   path[CELL_FS_MAX_FS_PATH_LENGTH];
      FILE*  host_fp;
      s32    flags;
@@ -5134,10 +5134,23 @@ index 5166a47d..df0baa82 100644
 +    int    vmap;
 +    u64    vbase;
 +    u64    vlen;
++    /* Install recording (vw_*, see "Install recording" below): this writable
++     * descriptor has so far been written only with bytes just read from a
++     * disc volume, contiguously from position 0. Those bytes were not
++     * written; vw_len of them stand for [vw_base, vw_base + vw_len) of
++     * vw_vol. 0 none yet, 1 pending, 2 real file (recording given up). */
++    int    vw_state;
++    u64    vw_base;
++    u64    vw_len;
++    u32    vw_crc;
++    u8     vw_head[16];
++    u8     vw_tail[16];
++    u64    vw_vsize;
++    char   vw_vol[VOLMAP_PATH_MAX];
  } FsFileSlot;
  
  typedef struct {
-@@ -322,27 +431,56 @@ typedef struct {
+@@ -322,27 +444,58 @@ typedef struct {
  static FsFileSlot s_files[MAX_OPEN_FILES];
  static FsDirSlot  s_dirs[MAX_OPEN_DIRS];
  
@@ -5168,6 +5181,8 @@ index 5166a47d..df0baa82 100644
 +            s_files[i].vmap = 0;
 +            s_files[i].vbase = 0;
 +            s_files[i].vlen = 0;
++            s_files[i].vw_state = 0;
++            s_files[i].vw_len = 0;
              s_files[i].in_use = 1;
 -            return i;
 +            fd = i;
@@ -5198,7 +5213,7 @@ index 5166a47d..df0baa82 100644
  }
  
  /* Build fopen mode string from PS3 flags */
-@@ -353,6 +491,19 @@ static const char* flags_to_mode(s32 flags)
+@@ -353,6 +506,19 @@ static const char* flags_to_mode(s32 flags)
      int trunc   = flags & CELL_FS_O_TRUNC;
      int append  = flags & CELL_FS_O_APPEND;
  
@@ -5218,7 +5233,7 @@ index 5166a47d..df0baa82 100644
      if (access == CELL_FS_O_RDONLY) {
          return "rb";
      } else if (access == CELL_FS_O_WRONLY) {
-@@ -404,10 +555,94 @@ static void ensure_parent_dirs(const char* path)
+@@ -404,16 +570,337 @@ static void ensure_parent_dirs(const char* path)
   * File operations
   * -----------------------------------------------------------------------*/
  
@@ -5305,15 +5320,258 @@ index 5166a47d..df0baa82 100644
 +#endif
 +}
 +
++/* ---------------------------------------------------------------------------
++ * Install recording (PS3_FS_VOLMAP_INSTALL, default on with records on)
++ *
++ * GT5's first-boot install copies each GT.VOL entry into PDIPFS: it creates
++ * "<name>.psctmp99999", sizes it, reads the entry from the disc's GT.VOL and
++ * writes the same bytes, closes it and renames it. Here a write whose bytes
++ * equal what this thread just read from a disc volume (/dev_bdvd/...) is not
++ * written; the descriptor remembers the range instead. When it is closed with
++ * the file exactly that long (at least 4 KiB), the file becomes a record
++ * (volmap.h) and the copy is never stored. Anything else first writes the
++ * remembered bytes for real (vw_flush) and carries on as an ordinary file:
++ * a write of other bytes, a read or truncate through the descriptor, another
++ * open or a truncate of the same path, a file left a different length.
++ * PS3_FS_VOLMAP_INSTALL=0 writes every byte as before.
++ * -----------------------------------------------------------------------*/
++
++#define VW_MIN_SIZE   4096u
++#define VW_COPY_MAX   (64u << 20)
++
++/* The last read from a disc volume on this thread. */
++static _Thread_local struct {
++    int    valid;
++    u32    buf;            /* guest address read into */
++    u64    n;              /* bytes read */
++    u64    voff;           /* volume offset of the first byte */
++    u64    vsize;
++    char   vol[VOLMAP_PATH_MAX];
++    u8*    copy;           /* the bytes, as read */
++    size_t cap;
++} tl_rd;
++
++static volatile long s_vw_records, s_vw_bytes_lo, s_vw_flushes;
++
++static int vw_enabled(void)
++{
++    static int on = -1;
++    if (on < 0) {
++        const char* e = getenv("PS3_FS_VOLMAP_INSTALL");
++        on = !(e && e[0] == '0');
++    }
++    return on && volmap_mode();
++}
++
++static u64 vw_host_size(FILE* fp)
++{
++    fflush(fp);
++#ifdef _WIN32
++    return (u64)_filelengthi64(_fileno(fp));
++#else
++    struct stat st; return fstat(fileno(fp), &st) == 0 ? (u64)st.st_size : 0;
++#endif
++}
++
++/* After a read of n bytes into guest buf from a non-record descriptor. */
++static void vw_note_read(const FsFileSlot* s, u32 buf, u64 n)
++{
++    tl_rd.valid = 0;
++    if (!vw_enabled() || !n || n > VW_COPY_MAX || strncmp(s->path, "/dev_bdvd/", 10) != 0)
++        return;
++    if (tl_rd.cap < n) {
++        u8* p = (u8*)realloc(tl_rd.copy, (size_t)n);
++        if (!p) return;
++        tl_rd.copy = p; tl_rd.cap = (size_t)n;
++    }
++#ifdef _MSC_VER
++    s64 end = (s64)_ftelli64(s->host_fp);
++#else
++    s64 end = (s64)ftello(s->host_fp);
++#endif
++    if (end < (s64)n) return;
++    memcpy(tl_rd.copy, gptr((void*)(uintptr_t)buf), (size_t)n);
++    tl_rd.buf = buf; tl_rd.n = n; tl_rd.voff = (u64)end - n;
++    tl_rd.vsize = vw_host_size(s->host_fp);
++    snprintf(tl_rd.vol, sizeof tl_rd.vol, "%s", s->path);
++    tl_rd.valid = 1;
++}
++
++/* Write the remembered bytes for real; the descriptor is an ordinary file
++ * from then on. 0 on success. */
++static int vw_flush(FsFileSlot* s)
++{
++    if (s->vw_state != 1) { s->vw_state = 2; return 0; }
++    s->vw_state = 2;
++    if (!s->vw_len) return 0;
++    __atomic_add_fetch(&s_vw_flushes, 1, __ATOMIC_RELAXED);
++    char vol_host[CELL_FS_MAX_FS_PATH_LENGTH];
++    FILE* vf = NULL;
++    if (translate_path(s->vw_vol, vol_host, sizeof vol_host) == 0)
++        vf = fopen(vol_host, "rb");
++#ifdef _MSC_VER
++    s64 keep = (s64)_ftelli64(s->host_fp);
++    int ok = vf && _fseeki64(vf, (__int64)s->vw_base, SEEK_SET) == 0
++                && _fseeki64(s->host_fp, 0, SEEK_SET) == 0;
++#else
++    s64 keep = (s64)ftello(s->host_fp);
++    int ok = vf && fseeko(vf, (off_t)s->vw_base, SEEK_SET) == 0
++                && fseeko(s->host_fp, 0, SEEK_SET) == 0;
++#endif
++    const size_t csz = 1u << 20;
++    u8* chunk = ok ? (u8*)malloc(csz) : NULL;
++    ok = ok && chunk;
++    for (u64 done = 0; ok && done < s->vw_len;) {
++        size_t want = (size_t)((s->vw_len - done) < csz ? (s->vw_len - done) : csz);
++        ok = fread(chunk, 1, want, vf) == want && fwrite(chunk, 1, want, s->host_fp) == want;
++        done += want;
++    }
++    free(chunk);
++    if (vf) fclose(vf);
++#ifdef _MSC_VER
++    _fseeki64(s->host_fp, keep, SEEK_SET);
++#else
++    fseeko(s->host_fp, (off_t)keep, SEEK_SET);
++#endif
++    fflush(s->host_fp);
++    if (!ok)
++        fprintf(stderr, "[volmap] install: could not write back %llu bytes of %s from '%s'\n",
++                (unsigned long long)s->vw_len, s->path, s->vw_vol);
++    return ok ? 0 : -1;
++}
++
++/* Another open, a truncate by path or a rename of this path: any descriptor
++ * still holding remembered bytes for it writes them first. */
++static void vw_flush_path(const char* guest_path)
++{
++    if (!guest_path) return;
++    for (int i = 3; i < MAX_OPEN_FILES; i++)
++        if (s_files[i].in_use && s_files[i].vw_state == 1 && strcmp(s_files[i].path, guest_path) == 0)
++            vw_flush(&s_files[i]);
++}
++
++/* A write of n bytes from guest buf at the descriptor's position. 1 when it
++ * was taken as part of a recording (nothing written; the position moves on),
++ * 0 when the caller writes it. */
++static int vw_write(FsFileSlot* s, u32 buf, u64 n)
++{
++    if (s->vw_state == 2 || !vw_enabled() || !n)
++        return 0;
++    const u8* data = (const u8*)gptr((void*)(uintptr_t)buf);
++    int match = tl_rd.valid && buf >= tl_rd.buf && (u64)(buf - tl_rd.buf) + n <= tl_rd.n
++             && memcmp(data, tl_rd.copy + (buf - tl_rd.buf), (size_t)n) == 0;
++    u64 voff = match ? tl_rd.voff + (buf - tl_rd.buf) : 0;
++#ifdef _MSC_VER
++    s64 at = (s64)_ftelli64(s->host_fp);
++#else
++    s64 at = (s64)ftello(s->host_fp);
++#endif
++    if (match && s->vw_state == 0)
++        match = at == 0;
++    else if (match)
++        match = (u64)at == s->vw_len && voff == s->vw_base + s->vw_len
++             && strcmp(s->vw_vol, tl_rd.vol) == 0;
++    if (!match) {
++        vw_flush(s);
++        return 0;
++    }
++    if (s->vw_state == 0) {
++        s->vw_state = 1; s->vw_base = voff; s->vw_len = 0; s->vw_crc = 0;
++        s->vw_vsize = tl_rd.vsize;
++        memset(s->vw_head, 0, 16); memset(s->vw_tail, 0, 16);
++        snprintf(s->vw_vol, sizeof s->vw_vol, "%s", tl_rd.vol);
++    }
++    if (s->vw_len < 16) {
++        size_t k = (size_t)(16 - s->vw_len); if (k > n) k = (size_t)n;
++        memcpy(s->vw_head + s->vw_len, data, k);
++    }
++    if (n >= 16) memcpy(s->vw_tail, data + n - 16, 16);
++    else { memmove(s->vw_tail, s->vw_tail + n, 16 - (size_t)n); memcpy(s->vw_tail + 16 - n, data, (size_t)n); }
++    s->vw_crc = volmap_crc32(s->vw_crc, data, (size_t)n);
++    s->vw_len += n;
++#ifdef _MSC_VER
++    _fseeki64(s->host_fp, (__int64)n, SEEK_CUR);
++#else
++    fseeko(s->host_fp, (off_t)n, SEEK_CUR);
++#endif
++    return 1;
++}
++
++/* At close: a recording that covers the whole file becomes a record; any
++ * other is written out. Closes host_fp. */
++static void vw_close(FsFileSlot* s)
++{
++    if (s->vw_state == 1 && s->vw_len >= VW_MIN_SIZE && vw_host_size(s->host_fp) == s->vw_len) {
++        char host_path[CELL_FS_MAX_FS_PATH_LENGTH];
++        volmap_record rec;
++        memset(&rec, 0, sizeof rec);
++        rec.offset = s->vw_base; rec.length = s->vw_len; rec.crc = s->vw_crc;
++        memcpy(rec.head, s->vw_head, 16);
++        /* The record's tail is the range's last min(16, length) bytes. */
++        memcpy(rec.tail, s->vw_tail, 16);
++        rec.volume_size = s->vw_vsize;
++        snprintf(rec.volume, sizeof rec.volume, "%s", s->vw_vol);
++        uint8_t out[VOLMAP_RECORD_SIZE];
++        volmap_encode(&rec, out);
++        if (translate_path(s->path, host_path, sizeof host_path) == 0) {
++            /* Through the open descriptor: shrink it to the record and write
++             * the record at 0, so the path never names a half-made file. */
++            fflush(s->host_fp);
++            int ok =
++#ifdef _WIN32
++                _chsize_s(_fileno(s->host_fp), 0) == 0 &&
++                _fseeki64(s->host_fp, 0, SEEK_SET) == 0 &&
++#else
++                ftruncate(fileno(s->host_fp), 0) == 0 &&
++                fseeko(s->host_fp, 0, SEEK_SET) == 0 &&
++#endif
++                fwrite(out, 1, sizeof out, s->host_fp) == sizeof out;
++            ok = fflush(s->host_fp) == 0 && ok;
++            if (ok) {
++                long k = __atomic_add_fetch(&s_vw_records, 1, __ATOMIC_RELAXED);
++                long kib = __atomic_add_fetch(&s_vw_bytes_lo, (long)(s->vw_len >> 10), __ATOMIC_RELAXED);
++                if (k <= 4 || k % 2000 == 0)
++                    printf("[volmap] install: %ld files recorded (%ld MiB, %ld written back); %s -> [0x%llX, +0x%llX)\n",
++                           k, kib >> 10, (long)s_vw_flushes, s->path,
++                           (unsigned long long)rec.offset, (unsigned long long)rec.length);
++                s->vw_state = 0;
++                fclose(s->host_fp); s->host_fp = NULL;
++                return;
++            }
++            /* Restore the length and write the bytes for real. */
++            fprintf(stderr, "[volmap] install: record write failed for %s; writing the file\n", s->path);
++#ifdef _WIN32
++            _chsize_s(_fileno(s->host_fp), (long long)s->vw_len);
++#else
++            ftruncate(fileno(s->host_fp), (off_t)s->vw_len);
++#endif
++        }
++    }
++    if (s->vw_state == 1)
++        vw_flush(s);
++    s->vw_state = 0;
++    fclose(s->host_fp);
++    s->host_fp = NULL;
++}
++
  /* NID: 0x718BF5F8 */
  s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 size)
  {
      printf("[cellFs] Open(path='%s', flags=0x%X)\n", gpath(path) ? gpath(path) : "<null>", flags);
 +    { extern void pad_milestone_seen(const char*); pad_milestone_seen(gpath(path)); }
++    { extern void pad_install_open(const char*, int);   /* PAD_AUTO_INSTALL */
++      pad_install_open(gpath(path), (flags & CELL_FS_O_CREAT) != 0); }
      { extern char* getenv(const char*); static int _bt=-1; if(_bt<0){ const char* e=getenv("PS3_FSLOG_BT"); _bt=(e&&*e&&*e!='0')?1:0; } if(_bt){ extern unsigned int ppu_prof_resolve_host(void*); void* fr[24]; unsigned short n=RtlCaptureStackBackTrace(0,24,fr,0); char ln[600]; int p=snprintf(ln,sizeof ln,"[FSBT]"); unsigned int prev=0; for(unsigned short i=0;i<n;i++){ unsigned int g=ppu_prof_resolve_host(fr[i]); if(g&&g!=prev){ prev=g; p+=snprintf(ln+p,sizeof(ln)-p," %08X",g); } } fprintf(stderr,"%s%c",ln,10); } }
  
      if (!path || !fd)
-@@ -422,11 +657,38 @@ s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 s
+         return CELL_EFAULT;
+ 
+     char host_path[CELL_FS_MAX_FS_PATH_LENGTH];
++    vw_flush_path(gpath(path));   /* install recording: another open sees the bytes */
+     if (translate_path(gpath(path), host_path, sizeof(host_path)) != 0) {
+         /* gpath(), not the raw parameter: `path` is a GUEST address, and
+          * printing it as a host string faults. The failure path was
+@@ -422,11 +909,38 @@ s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 s
          return (s32)CELL_ENOENT;
      }
  
@@ -5352,7 +5610,20 @@ index 5166a47d..df0baa82 100644
      const char* mode = flags_to_mode(flags);
      FILE* fp = fopen(host_path, mode);
  
-@@ -491,12 +753,35 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
+@@ -470,10 +984,8 @@ s32 cellFsClose(CellFsFd fd)
+     if (fd < 0 || fd >= MAX_OPEN_FILES || !s_files[fd].in_use)
+         return CELL_FS_ERROR_EBADF;
+ 
+-    if (s_files[fd].host_fp) {
+-        fclose(s_files[fd].host_fp);
+-        s_files[fd].host_fp = NULL;
+-    }
++    if (s_files[fd].host_fp)
++        vw_close(&s_files[fd]);   /* fclose, after any install recording */
+     s_files[fd].in_use = 0;
+ 
+     return CELL_OK;
+@@ -491,12 +1003,39 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
      u64 bytes_read = 0;
  
      if (s_files[fd].host_fp) {
@@ -5379,6 +5650,8 @@ index 5166a47d..df0baa82 100644
           * to a raw guest address interpreted as a host one, so nothing the
           * title loaded ever landed in guest memory. */
 -        bytes_read = (u64)fread(gptr(buf), 1, (size_t)nbytes, s_files[fd].host_fp);
++        if (s_files[fd].vw_state == 1)
++            vw_flush(&s_files[fd]);
 +        u64 want = nbytes;
 +        if (s_files[fd].vmap) {   /* never past the record's range */
 +            s64 at = vm_tell(&s_files[fd]);
@@ -5386,10 +5659,12 @@ index 5166a47d..df0baa82 100644
 +            if (want > left) want = left;
 +        }
 +        bytes_read = want ? (u64)fread(gptr(buf), 1, (size_t)want, s_files[fd].host_fp) : 0;
++        if (!s_files[fd].vmap)
++            vw_note_read(&s_files[fd], (u32)(uintptr_t)buf, bytes_read);
      }
  
      { static int _n = 0;
-@@ -515,6 +800,37 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
+@@ -515,6 +1054,37 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
              }
              printf("\n"); } }
  
@@ -5427,7 +5702,7 @@ index 5166a47d..df0baa82 100644
      if (nread)
          *(u64*)gptr(nread) = ps3_bswap64(bytes_read);
  
-@@ -532,9 +848,36 @@ s32 cellFsWrite(CellFsFd fd, const void* buf, u64 nbytes, u64* nwrite)
+@@ -532,9 +1102,40 @@ s32 cellFsWrite(CellFsFd fd, const void* buf, u64 nbytes, u64* nwrite)
  
      u64 bytes_written = 0;
  
@@ -5452,8 +5727,12 @@ index 5166a47d..df0baa82 100644
 +                (void)p[off];
 +            (void)p[nbytes - 1];
 +        }
++        if (vw_write(&s_files[fd], (u32)(uintptr_t)buf, nbytes)) {
++            bytes_written = nbytes;   /* recorded, not stored (install recording) */
++        } else {
          bytes_written = (u64)fwrite(gptr((void*)buf), 1, (size_t)nbytes, s_files[fd].host_fp);
          fflush(s_files[fd].host_fp);
++        }
 +        if (bytes_written < nbytes) {
 +            static int n = 0;
 +            if (n++ < 16)
@@ -5464,7 +5743,7 @@ index 5166a47d..df0baa82 100644
      }
  
      if (nwrite)
-@@ -549,7 +892,21 @@ s32 cellFsLseek(CellFsFd fd, s64 offset, s32 whence, u64* pos)
+@@ -549,7 +1150,21 @@ s32 cellFsLseek(CellFsFd fd, s64 offset, s32 whence, u64* pos)
      if (fd < 0 || fd >= MAX_OPEN_FILES || !s_files[fd].in_use)
          return CELL_FS_ERROR_EBADF;
  
@@ -5487,7 +5766,15 @@ index 5166a47d..df0baa82 100644
          int host_whence = SEEK_SET;
          if (whence == CELL_FS_SEEK_CUR) host_whence = SEEK_CUR;
          if (whence == CELL_FS_SEEK_END) host_whence = SEEK_END;
-@@ -590,6 +947,8 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
+@@ -585,11 +1200,16 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
+     CellFsStat* sbh = (CellFsStat*)gptr(sb);
+     if (!sbh) return CELL_EFAULT;
+ 
++    if (s_files[fd].host_fp && s_files[fd].vw_state == 1 &&
++        vw_host_size(s_files[fd].host_fp) < s_files[fd].vw_len)
++        vw_flush(&s_files[fd]);
+     if (s_files[fd].host_fp) {
+ #ifdef _WIN32
          int file_no = _fileno(s_files[fd].host_fp);
          HOST_STAT_T hst;
          if (HOST_FSTAT(file_no, &hst) == 0) {
@@ -5496,7 +5783,7 @@ index 5166a47d..df0baa82 100644
              fill_cellfs_stat(sbh, &hst);
              return CELL_OK;
          }
-@@ -597,6 +956,8 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
+@@ -597,6 +1217,8 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
          int file_no = fileno(s_files[fd].host_fp);
          HOST_STAT_T hst;
          if (HOST_FSTAT(file_no, &hst) == 0) {
@@ -5505,7 +5792,7 @@ index 5166a47d..df0baa82 100644
              fill_cellfs_stat(sbh, &hst);
              return CELL_OK;
          }
-@@ -615,6 +976,7 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
+@@ -615,6 +1237,7 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
  s32 cellFsStat(const char* path, CellFsStat* sb)
  {
      printf("[cellFs] Stat(path='%s')\n", gpath(path) ? gpath(path) : "<null>");
@@ -5513,7 +5800,11 @@ index 5166a47d..df0baa82 100644
  
      if (!path || !sb)
          return CELL_EFAULT;
-@@ -629,6 +991,17 @@ s32 cellFsStat(const char* path, CellFsStat* sb)
+@@ -626,9 +1249,21 @@ s32 cellFsStat(const char* path, CellFsStat* sb)
+     HOST_STAT_T hst;
+     if (HOST_STAT(host_path, &hst) != 0) {
+         printf("[cellFs] Stat: host stat('%s') failed: %s\n", host_path, strerror(errno));
++        { extern void pad_install_stat_missing(const char*); pad_install_stat_missing(gpath(path)); }
          return (s32)CELL_ENOENT;
      }
  
@@ -5531,19 +5822,20 @@ index 5166a47d..df0baa82 100644
      /* Fill a host-local struct, then copy into guest memory: `sb` is a guest
       * address, so fill_cellfs_stat writing through it directly faults. */
      {
-@@ -655,6 +1028,11 @@ s32 cellFsTruncate(const char* path, u64 size)
+@@ -655,6 +1290,12 @@ s32 cellFsTruncate(const char* path, u64 size)
      if (translate_path(gpath(path), host_path, sizeof(host_path)) != 0)
          return (s32)CELL_ENOENT;
  
 +    /* Truncating keeps the start of the contents: a record becomes the real
 +     * file first. */
++    vw_flush_path(gpath(path));
 +    if (size != 0 && vm_materialize_path(host_path) < 0)
 +        return (s32)CELL_EIO;
 +
  #ifdef _WIN32
      HANDLE hFile = CreateFileA(host_path, GENERIC_WRITE, 0, NULL,
                                 OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-@@ -682,6 +1060,9 @@ s32 cellFsFtruncate(CellFsFd fd, u64 size)
+@@ -682,7 +1323,11 @@ s32 cellFsFtruncate(CellFsFd fd, u64 size)
      if (fd < 0 || fd >= MAX_OPEN_FILES || !s_files[fd].in_use)
          return CELL_FS_ERROR_EBADF;
  
@@ -5551,9 +5843,11 @@ index 5166a47d..df0baa82 100644
 +        return CELL_FS_ERROR_EBADF;
 +
      if (s_files[fd].host_fp) {
++        vw_flush(&s_files[fd]);
          fflush(s_files[fd].host_fp);
  #ifdef _WIN32
-@@ -696,6 +1077,41 @@ s32 cellFsFtruncate(CellFsFd fd, u64 size)
+         int file_no = _fileno(s_files[fd].host_fp);
+@@ -696,6 +1341,41 @@ s32 cellFsFtruncate(CellFsFd fd, u64 size)
      return CELL_OK;
  }
  
@@ -5595,6 +5889,14 @@ index 5166a47d..df0baa82 100644
  /* NID: 0xC1C507E7 */
  s32 cellFsGetBlockSize(const char* path, u64* sector_size, u64* block_size)
  {
+@@ -926,6 +1606,7 @@ s32 cellFsRename(const char* from, const char* to)
+     char host_from[CELL_FS_MAX_FS_PATH_LENGTH];
+     char host_to[CELL_FS_MAX_FS_PATH_LENGTH];
+ 
++    vw_flush_path(gpath(from));   /* a file still open under recording keeps its bytes */
+     if (translate_path(gpath(from), host_from, sizeof(host_from)) != 0)
+         return (s32)CELL_ENOENT;
+     if (translate_path(gpath(to), host_to, sizeof(host_to)) != 0)
 diff --git a/libs/filesystem/volmap.c b/libs/filesystem/volmap.c
 new file mode 100644
 index 00000000..fe5bc8ea
@@ -5950,7 +6252,7 @@ index 49e13905..3f759a9a 100644
  /* Internal: feed a key event from the host input system */
  void cellKb_keyEvent(u32 port, u16 keycode, int pressed);
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index f2b4c119..dd3addfc 100644
+index f2b4c119..2af64f97 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -4,7 +4,8 @@
@@ -6962,7 +7264,7 @@ index f2b4c119..dd3addfc 100644
 +
 +/* SDL_GameControllerType, else the name, to a g_pad_device_family code. */
 +static int pad_sdl_family(void* gc)
-+{
+ {
 +    int t = s_sdl.GameControllerGetType ? s_sdl.GameControllerGetType(gc) : 0;
 +    switch (t) {
 +    case 1: case 2: return 2;                    /* Xbox 360, Xbox One/Series */
@@ -7090,7 +7392,7 @@ index f2b4c119..dd3addfc 100644
 +static PadHostState s_sdl_state[PAD_MAX_HOST_PORTS];
 +
 +static void pad_poll_sdl_dyn(void)
- {
++{
 +    s_sdl_guide = 0;
 +    static unsigned long long last_scan = 0;
 +    unsigned long long now = GetTickCount64();
@@ -7275,7 +7577,7 @@ index f2b4c119..dd3addfc 100644
  
  static unsigned long long pad_now_ms(void)
  {
-@@ -421,27 +1511,123 @@ static unsigned long long pad_now_ms(void)
+@@ -421,27 +1511,191 @@ static unsigned long long pad_now_ms(void)
  #endif
  }
  
@@ -7307,6 +7609,73 @@ index f2b4c119..dd3addfc 100644
 +    }
 +}
 +#endif
++
++/* PAD_AUTO_INSTALL=<file>: answer the title's own optional data-install
++ * prompt with its default, Yes, and close its "Installation complete"
++ * dialog. GT5 stats USRDIR/installed00.dat at boot; when it is missing it
++ * shows "Data Installation Recommendation" (cursor on Yes). cellFs reports
++ * the events (pad_install_stat_missing, pad_install_open):
++ *   1 the marker is missing: Cross 3 s later, again every 2 s up to 15 s,
++ *     until the install creates its first "*.psctmp" file;
++ *   2 installing: nothing is pressed;
++ *   3 the marker is created (install finished): Cross 1.5 s later, again
++ *     every 2 s up to 12 s, until the title opens any other file, which it
++ *     does only once the dialog is closed;
++ *   4 done.
++ * An installed boot finds the marker and nothing is pressed. GT5P sets it
++ * from config/targets.json (install_prompt_file); GT5P_AUTO_INSTALL=0 off. */
++static volatile long s_ai_phase;
++static volatile unsigned long long s_ai_at;
++static int pad_ai_name(char* out, size_t n)
++{
++    static int on = -1; static char name[64];
++    if (on < 0) { const char* e = getenv("PAD_AUTO_INSTALL");
++                  on = (e && *e && strcmp(e, "0")) ? 1 : 0;
++                  if (on) snprintf(name, sizeof name, "%s", e); }
++    if (on && out) snprintf(out, n, "%s", name);
++    return on;
++}
++static int pad_ai_is(const char* path, const char* name)
++{
++    size_t lp = path ? strlen(path) : 0, ln = strlen(name);
++    return lp > ln && path[lp - ln - 1] == '/' && strcmp(path + lp - ln, name) == 0;
++}
++void pad_install_stat_missing(const char* path)
++{
++    char name[64];
++    if (s_ai_phase != 0 || !pad_ai_name(name, sizeof name) || !pad_ai_is(path, name)) return;
++    s_ai_at = pad_now_ms(); s_ai_phase = 1;
++    printf("[cellPad] PAD_AUTO_INSTALL: %s missing, accepting the install prompt%c", name, 10); fflush(stdout);
++}
++void pad_install_open(const char* path, int create)
++{
++    long ph = s_ai_phase;
++    if (ph == 0 || ph == 4 || !path) return;
++    char name[64];
++    if (!pad_ai_name(name, sizeof name)) return;
++    if (ph == 1 && strstr(path, ".psctmp")) {
++        s_ai_phase = 2;
++        printf("[cellPad] PAD_AUTO_INSTALL: install started%c", 10); fflush(stdout);
++    } else if (ph == 2 && create && pad_ai_is(path, name)) {
++        s_ai_at = pad_now_ms(); s_ai_phase = 3;
++        printf("[cellPad] PAD_AUTO_INSTALL: install finished, closing its dialog%c", 10); fflush(stdout);
++    } else if (ph == 3 && !pad_ai_is(path, name)) {
++        s_ai_phase = 4;
++        printf("[cellPad] PAD_AUTO_INSTALL: done%c", 10); fflush(stdout);
++    }
++}
++static void pad_auto_install(PadHostState* hs)
++{
++    long ph = s_ai_phase;
++    if (ph != 1 && ph != 3) return;
++    unsigned long long first = ph == 1 ? 3000 : 1500, last = ph == 1 ? 15000 : 12000;
++    unsigned long long t = pad_now_ms() - s_ai_at;
++    if (t >= first && t < last && (t - first) % 2000 < 300) {
++        hs->connected = 1;
++        hs->buttons |= CELL_PAD_CTRL_CROSS;
++        hs->press_cross = 255;
++    }
++}
 +
  static void pad_poll_backend(void)
  {
@@ -7373,7 +7742,8 @@ index f2b4c119..dd3addfc 100644
 +          }
 +      } }
 +    pad_skip_movie(&s_host_state[0]);
- #endif
++#endif
++    pad_auto_install(&s_host_state[0]);
 +
 +    /* For a port's own overlay (a settings screen): every port's buttons ORed,
 +     * bit 16 for the PS/guide button. While the overlay has the input
@@ -7383,7 +7753,7 @@ index f2b4c119..dd3addfc 100644
 +          if (s_host_state[i].connected) all |= s_host_state[i].buttons;
 +#if PAD_BACKEND_XINPUT
 +      if (s_guide) all |= 1u << 16;
-+#endif
+ #endif
 +      g_pad_menu_buttons = all; /* F1 always navigates with physical buttons. */
 +
 +      if (g_pad_input_blocked)
@@ -7404,7 +7774,7 @@ index f2b4c119..dd3addfc 100644
  }
  
  /* ---------------------------------------------------------------------------
-@@ -465,12 +1651,21 @@ s32 cellPadInit(u32 max_connect)
+@@ -465,12 +1719,21 @@ s32 cellPadInit(u32 max_connect)
      s_pad_initialized = 1;
      s_max_connect = max_connect > CELL_PAD_MAX_PORT_NUM ? CELL_PAD_MAX_PORT_NUM : max_connect;
      memset(s_port_setting, 0, sizeof(s_port_setting));
@@ -7427,7 +7797,7 @@ index f2b4c119..dd3addfc 100644
  
      return CELL_OK;
  }
-@@ -482,7 +1677,14 @@ s32 cellPadEnd(void)
+@@ -482,7 +1745,14 @@ s32 cellPadEnd(void)
      if (!s_pad_initialized)
          return CELL_PAD_ERROR_NOT_OPENED;
  
@@ -7442,7 +7812,7 @@ index f2b4c119..dd3addfc 100644
  
      s_pad_initialized = 0;
      s_max_connect = 0;
-@@ -581,6 +1783,17 @@ skip_inject: ;
+@@ -581,6 +1851,17 @@ skip_inject: ;
          len = CELL_PAD_LEN_CHANGE_PRESS_ON;
  
      data->len = len;
@@ -7460,7 +7830,7 @@ index f2b4c119..dd3addfc 100644
      /* button[0] is reserved and 0 on hardware; button[1] carries the pad mode
       * in its high nibble (0x7) and len/2 in its low one. GH3 drops any packet
       * whose button[0] is non-zero -- with len (8) there, every press was
-@@ -610,7 +1823,7 @@ skip_inject: ;
+@@ -610,7 +1891,7 @@ skip_inject: ;
        } }
  
      /* PAD_SCRIPT="<sec>:<mask>,<sec>:<mask>,..." -- press a NAMED button at a
@@ -7469,7 +7839,7 @@ index f2b4c119..dd3addfc 100644
       * CROSS and START, which is enough to clear a "press start" screen but not
       * to navigate a menu: You Don't Know Jack needs DOWN to move off its name
       * field before CROSS means anything. Masks are CELL_PAD_CTRL_* packed as
-@@ -618,7 +1831,7 @@ skip_inject: ;
+@@ -618,7 +1899,7 @@ skip_inject: ;
       * LEFT 0x0080, RIGHT 0x0020, CROSS 0x4000, CIRCLE 0x2000, TRIANGLE 0x1000.
       * Legit input simulation on the same footing as PAD_AUTOPRESS/PAD_STICK. */
      { static int s_sc = -1;
@@ -7478,7 +7848,7 @@ index f2b4c119..dd3addfc 100644
        static unsigned long long t0 = 0;   /* not ULONGLONG: this builds on POSIX too */
        if (s_sc < 0) {
            s_sc = 0;
-@@ -626,32 +1839,33 @@ skip_inject: ;
+@@ -626,32 +1907,33 @@ skip_inject: ;
            if (e && *e) {
                s_sc = 1; t0 = GetTickCount64();
                const char* p = e;
@@ -7517,7 +7887,7 @@ index f2b4c119..dd3addfc 100644
                    if (!said[i]) { said[i] = 1;
                        printf("[cellPad] PAD_SCRIPT t=%.1fs press 0x%04X\n", ev[i].t, ev[i].mask); }
                }
-@@ -660,14 +1874,15 @@ skip_inject: ;
+@@ -660,14 +1942,15 @@ skip_inject: ;
  
      /* PAD_FILE=<path> -- closed-loop input. Each poll, if the file holds a
       * button mask (same encoding as PAD_SCRIPT), press it for a fixed number
@@ -7536,7 +7906,7 @@ index f2b4c119..dd3addfc 100644
       *                            # long hold; the default is 40)
       */
      { static int s_pf = -1; static char pf_path[512];
-@@ -691,7 +1906,8 @@ skip_inject: ;
+@@ -691,7 +1974,8 @@ skip_inject: ;
                    if (held_n > 0) { FILE* w = fopen(pf_path, "wb"); if (w) fclose(w); }
                }
            }
@@ -7546,7 +7916,7 @@ index f2b4c119..dd3addfc 100644
                data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] |= (u16)(held_mask & 0xFF);
                data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= (u16)((held_mask >> 8) & 0xFF); }
        } }
-@@ -714,7 +1930,7 @@ skip_inject: ;
+@@ -714,7 +1998,7 @@ skip_inject: ;
                   sscanf(e, "%d,%d,%d,%d,%lf,%lf", &a,&b,&c,&d,&s_from,&s_until);
                   s_v[0]=(unsigned char)a; s_v[1]=(unsigned char)b;
                   s_v[2]=(unsigned char)c; s_v[3]=(unsigned char)d; } }
@@ -7555,7 +7925,7 @@ index f2b4c119..dd3addfc 100644
                    hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
                    hs->connected = 1; }
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
-@@ -781,8 +1997,16 @@ skip_inject: ;
+@@ -781,8 +2065,16 @@ skip_inject: ;
              { CELL_PAD_BTN_OFFSET_DIGITAL2, 0x08, CELL_PAD_BTN_OFFSET_PRESS_R1 },
              { CELL_PAD_BTN_OFFSET_DIGITAL2, 0x01, CELL_PAD_BTN_OFFSET_PRESS_L2 },
              { CELL_PAD_BTN_OFFSET_DIGITAL2, 0x02, CELL_PAD_BTN_OFFSET_PRESS_R2 } };
@@ -7573,7 +7943,7 @@ index f2b4c119..dd3addfc 100644
                  data->button[pm[k].off] = 255;
      }
  
-@@ -808,7 +2032,8 @@ emit:
+@@ -808,7 +2100,8 @@ emit:
       * call made that loop infinite: the main thread pegged one core inside
       * libpad and the title never got past its first rendered screen.
       *
@@ -7583,7 +7953,7 @@ index f2b4c119..dd3addfc 100644
       * after that until the next one arrives (pad_poll_backend sets the flag when
       * it actually re-polls, every PAD_POLL_INTERVAL_MS). That is what the
       * hardware does: a pad streams reports at a fixed rate whether or not
-@@ -821,14 +2046,6 @@ emit:
+@@ -821,14 +2114,6 @@ emit:
       * attack firing once.
       *
       * PAD_ALWAYS_CHANGE=1 restores the old always-a-packet behaviour. */
@@ -7598,7 +7968,7 @@ index f2b4c119..dd3addfc 100644
      {
          unsigned int ea = (unsigned int)(uintptr_t)data_guest;
          vm_write32((unsigned long long)ea + 0, (unsigned int)data->len);   /* len (s32) */
-@@ -881,7 +2098,7 @@ s32 cellPadGetInfo(CellPadInfo2* info)
+@@ -881,7 +2166,7 @@ s32 cellPadGetInfo(CellPadInfo2* info)
                    (s_host_state[i].connected || i == 0));
          vm_write16(gaddr + 0x00C + i * 2, on ? 0x054C : 0);   /* vendor: Sony  */
          vm_write16(gaddr + 0x10A + i * 2, on ? 0x0268 : 0);   /* product: DS3  */
@@ -7607,7 +7977,7 @@ index f2b4c119..dd3addfc 100644
      }
      return CELL_OK;
  }
-@@ -908,7 +2125,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
+@@ -908,7 +2193,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
           * boot flows that block until a controller is connected can proceed even
           * with no physical device attached. */
          if (s_host_state[i].connected || i == 0) {
@@ -7616,7 +7986,7 @@ index f2b4c119..dd3addfc 100644
              info->port_setting[i]      = s_port_setting[i];
              info->device_capability[i] = CELL_PAD_CAPABILITY_PS3_CONFORMITY
                                         | CELL_PAD_CAPABILITY_PRESS_MODE
-@@ -918,7 +2135,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
+@@ -918,7 +2203,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
              info->device_type[i]       = CELL_PAD_DEV_TYPE_STANDARD;
              connected++;
          } else {
@@ -7625,7 +7995,7 @@ index f2b4c119..dd3addfc 100644
          }
      }
      info->now_connect = connected;
-@@ -963,7 +2180,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -963,7 +2248,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
          /* Same virtual-pad-on-port-0 rule as cellPadGetInfo2, so both views of
           * the ports agree (a game that cross-checks them must see one truth). */
          if ((i < PAD_MAX_HOST_PORTS && s_host_state[i].connected) || i == 0) {
@@ -7634,7 +8004,7 @@ index f2b4c119..dd3addfc 100644
              info->port_setting[i]      = s_port_setting[i];
              info->device_capability[i] = CELL_PAD_CAPABILITY_PS3_CONFORMITY
                                         | CELL_PAD_CAPABILITY_PRESS_MODE
-@@ -975,7 +2192,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -975,7 +2260,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
              info->pclass_profile[i]    = 0;
              connected++;
          } else {
@@ -7643,7 +8013,7 @@ index f2b4c119..dd3addfc 100644
          }
      }
      info->now_connect = connected;
-@@ -985,7 +2202,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -985,7 +2270,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
            vm_write32((unsigned long long)ea + _o, *(u32*)((char*)info + _o)); }
  
      { static int _n = 0;
@@ -7652,7 +8022,7 @@ index f2b4c119..dd3addfc 100644
            printf("[cellPad] PeriphGetInfo(max=%u now=%u) -> STANDARD class\n",
                   info->max_connect, connected); }
      return CELL_OK;
-@@ -1039,6 +2256,39 @@ s32 cellPadSetPressMode(u32 port_no, u32 mode)
+@@ -1039,6 +2324,39 @@ s32 cellPadSetPressMode(u32 port_no, u32 mode)
      return CELL_OK;
  }
  
@@ -7692,7 +8062,7 @@ index f2b4c119..dd3addfc 100644
  s32 cellPadGetCapabilityInfo(u32 port_no, CellPadCapabilityInfo* info)
  {
      if (!s_pad_initialized)
-@@ -1048,8 +2298,12 @@ s32 cellPadGetCapabilityInfo(u32 port_no, CellPadCapabilityInfo* info)
+@@ -1048,8 +2366,12 @@ s32 cellPadGetCapabilityInfo(u32 port_no, CellPadCapabilityInfo* info)
          return CELL_PAD_ERROR_INVALID_PARAMETER;
  
      u32 info_ea = (u32)(uintptr_t)info;
@@ -7707,7 +8077,7 @@ index f2b4c119..dd3addfc 100644
  
      /* Report standard DualShock 3 capabilities */
      vm_write32(info_ea, CELL_PAD_CAPABILITY_PS3_CONFORMITY
-@@ -1071,25 +2325,46 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+@@ -1071,25 +2393,46 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
  
      param = GUEST_PTR(param, CellPadActParam*);
  
@@ -7717,7 +8087,9 @@ index f2b4c119..dd3addfc 100644
 +    u16 lo, hi;
 +    pad_rumble_levels(param->motor[CELL_PAD_ACTUATOR_PARAM_SMALL],
 +                      param->motor[CELL_PAD_ACTUATOR_PARAM_LARGE], &lo, &hi);
-+#if PAD_BACKEND_XINPUT
+ #if PAD_BACKEND_XINPUT
+-    /* Map to XInput vibration */
+-    if (port_no < PAD_MAX_HOST_PORTS && s_host_state[port_no].connected) {
 +    if (pad_feedback_trace_enabled()) {
 +        static u32 calls[PAD_MAX_HOST_PORTS], nonzero[PAD_MAX_HOST_PORTS];
 +        static unsigned long long last[PAD_MAX_HOST_PORTS];
@@ -7737,9 +8109,7 @@ index f2b4c119..dd3addfc 100644
 +    s_rumble[port_no].lo = lo;
 +    s_rumble[port_no].hi = hi;
 +
- #if PAD_BACKEND_XINPUT
--    /* Map to XInput vibration */
--    if (port_no < PAD_MAX_HOST_PORTS && s_host_state[port_no].connected) {
++#if PAD_BACKEND_XINPUT
 +    /* XInput keeps the motors at what they were last set to: no renewal. */
 +    if (s_host_state[port_no].connected) {
          XINPUT_VIBRATION vib;

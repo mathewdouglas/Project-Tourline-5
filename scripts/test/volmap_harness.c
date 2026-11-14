@@ -11,6 +11,8 @@ uint8_t* vm_base;
 
 /* Symbols cellFs.c refers to that belong to other runtime parts. */
 void pad_milestone_seen(const char* p) { (void)p; }
+void pad_install_open(const char* p, int c) { (void)p; (void)c; }
+void pad_install_stat_missing(const char* p) { (void)p; }
 unsigned int ppu_prof_resolve_host(void* p) { (void)p; return 0; }
 unsigned long long ps3_ms_now(void) { return 0; }
 void ps3_vfs_ps3game_fallback(char* path, size_t cap) { (void)path; (void)cap; }
@@ -67,6 +69,65 @@ static s64 seek(s32 fd, s64 off, s32 whence)
 {
     s32 rc = cellFsLseek(fd, off, whence, (u64*)(uintptr_t)G_POS);
     return rc == CELL_OK ? (s64)be64(G_POS) : -1;
+}
+
+static s32 open_fd(const char* guest, s32 flags)
+{
+    s32 rc = cellFsOpen(gp(guest), flags, (CellFsFd*)(uintptr_t)G_FD, NULL, 0);
+    return rc == CELL_OK ? fd_of() : -1;
+}
+
+/* GT5's install of one file, as logged: create "<name>.psctmp99999", size it
+ * by path, read the entry from the disc volume and write the bytes in chunks,
+ * close, rename. tamper >= 0 flips that byte of the second chunk before it is
+ * written; peek reads the temp file through a second descriptor mid-way.
+ * Returns the size of the host file that results. */
+static long install_one(const char* root, const char* name, u64 voff, u64 len, long tamper, int peek,
+                        unsigned char* want)
+{
+    char tmp[256], fin[256], p[1024];
+    snprintf(fin, sizeof fin, "/dev_hdd0/game/BCUS98114/USRDIR/PDIPFS/%s", name);
+    snprintf(tmp, sizeof tmp, "%s.psctmp99999", fin);
+    s32 w = open_fd(tmp, CELL_FS_O_WRONLY | CELL_FS_O_CREAT | CELL_FS_O_TRUNC);
+    CHECK(w >= 0, "create %s", tmp);
+    cellFsClose(w);
+    CHECK(cellFsTruncate(gp(tmp), len) == CELL_OK, "size %s", tmp);
+    s32 v = open_fd("/dev_bdvd/PS3_GAME/USRDIR/GT.VOL", CELL_FS_O_RDONLY);
+    w = open_fd(tmp, CELL_FS_O_WRONLY);
+    CHECK(v >= 0 && w >= 0, "open volume and %s", tmp);
+    seek(v, (s64)voff, CELL_FS_SEEK_SET);
+    u64 first = len > 5000 ? 5000 : len, got; s32 rc;
+    got = rd(v, first, &rc);
+    memcpy(want, vm_base + G_BUF, (size_t)got);
+    cellFsWrite(w, (void*)(uintptr_t)G_BUF, got, (u64*)(uintptr_t)G_N);
+    CHECK(be64(G_N) == got, "write 1 count");
+    if (peek) {   /* another descriptor sees the bytes written so far */
+        s32 r2 = open_fd(tmp, CELL_FS_O_RDONLY);
+        u64 g2 = rd(r2, first, &rc);
+        CHECK(g2 == first && !memcmp(vm_base + G_BUF, want, (size_t)first), "peek sees the written bytes");
+        cellFsClose(r2);
+    }
+    if (len > first) {
+        got = rd(v, len - first, &rc);
+        if (tamper >= 0) vm_base[G_BUF + tamper] ^= 0x5A;
+        memcpy(want + first, vm_base + G_BUF, (size_t)got);
+        cellFsWrite(w, (void*)(uintptr_t)G_BUF, got, (u64*)(uintptr_t)G_N);
+        CHECK(be64(G_N) == got, "write 2 count");
+    }
+    cellFsClose(w);
+    cellFsClose(v);
+    strcpy((char*)vm_base + G_PATH + 0x400, fin);   /* gp() has one buffer */
+    CHECK(cellFsRename(gp(tmp), (const char*)(uintptr_t)(G_PATH + 0x400)) == CELL_OK, "rename %s", name);
+    snprintf(p, sizeof p, "%s/gamedata/%s", root, fin + 1);   /* the host file */
+    long m; unsigned char* d = slurp(p, &m);
+    free(d);
+    /* Whatever is stored, the guest reads the bytes it wrote. */
+    CHECK(stat_size(fin, &rc) == len && rc == CELL_OK, "%s stat size", name);
+    s32 r = open_fd(fin, CELL_FS_O_RDONLY);
+    got = rd(r, len + 100, &rc);
+    CHECK(got == len && !memcmp(vm_base + G_BUF, want, (size_t)len), "%s reads back what was written", name);
+    cellFsClose(r);
+    return m;
 }
 
 int main(int argc, char** argv)
@@ -139,6 +200,29 @@ int main(int argc, char** argv)
         d = slurp(p, &m);
         CHECK(m == 50 && d && !memcmp(d, e1, 50), "A1 truncated to 50 bytes of the real contents (%ld)", m);
         free(d);
+    } else if (!strcmp(mode, "install")) {      /* install recording */
+        unsigned long long o1 = 0, o4 = 0;
+        snprintf(p, sizeof p, "%s/expected/offsets", root);
+        FILE* f = fopen(p, "r");
+        CHECK(f && fscanf(f, "%llu %llu", &o1, &o4) == 2, "offsets");
+        if (f) fclose(f);
+        const char* off = getenv("PS3_FS_VOLMAP_INSTALL");
+        int on = !(off && off[0] == '0');
+        unsigned char* want = malloc(1 << 20);
+        long m = install_one(root, "I/1", o1, (u64)n1, -1, 0, want);
+        CHECK(on ? m == 256 : m == n1, "plain copy stored as %ld bytes (recording %s)", m, on ? "on" : "off");
+        CHECK(!memcmp(want, e1, n1), "the copy is the entry");
+        m = install_one(root, "I/2", o1, (u64)n1, 7, 0, want);
+        CHECK(m == n1, "changed bytes: stored in full (%ld)", m);
+        CHECK(memcmp(want, e1, n1) != 0, "the changed copy differs from the entry");
+        m = install_one(root, "I/3", o1, (u64)n1, -1, 1, want);
+        CHECK(m == n1, "read through another descriptor mid-way: stored in full (%ld)", m);
+        m = install_one(root, "I/4", o4, 100, -1, 0, want);
+        CHECK(m == 100, "under 4 KiB: stored in full (%ld)", m);
+        snprintf(p, sizeof p, "%s/gamedata/dev_hdd0/game/BCUS98114/USRDIR/PDIPFS/I/1", root);
+        long rn; unsigned char* rb = slurp(p, &rn);
+        CHECK(!on || (rb && rn == 256 && !memcmp(rb, "PT5VMAP1", 8)), "I/1 is a record");
+        free(rb); free(want);
     } else if (!strcmp(mode, "off")) {          /* PS3_FS_VOLMAP=0 */
         CHECK(stat_size(A1, &rc) == 256, "records are plain files when off");
     } else if (!strcmp(mode, "headbad")) {      /* volume's first bytes changed */

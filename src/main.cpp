@@ -795,6 +795,11 @@ static int locate_project_root(void)
  *   are learned and prepared and the settings page knows the screens
  *   (GT5 Phase 36); GT5P_RACE_SCOPE=0 leaves them unset.
  * - GT5P_LISTBOX_VTABLE / _RANGE: the settings page's race-pause check (Phase 117).
+ * - PAD_AUTO_INSTALL: the target's install marker (install_prompt_file). On
+ *   a first boot the runtime answers the title's optional data-install prompt
+ *   with Yes and closes its "Installation complete" dialog, so every player
+ *   gets the install; with records on (PS3_FS_VOLMAP) it stores links to
+ *   GT.VOL, not copies. GT5P_AUTO_INSTALL=0 leaves the prompt to the player.
  * - SPURS_READY_GATE=1: run a workload only while its ready count is nonzero
  *   (Phase 39).
  * - GT5 only (docs/progress-gt5.md): PS3_LWCOND_REAL (Phase 3),
@@ -823,6 +828,8 @@ static void apply_env_defaults()
     const char* scope = getenv("GT5P_RACE_SCOPE");
     const bool stagger = gt5 && !getenv("SPURS_LANE_STAGGER_US");
     const bool race_scope = GT5P_SCREEN_FILES[0] && GT5P_SCOPE_LABELS[0] && !(scope && scope[0] == '0');
+    const char* ai = getenv("GT5P_AUTO_INSTALL");
+    const bool auto_install = !(ai && ai[0] == '0');
     const struct { const char* name; const char* value; bool when; } defaults[] = {
         {"PS3_PPU_PRIO_SCHED",   "2",                true},
         {"PS3_PPU_CORES",        "topo-ht",          true},
@@ -835,6 +842,7 @@ static void apply_env_defaults()
         {"GT5P_TOP_MENU_WORD",   GT5P_TOP_MENU_WORD, race_scope},
         {"GT5P_LISTBOX_VTABLE",  GT5P_LISTBOX_VT,    true},
         {"GT5P_LISTBOX_RANGE",   GT5P_LISTBOX_RANGE, true},
+        {"PAD_AUTO_INSTALL",     GT5P_INSTALL_PROMPT_FILE, auto_install},
         {"SPURS_READY_GATE",     "1",                true},
         {"PS3_LWCOND_REAL",      "1",                gt5},
         {"PS3_USER_MEM_ACCOUNT", "1",                gt5},
