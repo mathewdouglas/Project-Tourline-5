@@ -20,6 +20,12 @@ versions follow [SemVer](https://semver.org/).
   keep the normal priority. `RSX_SHADER_WORKER_PRIO_RACE=same` turns it off.
 
 ### Fixed
+- **Pauses while a menu or race loads for the first time.** Frames that
+  draw one image at several growing sizes rebuilt it at every size, copying
+  its contents each time: 10-59 rebuilds and up to a quarter of a second
+  in one frame. Each image is now made once at its final size. Cold-boot
+  loading: worst frame setup 105-286 ms -> 52-54 ms. `RSX_RT_FRAME_MAX=0`
+  restores the old behaviour.
 - **21:9: the opening WARNING, copyright and Polyphony screens are no
   longer stretched.** They are 1920x1080 pictures; at 720p the ultrawide
   pillarbox only recognised pictures exactly the display's size. Any 16:9

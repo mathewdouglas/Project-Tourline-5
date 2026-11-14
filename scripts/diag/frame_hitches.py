@@ -20,7 +20,10 @@ TEXTURE_COUNTERS = ('tex_alloc_ms', 'tex_decode_ms', 'tex_allocs', 'up_allocs',
                     'tex_copy_ms', 'tex_srv_ms',
                     # Frame (replay) thread only; the totals above include helpers.
                     'rt_cache_us', 'rt_cache_reads', 'rt_driver_us', 'rt_driver_calls',
-                    'offwait_us', 'offwaits')
+                    'offwait_us', 'offwaits',
+                    # The replay batch's otherwise untimed stretches (0.1.5): frame setup,
+                    # pre-draw loop to recording, recording to the present.
+                    'setup_ms', 'mid_ms', 'tail_ms')
 
 
 class TraceRows(list):

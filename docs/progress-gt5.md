@@ -4,6 +4,44 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Render targets made once per frame at their largest size (2026-11-14)
+
+**Cause.** On a cold boot the long renderer batches during menu and race
+loading (105-286 ms) were all frame setup. The hitch trace now has
+`setup_ms`, `mid_ms` and `tail_ms` columns (setup to the pre-draw loop, the
+pre-draw loop to recording, recording to the present), and with
+`RSX_HITCH_LOG` set a setup over 100 ms prints `[hitch-setup]` with each
+setup step and the target pre-pass split into retired, existing, new,
+evicted and recreated targets. Every stall was the pre-pass recreating
+targets, 10-59 in one frame: the pre-pass asks for each draw's target in
+draw order, a target only ever grows, and loading frames draw one surface
+under rising clips (256x256 to 511 rows; 1707x720 to 1437 rows), so the
+target was recreated at each step. Each recreation copied its whole
+contents in from guest memory again (`initial contents` 105-251 ms of
+it). The pre-pass runs before any recording, so those intermediate sizes
+were never drawn into.
+
+**Change.** `RSX_RT_FRAME_MAX` (on; `=0` the old growth, also off with
+`RT_NO_GROW`): a first pass collects the largest extent each surface
+(address and format) is drawn at this frame, and each draw asks for that,
+so the target is created once at the size it would have ended at. The
+extent rule is unchanged, moved into `rt_draw_extent`. A per-draw index
+avoids a search in the second pass.
+
+**Verified** (21:9, 2x MSAA, 16x aniso):
+
+| Check | Off (`=0`) | On |
+| --- | --- | --- |
+| Cold unraced track, 3 runs: setups over 100 ms | 3 per run (2 earlier runs), 80 recreations | 0, 0 recreations; largest setup 52-54 ms |
+| Warm HSR FrameTest | 54.4 / 54.2 / 54.7 / 53.7 / 55.1 FPS | 53.6 / 53.7 / 52.8 / 54.9 / 55.3 FPS |
+| Car list, last 20 s | 51.3 / 47.9 / 49.9 FPS | 45.5 / 43.2 / 53.3 FPS |
+| Boots to the menu | - | 3 of 3, no crash or stall line |
+
+Warm races and the car list differ within their spread (the first race pair
+read 0.6 FPS lower, the next three did not). Cold FrameTest: 43.3, 47.9 and
+47.2 FPS, max interval 207-226 ms; the stalls fixed here were at loading,
+outside its 60-s window.
+
 ## 21:9 opening screens pillarboxed at any display size (2026-11-14)
 
 At 21:9 the WARNING, copyright and Polyphony Digital screens before the
