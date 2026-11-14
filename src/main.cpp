@@ -781,6 +781,13 @@ static int locate_project_root(void)
  *   start-up (Phase 22). Must be set before the first runtime thread.
  * - PS3_PPU_CORES=topo-ht: separate physical cores, both hardware threads of
  *   each (Phases 91, 102). =3 old placement, =topo one thread per core.
+ * - PS3_PPU_PRIO_LOW=lowest, GT5 only: the guest's lowest band (priority
+ *   above 1001, where GT5 puts its frame thread at 2240) runs at LOWEST
+ *   instead of IDLE. At IDLE the frame thread got no CPU for 150-360 ms in
+ *   the worst race frames while other programs and the shader builders ran
+ *   (WPR trace, docs/progress-gt5.md). =idle the old level.
+ *   PS3_PPU_PRIO_LOW_MAX=2240: only up to the frame thread's priority; the
+ *   whole band (=0) cost about 1 FPS in quiet races.
  * - PS3_USLEEP_SKIP_LR: skip the title's frame-pacer sleep (Phase 106);
  *   GT5P_PACER_PAD=1 keeps it.
  * - PAD_MILESTONE_FILES, RSX_SCOPE_LABELS, GT5P_SCREEN_ROLES,
@@ -819,6 +826,8 @@ static void apply_env_defaults()
     const struct { const char* name; const char* value; bool when; } defaults[] = {
         {"PS3_PPU_PRIO_SCHED",   "2",                true},
         {"PS3_PPU_CORES",        "topo-ht",          true},
+        {"PS3_PPU_PRIO_LOW",     "lowest",           gt5},
+        {"PS3_PPU_PRIO_LOW_MAX", "2240",             gt5},
         {"PS3_USLEEP_SKIP_LR",   GT5P_PACER_LR,      pacer},
         {"PAD_MILESTONE_FILES",  GT5P_SCREEN_FILES,  race_scope},
         {"RSX_SCOPE_LABELS",     GT5P_SCOPE_LABELS,  race_scope},
@@ -897,7 +906,8 @@ int main(int argc, char* argv[])
     apply_env_defaults();
 
     /* Those guest threads share four logical CPUs, and PS3_PPU_PRIO_SCHED (apply_env_defaults) gives most of them normal host
-     * priority or less (the thread that prepares frames is "normal", the title's timer service "idle").
+     * priority or less (in Prologue the thread that prepares frames is "normal", the title's timer service "idle"; GT5's
+     * frame thread sits in the idle band, which no class lifts, hence PS3_PPU_PRIO_LOW=lowest for GT5).
      * In a normal-class process any other program's CPU work that Windows places on those CPUs runs at the
      * same level or above and takes whole scheduler slices from them, while the rest of the machine is
      * idle for them because they may not move: runs of 100 to 300 ms frames with the renderer waiting for

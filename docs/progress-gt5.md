@@ -4,6 +4,48 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## The frame thread out of the IDLE band (2026-11-14)
+
+**Change.** `PS3_PPU_PRIO_LOW` (runtime, default `idle` = unchanged) sets the
+host level of the guest's lowest band (priority above 1001), and
+`PS3_PPU_PRIO_LOW_MAX=<n>` limits it to guest priorities up to n (the rest
+stay IDLE; a lower PS3 number is the higher priority, so the title's order is
+kept). GT5 sets `lowest` and `2240` in `apply_env_defaults`: its frame thread
+`gFKsE` and `9qstY` (2240) and `Z11K6`/`Z1kIS` (2232) run at LOWEST, Windows 8
+in the above-normal class, instead of 1. The class change Prologue made
+(`GT5P_PRIORITY_CLASS`, its Phase 237) lifts every level except IDLE, so it
+never reached GT5's frame thread. Thread sampling 100 s in confirms 4-6
+threads at 8 (1 before).
+
+**The whole band was tried first and rejected.** Lifting all 24 idle-band
+threads (`PS3_PPU_PRIO_LOW_MAX=0`) cost about 1 FPS in quiet warm races:
+FrameTest 53.0/51.3/53.7/50.8 against 53.5/52.3/54.5/52.9, lower in all four
+pairs, with more late frames. The 2614-2624 group (eight `ksF3`, `n3FKY`,
+`ZYWr6`, `OEyq`) is left at IDLE.
+
+**Verified** (21:9, 2x MSAA, 16x aniso; A = `PS3_PPU_PRIO_LOW=idle`, D = default):
+
+| Check | A | D |
+| --- | --- | --- |
+| Warm HSR FrameTest, quiet | 54.0 / 54.6 FPS | 54.4 / 53.3 FPS (one pair each way) |
+| Warm HSR, background load (one normal-priority process per CPU, 3 ms busy in 10) | 53.3 / 49.6 FPS; race stalls 2 (0.04 s) / 15 (0.64 s); worst 54 / 116 ms | 53.4 / 52.5 FPS; stalls 0 / 0; worst 44 / 47 ms |
+| Cold unraced track (-Track 3) | race excess 4.87 / 2.52 s | 2.65 / 3.81 s (spread dominates) |
+| Car list, last 30 s | 47.9 / 47.4 / 47.7 FPS | 46.1 / 49.4 / 52.6 FPS |
+| Race clock (HUD time over 50.5 s) | 0.999 | 0.996 |
+| Boots to the menu | - | 5 of 5, no crash or stall line |
+| Race sound | - | 0% silent, no NaN/Inf, 1-2 underruns |
+
+Two single car-list pairs had read 2 FPS lower with the fix; six alternating
+runs show that was spread (the list's first seconds settle differently each
+visit). The gain is under background load, which is when the profiled frames
+starved; on an idle PC the two settings measure the same.
+
+**Test routes.** A miss into GT Life happened with both settings whenever
+the menu compiled shaders (a cache without the 21:9 pipelines), so the
+earlier attribution of misses to the helper threads alone was too strong;
+keeping helpers off the PPU CPUs stays as a precaution. Scripts that loop
+over runs must retry a miss (`gt5boot.ps1` now ends one at once).
+
 ## The worst frames profiled: the render thread runs at Windows IDLE (2026-11-14)
 
 **Method.** One cold race on an unraced track (`-Track 3`, empty cache,

@@ -64224,7 +64224,7 @@ index 2e760ea5..7788f6ff 100644
  
  #ifdef _WIN32
 diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread.c
-index fb3906ae..0a2df2d0 100644
+index fb3906ae..2c111b07 100644
 --- a/runtime/syscalls/sys_ppu_thread.c
 +++ b/runtime/syscalls/sys_ppu_thread.c
 @@ -45,6 +45,22 @@ ppu_thread_info       g_ppu_threads[PPU_THREAD_MAX];
@@ -64298,7 +64298,7 @@ index fb3906ae..0a2df2d0 100644
      *name = t->name;
      return 1;
  }
-@@ -314,13 +341,241 @@ void ppu_prof_stamp(void* vctx, unsigned lr)
+@@ -314,13 +341,258 @@ void ppu_prof_stamp(void* vctx, unsigned lr)
      ppu_thread_info* t = (ppu_thread_info*)p;
      int in_range = (t >= g_ppu_threads && t < g_ppu_threads + PPU_THREAD_MAX);
      if (!in_range) { s_prof_main_pc = lr; return; }
@@ -64446,12 +64446,29 @@ index fb3906ae..0a2df2d0 100644
 +    if (n <= 0 || !h) return;
 +    static int band = -1;
 +    if (band < 0) { const char* e = getenv("PS3_PPU_PRIO_BAND"); band = e ? atoi(e) : 220; }
++    /* PS3_PPU_PRIO_LOW: the host level of the lowest guest band (above 1001). "idle" (default) is
++     * THREAD_PRIORITY_IDLE, Windows priority 1 in every class: on the PPU such a thread still runs
++     * whenever the title's higher ones wait, but on a PC it runs only when no other program wants
++     * the CPU. GT5 makes its frame thread 2240, and a WPR trace of its worst race frames showed it
++     * runnable but unscheduled for 150-360 ms while other programs and the renderer's own builders
++     * held its CPUs (GT5, 2026-11-14). "lowest": THREAD_PRIORITY_LOWEST, still below every other
++     * guest band, so the title's own order is kept. */
++    /* PS3_PPU_PRIO_LOW_MAX=<n>: with "lowest", only guest priorities up to n take LOWEST and the
++     * rest of the band stays IDLE (a lower PS3 number is the higher priority, so the title's order
++     * is kept). Lifting the whole band cost about 1 FPS in quiet races (GT5: its 2614-2624 worker
++     * pool then took CPU from more important threads); GT5's frame thread is 2240. 0: no limit. */
++    static int low = -1, low_max = -1;
++    if (low < 0) {
++        const char* e = getenv("PS3_PPU_PRIO_LOW"); low = e && !_stricmp(e, "lowest") ? THREAD_PRIORITY_LOWEST : THREAD_PRIORITY_IDLE;
++        const char* m = getenv("PS3_PPU_PRIO_LOW_MAX"); low_max = m ? atoi(m) : 0;
++    }
 +    const int lvl = prio <= 1    ? THREAD_PRIORITY_TIME_CRITICAL
 +                  : prio < band  ? THREAD_PRIORITY_HIGHEST
 +                  : prio < 400   ? THREAD_PRIORITY_ABOVE_NORMAL
 +                  : prio < 800   ? THREAD_PRIORITY_NORMAL
 +                  : prio < 1000  ? THREAD_PRIORITY_BELOW_NORMAL
 +                  : prio <= 1001 ? THREAD_PRIORITY_LOWEST
++                  : (low_max <= 0 || prio <= low_max) ? low
 +                  :                THREAD_PRIORITY_IDLE;
 +    /* PS3_PRIO_CACHE (on; =0 off): a thread whose host level is already this
 +     * one is left alone. GT5's game thread changes its guest priority many
@@ -64543,7 +64560,7 @@ index fb3906ae..0a2df2d0 100644
  int64_t sys_ppu_thread_create(ppu_context* ctx)
  {
      uint32_t tid_out_addr = LV2_ARG_PTR(ctx, 0);
-@@ -404,9 +659,9 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
+@@ -404,9 +676,9 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
          *out = be_id;
      }
  
@@ -64555,7 +64572,7 @@ index fb3906ae..0a2df2d0 100644
      /* YDKJ: dump the worker arg-object: func_000750A8 (thread body) does
       * this=[arg+0x8], vtable=[arg+0xC], method=[vtable+0]. If this(+0x8) is null
       * the worker dispatches its job on a null object -> construction never runs. */
-@@ -441,6 +696,9 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
+@@ -441,6 +713,9 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
      unsigned _initflag = STACK_SIZE_PARAM_IS_A_RESERVATION;
      int _gate_this = (g_gate_on > 0 && entry >= 0x10000 && entry < 0x10000000);
      if (_gate_this) _initflag |= CREATE_SUSPENDED;
@@ -64565,7 +64582,7 @@ index fb3906ae..0a2df2d0 100644
      t->host_thread = (HANDLE)_beginthreadex(NULL, 256u * 1024 * 1024,
                                    (unsigned (__stdcall*)(void*))ppu_host_thread_proc, t,
                                    _initflag, (unsigned*)&t->host_tid);
-@@ -460,6 +718,8 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
+@@ -460,6 +735,8 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
       * ponytail: two host levels only; map the full range if a title needs it. */
      if (priority < 256)
          SetThreadPriority(t->host_thread, THREAD_PRIORITY_ABOVE_NORMAL);
@@ -64574,7 +64591,7 @@ index fb3906ae..0a2df2d0 100644
  #else
      /* Same reservation, for the same reason. This is the HOST stack the
       * recompiled C frames run on, not the guest stack (allocated above out of
-@@ -499,6 +759,12 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
+@@ -499,6 +776,12 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
  #endif
  
      table_unlock();
@@ -64587,7 +64604,7 @@ index fb3906ae..0a2df2d0 100644
      return CELL_OK;
  }
  
-@@ -600,8 +866,17 @@ int64_t sys_ppu_thread_join(ppu_context* ctx)
+@@ -600,8 +883,17 @@ int64_t sys_ppu_thread_join(ppu_context* ctx)
  #endif
      }
  
@@ -64606,7 +64623,7 @@ index fb3906ae..0a2df2d0 100644
      table_lock();
      CloseHandle(t->host_thread);
      CloseHandle(t->finish_event);
-@@ -1155,6 +1430,9 @@ int64_t sys_ppu_thread_set_priority(ppu_context* ctx)
+@@ -1155,6 +1447,9 @@ int64_t sys_ppu_thread_set_priority(ppu_context* ctx)
      }
  
      t->priority = priority;
@@ -64616,7 +64633,7 @@ index fb3906ae..0a2df2d0 100644
      table_unlock();
      return CELL_OK;
  }
-@@ -1303,3 +1581,14 @@ void sys_ppu_thread_init(lv2_syscall_table* tbl)
+@@ -1303,3 +1598,14 @@ void sys_ppu_thread_init(lv2_syscall_table* tbl)
      lv2_syscall_register(tbl, SYS_PPU_THREAD_GET_STACK_INFORMATION, sys_ppu_thread_get_stack_information);
      lv2_syscall_register(tbl, SYS_PPU_THREAD_RENAME,              sys_ppu_thread_rename);
  }

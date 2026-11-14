@@ -228,6 +228,11 @@ CPUs; queue 1024 with a hash index; learning ring drained in batches.
 Switches `RSX_PSO_DEMAND_THREADS`, `_PRIORITY_USES`, `_DEMAND_AFFINITY`,
 `_LEARN_BATCH`. Never let a new builder thread share the guest PPU CPUs:
 it delays menus. See progress-gt5.md.
+GT5's frame thread (guest priority 2240) was mapped to Windows IDLE and
+starved for 150-360 ms in the worst frames (WPR trace; `worst_frames.py`,
+`etw_frames.py`). GT5 now sets `PS3_PPU_PRIO_LOW=lowest` with
+`PS3_PPU_PRIO_LOW_MAX=2240`; lifting the whole band cost ~1 FPS. Shader
+builders take `RSX_SHADER_WORKER_PRIO_RACE` (idle) in races.
 
 **Disc-only setup (2026-11-14).** With only the disc folder, the launcher
 downloads the pinned official RPCS3 (`rpcs3_*` in `config/pt5-player.json`)

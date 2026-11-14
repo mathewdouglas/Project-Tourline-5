@@ -20,6 +20,13 @@ versions follow [SemVer](https://semver.org/).
   keep the normal priority. `RSX_SHADER_WORKER_PRIO_RACE=same` turns it off.
 
 ### Fixed
+- **Hitches when other programs are busy.** The game's frame thread ran at
+  Windows' lowest priority (idle), so a browser, a virus scan or the game's
+  own shader compiling could take its CPU for hundreds of milliseconds. It
+  and three threads of equal or higher PS3 priority now run at "lowest"
+  instead, still below every other game thread. Under background load: race
+  stalls 2-15 -> 0, worst frame 54-116 -> 44-47 ms; unchanged on an idle PC.
+  `PS3_PPU_PRIO_LOW=idle` restores the old priority.
 - Learned pipelines are no longer dropped on a busy first visit, so the next
   visit prepares all of them (`RSX_PSO_LEARN_BATCH=1` restores the old pace).
 
