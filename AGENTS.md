@@ -66,8 +66,9 @@ differences, live checks and offline preparation contract.
 
 **2.11 update executable (planned, branch `feat/gt5-v211`).** Plan in
 [docs/plan-gt5-v211.md](docs/plan-gt5-v211.md): a second target
-`BCUS98114-v211` for the master mod's base. 2.11 is the last content
-update, not the last update (2.17). No 2.11 inputs are on this machine yet;
+`BCUS98114-v211` for the master mod's base. 2.11 exactly (the last content
+update; 2.17 is refused). One launcher and one ZIP carry both engines, and
+owned DLC must work offline. No 2.11 inputs are on this machine yet;
 never upgrade the 01.04 RPCS3 install in place. Every v104 value is listed
 there with how to re-derive it; carry none across.
 

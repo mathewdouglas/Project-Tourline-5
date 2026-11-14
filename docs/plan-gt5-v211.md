@@ -10,6 +10,18 @@ The current target is `BCUS98114-v104`, the 01.04 executable that the disc's
 `BCUS98114-v211`, for the 02.11 executable, and then loading the "GT5 Master
 Mod" on top of it.
 
+**Decisions by the user (2026-11-14)**, which settle three of the original
+open questions:
+
+1. **The target is 2.11 exactly.** Not 2.17 or any other version. Setup
+   refuses any other `APP_VER` with a message that names 02.11.
+2. **There is one launcher and one player ZIP.** There is no separate 2.11
+   package. `tourline5.exe` recognises which version the player has and
+   starts the matching engine (section 5).
+3. **DLC must work offline.** There are no PSN services, and no purchase or
+   download inside the game. DLC the player owns and installed works once
+   imported (section 4, "DLC offline").
+
 ## 0. Corrections to the brief
 
 - **2.11 is not GT5's final update** (from source). Polyphony's notices run on
@@ -70,16 +82,17 @@ under `<storage>\tools` is another option).
 3. **The master mod archive** for the US region and 2.11 (the guide says to
    pick "the latest version and region corresponding to your game"; search
    titles show "[1.9.2] GT5 Master Mod", unconfirmed).
-4. Optional: DLC. The guide recommends DLC "unlocked" through the mod's debug
-   menu rather than requiring purchased packs. Whether DLC content files
-   (and their `.edat` licences, which need `.rap` keys) are needed at all is
-   open; keys never go into this repository either way.
+4. **For DLC:** the player's own DLC, installed and licensed in their
+   RPCS3. That means the DLC `.pkg` files installed, plus the player's
+   `.rap` licence files under RPCS3's `dev_hdd0/home/<user>/exdata`. Section
+   4, "DLC offline", covers how these are imported. Licences never go into
+   this repository or the player ZIP.
 
 ### Identity to pin
 
 `config/pt5-player.json` pins one executable (`elf_sha256`, `elf_bytes`) and
 the disc package. 2.11 needs its own entry: the 02.11 ELF hash and size, the
-expected `APP_VER` (hypothesis: `02.11`), and the installed data's file count
+expected `APP_VER` (hypothesis: `02.11`; any other value is refused), and the installed data's file count
 and bytes after all updates. If update packages are accepted as setup inputs,
 also each package's name, size and SHA-256, in install order. All of these
 are measured from the user's files in milestone M0; none are known now.
@@ -165,7 +178,17 @@ install path in 2.17. Likely new or more-used imports: `sceNpDrm*`
 (DLC licences; the runtime has `edat.h` but no `sceNpDrm` library was found
 by name), `sceNpCommerce2`, `cellGame` content-permit calls for DLC, and NP
 matching/signalling for the lounge. The servers closed in 2014, so every NP
-service must answer "offline" cleanly rather than be implemented.
+service must answer "offline" cleanly rather than be implemented. The one
+exception is the local licence check for DLC (section 4, "DLC offline").
+
+**Measured for v104 (static, `analysis/gt5v104/hle_stubs_named.json`):**
+01.04 already imports `sceNpDrmIsAvailable` and 30 `sceNpCommerce2`
+functions, along with `cellGameContentPermit`/`cellGameDataCheck`. The
+isolated runtime has no handler named `sceNpDrm*` (by name search). It
+decrypts EDAT files on open (`libs/filesystem/edat.c`, `PS3_EDAT`). That
+covers free-licence EDATs without extra input, and paid ones given a RIF key
+(`PS3_RIF_KEY` or a `<file>.rifkey` sidecar). It deliberately cannot turn a
+`.rap` into that key.
 
 **How to measure (M1, static, no run):**
 
@@ -225,9 +248,70 @@ scripts and data inside `PDIPFS`, and the 2.11 executable is unmodified.
    `cellNetCtl`, plus XLink Kai on the host side. Out of scope until offline
    play works; listed as an open question.
 
+### DLC offline
+
+**Goal.** Owned DLC works with no network. GT5's in-game shop and
+re-download rely on PSN, which is gone. The game must find the installed
+packs, accept their licences and read their content.
+
+**What is not known yet (hypotheses to measure in M11):**
+
+- **Where the DLC lives.** Hypothesis: each pack installs as `PDIPFS` files
+  or EDATs under `dev_hdd0/game/BCUS98114/USRDIR`, the way RPCS3 places
+  them. Part of some packs may already be in the 2.x update data, with
+  the pack acting only as a licence.
+- **How 2.11 detects DLC.** The candidates are a directory scan,
+  `sceNpDrmIsAvailable` on each pack's EDAT, a licence file under
+  `exdata`, or the game's own database.
+- **Which licence type the packs use.** Type 3 ("free") EDATs decrypt
+  already. Paid ones (type 1/2) need the player's own licence.
+- **What the mod's "DLC unlock" does.** It may make DLC items visible
+  without packs installed, which would then fail on content reads, or it may
+  need the packs.
+
+**How to measure.** First statically: imports, and strings such as
+`addcont`, `.edat`, `exdata` and the DLC content ids in the 2.11 ELF. Then
+a 2.11 RPCS3 install with the player's DLC: list the files each `.pkg`
+added, read their NPD headers (licence type, content id), and log a first
+boot in RPCS3 to see which files and which `sceNpDrm*` calls happen. In the
+port, `PAD_FILE_LOG=2` and `PS3_HLE_TRACE` do the same.
+
+**Design (proposal).**
+
+1. **Import, not purchase.** Setup imports what the player's RPCS3
+   already holds: the DLC files under the game folder, verified by count and
+   size like the base data. There is no DLC `.pkg` install route at first;
+   the update-PKG route (T17) can take DLC packages later.
+2. **Licences without keys in this project.** The launcher must not carry
+   PS3 keys (the existing rule), so it cannot turn a `.rap` into a key
+   itself. In order of preference:
+   - **a. Decrypt at setup with RPCS3.** RPCS3 decrypts each DLC EDAT with
+     the player's `.rap`, and setup stores plain files in storage, as it
+     does for the ELF. The runtime then reads plain files and its EDAT path
+     is never used. Hypothesis: RPCS3's *Decrypt PS3 Binaries* accepts
+     `.edat`/`.sdat`. Verify this before relying on it; if it does not,
+     use b.
+   - **b. A per-file RIF key the player supplies.** This is the runtime's
+     existing `.rifkey` sidecar, made by a third-party tool the player runs
+     themselves. It works, but it is a manual step, so it is a fallback only.
+3. **An offline licence answer.** `sceNpDrmIsAvailable` (and any other
+   `sceNpDrm*` 2.11 imports) answers OK only for content whose file is
+   present and readable. With a missing file it answers with the real
+   "no licence" error, so the game hides the pack as a console without it
+   would. `sceNpCommerce2` answers as a console that cannot sign in: the
+   shop says it is unavailable, and nothing hangs. Each behaviour gets an
+   env switch (proposed `PS3_NPDRM_LOCAL=0` restores the generic stub).
+4. **Storage.** DLC sits with the 2.11 data under `targets/BCUS98114-v211/`
+   and is verified separately. The F1 page and launcher list the packs
+   found. Removing a pack is a launcher action, not a manual file delete.
+5. **With the mod.** The overlay (item 2 above) applies to DLC paths as
+   well. If the mod's unlocks expose packs that are not installed, that is
+   the mod's behaviour, recorded rather than fixed.
+
 **Legal and distribution.** Unchanged rules: no game files, update
-packages, mod files, keys or `.rap` files are tracked, packaged or
-downloaded by this project. The player supplies the mod archive and
+packages, mod files, DLC, keys or `.rap`/`.rifkey` files are tracked, packaged or
+downloaded by this project. Decrypted DLC stays in the player's own storage,
+like the decrypted ELF. The player supplies the mod archive and
 updates. The mod states no licence (the guide credits contributors in the
 mod's readme); before the launcher names or recognises the mod by hash, ask
 the author. `check_no_game_files.py` already refuses `PDIPFS`-shaped files;
@@ -255,8 +339,8 @@ each one is checked on both (switch-gated, as every behaviour already is).
 | Storage | one storage root, `targets/<target>/` underneath for `input/`, `gamedata/`, `shadercache/`; saves are per target because a 2.11 save cannot go back to 01.04 (hypothesis: the game upgrades saves) |
 | Shader caches | per target. Pipeline keys are content hashes, so sharing may work, but learned menu/race sets, the race pack and the fast-lookup table are per executable and data; measure overlap later before sharing |
 | PGO | one profile per target, made from that target's lift (`pgo.py` takes `--target`) |
-| Launcher | `setup.ini` `target=` already exists; setup asks which version, verifies that target's identity, and starts that target's engine; `pt5-player.json` becomes a map of targets |
-| Release | an experimental separate 2.11 ZIP first (each engine is about 176 MB); merge into one ZIP once 2.11 reaches parity. `clean_build.py`/`package_player.py` take `--target` |
+| Launcher | one `tourline5.exe` for both. Setup reads the selected install's `PARAM.SFO` and ELF hash: 01.04 selects `BCUS98114-v104`, 02.11 selects `BCUS98114-v211`, and anything else is refused by name, so 2.17 says "GT5 2.11 is required" and is never half-accepted. `setup.ini` `target=` (already present) records the result. Both versions may be set up side by side, each in its own storage subtree, with a version choice on the launcher page. `pt5-player.json` becomes a map of targets. F1 restarts and crash reports carry the target |
+| Release | **one player ZIP** holding the launcher and both engines (`gt5.exe`, `gt5_211.exe`; each about 176 MB before compression), each PGO-built from its own profile. `clean_build.py` lifts and builds every target listed in the release config and `package_player.py` packages them all. Until M8 the 2.11 engine is labelled "experimental" in the launcher, and a release blocks if it fails M6 |
 | Setup route for 2.11 | first: import an existing RPCS3 2.11 install plus `EBOOT.elf` (the existing import path, with `APP_VER` 02.11). Later: install a folder of the player's update PKGs in order with the launcher's RPCS3, pinned by hash, as the disc route does for `DATA000.PKG` |
 
 ### Milestones
@@ -272,8 +356,9 @@ each one is checked on both (switch-gated, as every behaviour already is).
 | M6 | Race | Arcade HSR race runs; `gt5boot.ps1 -Route race` works with new milestones |
 | M7 | Feature parity | ultrawide, F1 pause, prompts, skip movie, race scope, race pack |
 | M8 | Performance parity | SPU tuning keys re-derived, HSR/Eiger/car list within noise of v104, PGO profile |
-| M9 | Multi-target product | launcher/release support both, setup route for 2.11 |
+| M9 | Multi-target product | one launcher and one ZIP carry both; setup detects 01.04/02.11 and refuses others; clean-machine install of each from the ZIP |
 | M10 | Master mod | overlay switch, mod's debug menu reachable, Arcade race with mod data |
+| M11 | DLC offline | DLC layout and licence type measured; owned packs imported, listed and usable in a race with the network off; missing packs hidden cleanly; shop reports unavailable without hanging |
 
 ## 6. Ordered tasks
 
@@ -296,27 +381,34 @@ warning to menu took Phases 7-12, mostly runtime fixes that 2.11 inherits.
 | T11 | Re-derive SPU tuning keys (native hooks, regions, FMA, audio images) with exactness tests | M | T6, T9 |
 | T12 | Performance check against v104 on HSR, Eiger, car list; PGO profile | M | T11 |
 | T13 | Multi-target source layout (`input/<target>`, script paths, release `--target`) | M | T6 |
-| T14 | Launcher: target choice, per-target storage, 2.11 import route | L | T2, T13 |
+| T14 | Launcher: version detection (01.04/02.11, others refused), per-target storage, 2.11 import route, version choice when both are set up | L | T2, T13 |
+| T14a | Release: `clean_build.py`/`package_player.py` build and package both engines into one ZIP; per-target PGO; "experimental" label until M8 | M | T12, T13, T14 |
 | T15 | Runtime `PS3_FS_OVERLAY` and launcher mod folder | M | T8 |
 | T16 | Master mod test: inspect the archive first (data only?), then menu, debug menu, race | M | T15, user's archive |
 | T17 | Update-PKG install route in the launcher (pinned hashes, in order) | L | T14, T2 |
 | T18 | Optional: LAN mode over `sysNet` | L | T16 |
+| T19 | DLC triage: static strings/imports in the 2.11 ELF; per-pack file lists and NPD headers from the player's RPCS3 install; RPCS3 log of DLC detection | M | T1, T3, player's DLC |
+| T20 | Check whether RPCS3 decrypts DLC EDATs from the command line or GUI with the player's `.rap` (setup route a); fall back to `.rifkey` (route b) | S | T19 |
+| T21 | Runtime: offline `sceNpDrm*` answer from local files, offline `sceNpCommerce2` (switch-gated); unit tests with synthetic EDATs | M | T19 |
+| T22 | Launcher: import, verify and list DLC; remove a pack; M11 race with the network off | M | T14, T20, T21 |
 
 ## 7. Open questions for the user
 
-1. Which update packages do you have, and is 2.11 (last content update)
-   the intended target rather than 2.17 (the last update)?
+Answered on 2026-11-14 (see the top): the target is 2.11 exactly; one
+launcher and one ZIP; DLC works offline.
+
+1. Which update packages do you have (01.05 to 02.11)?
 2. May 2.11 be installed into a second RPCS3 folder, keeping the 01.04
    install as the reference for v104 work?
-3. For the release: a separate experimental 2.11 ZIP first, or wait for
-   parity and ship one ZIP with both?
-4. Should 2.11 eventually replace v104 as the default target?
-5. Which master mod version, and has it been checked whether the archive
+3. When both versions are set up, which does the launcher start by
+   default? Should 01.04 support ever be dropped?
+4. Which master mod version, and has it been checked whether the archive
    holds anything outside `PDIPFS` (an EBOOT, patches)?
-6. DLC: do you own any GT5 DLC, and should the port support DLC content and
-   licences at all, or only what the mod's debug menu unlocks?
-7. Is LAN mode wanted, or is offline play with the mod enough?
-8. Other regions: the mod also supports EU/JP/Asia, and an EU 02.07 install
+5. DLC: which packs do you own, and are they installed in an RPCS3 with
+   their `.rap` files? Is a manual `.rifkey` step acceptable as a fallback
+   if RPCS3 cannot decrypt DLC EDATs (section 4, "DLC offline")?
+6. Is LAN mode wanted, or is offline play with the mod enough?
+7. Other regions: the mod also supports EU/JP/Asia, and an EU 02.07 install
    is on this machine. Out of scope for now?
 
 ## Sources
