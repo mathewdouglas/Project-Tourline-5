@@ -451,9 +451,26 @@ launcher then replaces verified copies.
   seeks, stat, copy on write, truncation, refused writes, a changed or
   missing volume, and modes 0 and 2. It passes, and fails as expected when
   records are off.
+- **In game (2026-11-15, run `vm1`).** A private copy of the 01.04
+  install (`scratch/vmroot`, 6.7 GB) was converted with `volmap.py`: 12,406
+  files became records (6.26 GiB) in 98 s, leaving 435 MB. The test exe was
+  linked from the main checkout's 0.1.5 objects, with `cellFs.c` and
+  `volmap.c` recompiled from the private runtime (`scratch/vmbuild`). It
+  was run with a cold shader cache, `GT5P_ROOT` set to the copy and
+  `GT5P_GAME_DIR` set to the disc dump.
+  - `gt5boot.ps1 -Route race` reached the menu (29.3 s), then Arcade, the
+    track and car lists, race loading, the grid and the race start
+    (+58.0 s). The race at High Speed Ring draws normally, with full frame
+    rate once shaders are built.
+  - Records were served from `GT.VOL` (the first 8 `[volmap] Open` lines
+    are logged). No `CELL_EIO`, nothing turned back into a file, and no
+    `.vmtmp` files were left.
+  - One failed open, `PDIPFS/K/7M`, also appears in the 0.1.5 release
+    smoke run without records.
+  - Not measured: load time against full copies on a matched shader cache.
 - **Still open.**
-  - A live boot and race with converted data: blocked while the game slot
-    was in use.
+  - The launcher's own conversion (`link_installed_data`) has not been run;
+    only `volmap.py` has, and the two share the format and method.
   - A launcher restore path for `PT5_VOLMAP=0` after conversion. Until then,
     use `volmap.py restore`.
   - A player-setup test that drives the launcher's import with records.

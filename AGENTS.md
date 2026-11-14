@@ -79,7 +79,7 @@ off, `=2` full check per open; writes turn a record back into the file first). T
 converts during import and after the game's own first-boot install (`launcher/volmap.h`,
 `PT5_VOLMAP=0` off; only with an engine whose `pt5-release.ini` says `volmap=1`).
 `scripts/volmap.py convert|restore|verify|stats` is the reference tool. Test:
-`scripts/test/volmap_fs.py`. Not yet run in game. See docs/plan-gt5-v211.md (T23).
+`scripts/test/volmap_fs.py`. A converted install (6.7 GB -> 435 MB) reached a race in game; the launcher's own conversion is not yet run. See docs/plan-gt5-v211.md (T23).
 
 **Prologue renderer ports (GT5 Phase 47).** All default on, measured at High Speed Ring:
 `RSX_PSO_FAST_LOOKUP` (learned table `warmup-v1/fp-lookup-gt5-v1-<tag>.bin`: a miss whose mapped
