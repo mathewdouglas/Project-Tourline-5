@@ -48,9 +48,9 @@ open questions:
 | RPCS3 `dev_hdd0/game/BCUS98114` | RPCS3 folder in `AGENTS.local.md` | `APP_VER` **01.04**, `PS3_SYSTEM_VER` 03.5000; `EBOOT.BIN` 26,708,368 bytes plus a decrypted `EBOOT.elf` 26,705,632 bytes (= `pt5-player.json` size); 16,450 files under `USRDIR/PDIPFS` (package plus the in-game install), `db/`, `grim2/`, `installed00.dat` |
 | RPCS3 `dev_hdd0/game/BCES00569` | same | **EU GT5, `APP_VER` 02.07**, `PS3_SYSTEM_VER` 04.1000. `EBOOT.BIN` 9,486,240 bytes (an SCE container; compressed, not decrypted). 11,784 `PDIPFS` files, 2.9 GB, no `installed00.dat` or `db/` |
 | RPCS3 `dev_hdd0/game/NPEA00502` | same | GT6 demo, `APP_VER` 01.05; unrelated |
-| GT5 update PKGs (any version) | searched `Downloads`, `Desktop`, `D:\Games` to depth 5 | **none found** |
+| GT5 update PKGs | user-supplied, 2026-11-15 | **02.11 only**: `UP9000-BCUS98114_00-0000000000000000-A0211-V0100-PE.pkg`, 46,668,464 bytes. Extracted with the runtime's `tools/pkg_extract.py` into `input/v211/pkg/` (ignored): 152 files. `PARAM.SFO`: `APP_VER` 02.11, `TARGET_APP_VER` **02.10**, `PS3_SYSTEM_VER` 04.1000. It holds `EBOOT.BIN`, `TROPHY.TRP`, `PDIPFS/K/4D` (160 bytes, differs from 01.04's) and 145 files under `PDIPFS/9/`. It installs only on top of 02.10. |
 | Master mod archive | same search | **none found** |
-| 2.11 decrypted executable | | **none** |
+| 2.11 decrypted executable | `input/v211/EMAIN.ELF` (ignored) | 24,926,384 bytes, from `rpcs3.exe --decrypt` on a temp copy of the package's `EBOOT.BIN` (9,509,920 bytes, compressed SELF). Entry `0x171E4C8` (01.04: `0x1899940`). Last executable section ends at **`0xFA63A0`** (01.04: `0x11752A4`). 722 imports across 43 modules (01.04: 702 across 41). New modules: `cellSync` and `cellSysutilAvconfExt`. New NIDs: `cellGcmSys` +4, `cellSpurs` +2, `cellSysutil` +1, `sceNp` +5/-1, `sys_net` +5. |
 
 Two things follow from the EU 02.07 install, though it is another region:
 
@@ -65,6 +65,23 @@ The 01.04 RPCS3 install is the reference for every v104 measurement in
 `docs/progress-gt5.md`. **Do not upgrade it in place**: install 2.11 into a
 second RPCS3 folder (a portable copy; the launcher's own downloaded RPCS3
 under `<storage>\tools` is another option).
+
+**The update chain (Sony's public list, `BCUS98114-ver.xml`, read 2026-11-15).**
+It lists 27 packages, 01.05 to 02.17, each with size and SHA-1. Every
+package up to 02.11 is listed as a separate download: 01.05-01.13 (9),
+02.00 (1,191 MiB) and 02.01-02.10 (10). Together, 01.05-02.10 is about
+4.1 GiB. 02.11's `TARGET_APP_VER` of 02.10 means the chain is needed in
+order. Whether 02.00 targets 01.13 or an earlier version is read from its
+own `PARAM.SFO` when it is here.
+
+**Installing without RPCS3.** A package install writes the package's files
+into `dev_hdd0/game/<id>`; `pkg_extract.py` does the same. Extracting
+01.05 to 02.11 in order into a separate 2.11 game folder, with each SHA-1
+checked against Sony's list, gives the installed files without touching
+the 01.04 RPCS3 install. RPCS3 is needed only to decrypt the executable,
+which is already done. Any patching of installed data that the game does
+itself on its first boot after an update still runs in the port, and has
+yet to be measured.
 
 ### What the user must provide
 
