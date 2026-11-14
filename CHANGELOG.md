@@ -3,7 +3,26 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.1.5] - 2026-11-14
+
+Smoother first visits, fewer hitches when other programs are busy, and
+faster SPU work. Built with the same clean, profile-guided release pipeline.
+The player ZIP contains no game files; you need your own extracted BCUS98114
+disc (the folder containing `PS3_GAME`).
+
+### Highlights
+- **Faster:** about +4% FPS at High Speed Ring and +6% at rainy Eiger from
+  faster SPU integer helpers.
+- **Fewer hitches:** new places build their pipelines on several threads,
+  shader building gives way to the game in races, and the game's frame
+  thread no longer drops to idle priority.
+- **Shorter pauses on first loads**, and no frame-rate dip in the Arcade car
+  list when a car appears.
+- **Course Maker's map panel no longer flickers.**
+
+### Known issues
+- Course Maker at 21:9: the map is misplaced and right-hand labels are
+  clipped.
 
 ### Changed
 - **Faster integer SPU helpers.** SIMD forms of integer bitwise operations,
