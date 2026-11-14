@@ -117,9 +117,11 @@ patches installed files.
 01.04's hooks, screen files and addresses are not carried over.
 `build/gt5_211.exe` boots the installed 2.11 game folder through the
 warning, the logo, the first-boot install (accepted by `PAD_AUTO_INSTALL`,
-stored as records), save creation and the opening movie. The menu music then
-plays, but the screen stays on the GT logo: presents stop and every guest
-thread waits. That is the open item.
+stored as records), save creation and the opening movie. The logo-to-menu
+stall is now fixed: MAIN-memory RSX reports were never published to guest
+memory, leaving GPUSyncArray waiting on their completion words. The private
+2.11 build reaches the animated main menu; the rollback reproduces the stall.
+See [menu-stall investigation](gt5-v211-menu-stall.md) for evidence and limits.
 
 Fixes needed on the way:
 - **Sound jobs.** 2.11 changed `socisynth`, `socepdideq`, `socepdidist`
