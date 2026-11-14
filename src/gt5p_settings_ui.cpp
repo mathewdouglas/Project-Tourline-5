@@ -11,7 +11,7 @@
  * (rsx_d3d12_overlay_set). So it shows in fullscreen and in captures, and
  * keyboard and mouse are read while the game window has the focus.
  * It is styled after the game's own screens (Options, its Confirmation
- * popup). Escape in the game window asks "Quit Gran Turismo 5 Prologue?" in
+ * popup). Escape in the game window asks "Quit Gran Turismo 5?" in
  * a copy of that popup instead of closing at once (GT5P_ESC_CONFIRM=0: close
  * at once; GT5P_QUIT_UI=1 asks at start, for tests).
  * GT5P_SETTINGS_UI_LEGACY=1 (or RSX_OVERLAY=0) keeps the older form: a GDI
@@ -878,7 +878,7 @@ void paint_quit(HDC dc)
     SetBkMode(dc, TRANSPARENT);
     panel(dc, kQx0, kQy0, kQx1, kQy1);
     text_in(dc, fTitle, kQx0, kQy0 + 4, kQx1, kQy0 + 34, grey(178), L"Confirmation");
-    text_in(dc, fMsg, kQx0, 300, kQx1, 342, grey(236), L"Quit Gran Turismo 5 Prologue?");
+    text_in(dc, fMsg, kQx0, 300, kQx1, 342, grey(236), L"Quit Gran Turismo 5?");
     fill(dc, kQx0, 448, kQx1, 449, grey(76));
     button(dc, kQbtnX[0], kQbtnY, L"Cancel", s_quit_sel == 0);
     button(dc, kQbtnX[1], kQbtnY, L"OK", s_quit_sel == 1);
