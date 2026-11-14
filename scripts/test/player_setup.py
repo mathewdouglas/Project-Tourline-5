@@ -17,12 +17,15 @@ ROOT = Path(__file__).resolve().parents[2]
 WORK = Path(tempfile.mkdtemp(prefix='player-setup-', dir=ROOT / 'scratch'))
 ELF = b'\x7fELF synthetic executable for setup tests only\n'
 SHA = hashlib.sha256(ELF).hexdigest()
+ELF211 = b'\x7fELF synthetic 2.11 executable for setup tests\n'
+SHA211 = hashlib.sha256(ELF211).hexdigest()
 PKG = b'synthetic package'
 def write_config(rpcs3_sha='0' * 64, rpcs3_bytes=0):
     # The setup-owned RPCS3 is pinned to a local fixture archive; tests never download.
     (WORK / 'pt5_launcher_config.h').write_text(f'#define PT5_ELF_SHA256 L"{SHA}"\n#define PT5_ELF_BYTES {len(ELF)}ull\n'
         f'#define PT5_DISC_PKG_SHA256 L"{hashlib.sha256(PKG).hexdigest()}"\n#define PT5_DISC_PKG_BYTES {len(PKG)}ull\n'
         '#define PT5_DISC_PKG_INSTALLED_FILES 0ull\n#define PT5_DISC_PKG_INSTALLED_BYTES 0ull\n'
+        f'#define PT5_ELF_211_SHA256 L"{SHA211}"\n#define PT5_ELF_211_BYTES {len(ELF211)}ull\n'
         '#define PT5_RPCS3_URL L"https://invalid.example/rpcs3.7z"\n'
         f'#define PT5_RPCS3_SHA256 L"{rpcs3_sha}"\n#define PT5_RPCS3_BYTES {rpcs3_bytes}ull\n'
         '#define PT5_SEVENZIP_URL L"https://invalid.example/7zr.exe"\n'
@@ -44,17 +47,31 @@ for key, value in {'PROJECT_VERSION': '0.1.0', 'PROJECT_VERSION_MAJOR': '0',
 #include <fstream>
 #include "pt5_restart.h"
 int main(int argc, char** argv) {
-    if (argc > 1 && !strcmp(argv[1], "--allow-any-location")) {
+    while (argc > 1 && (!strcmp(argv[1], "--allow-any-location") || !strcmp(argv[1], "--headless"))) {
+        if (!strcmp(argv[1], "--headless")) { --argc; ++argv; continue; }
         if (const char* log=getenv("PT5_TEST_ANY_LOCATION_LOG")) std::ofstream(log,std::ios::app)<<argv[2]<<"\n";
         --argc; ++argv;
     }
     if (argc == 3 && !strcmp(argv[1], "--installpkg")) {
         if (const char* log=getenv("PT5_TEST_INSTALL_LOG")) std::ofstream(log)<<argv[2];
         if (getenv("PT5_TEST_INSTALL_FAIL")) return 8;
+        if (const char* failure=getenv("PT5_TEST_CHAIN_FAIL"))
+            if(std::filesystem::path(argv[2]).filename()==failure) return 8;
         if (!getenv("PT5_TEST_INSTALL_CANCEL")) {
             auto target=std::filesystem::current_path()/"dev_hdd0/game/BCUS98114";
             std::filesystem::create_directories(target.parent_path());
-            std::filesystem::copy(getenv("PT5_TEST_INSTALL_SOURCE"),target,std::filesystem::copy_options::recursive);
+            auto source=std::filesystem::path(getenv("PT5_TEST_INSTALL_SOURCE"));
+            if(const char* chain=getenv("PT5_TEST_CHAIN_SOURCE")) {
+                auto step=std::filesystem::path(chain)/std::filesystem::path(argv[2]).stem();
+                if(std::filesystem::is_directory(step)) source=step;
+                if(const char* log=getenv("PT5_TEST_CHAIN_LOG")) std::ofstream(log,std::ios::app)<<std::filesystem::path(argv[2]).filename().string()<<"\n";
+            }
+            std::filesystem::copy(source,target,std::filesystem::copy_options::recursive|std::filesystem::copy_options::overwrite_existing);
+        }
+        if (const char* failure=getenv("PT5_TEST_HEADLESS_EXIT")) {
+            if (!strcmp(failure,"known")) fputs("fixed_typemap.hpp:220: Emulation object is unavailable (process teardown)",stderr);
+            else fputs("unrelated failure",stderr);
+            return static_cast<int>(0xc0000409u);
         }
         return 0;
     }
@@ -73,6 +90,10 @@ int main(int argc, char** argv) {
     if(const char* p=getenv("PT5_TEST_HOLD")) { std::ofstream(p)<<"ready"; Sleep(2000); }
     if(const char* p=getenv("PT5_TEST_RESTART")) {
         if(!std::filesystem::exists(p)) {std::ofstream(p)<<"restarted";return pt5_restart::exit_code;}
+    }
+    if(const char* p=getenv("PT5_TEST_SWITCH")) {
+        std::ofstream(std::string(p)+".runs",std::ios::app)<<getenv("GT5P_GAME_VERSION")<<" "<<getenv("GT5P_ROOT")<<"\n";
+        if(!std::filesystem::exists(p)) {std::ofstream(p)<<"switch";return pt5_restart::version_211;}
     }
     if(const char* p=getenv("PT5_TEST_COUNT")) {std::ofstream(p,std::ios::app)<<"run\n";}
     // Crash-report fixtures: the lines the real game writes, then its exit.
@@ -131,7 +152,7 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 "C:\\Program Files\\LLVM\\bin\\clang-cl.exe" /nologo /std:c++20 /EHsc /O2 /MD /D_CRT_SECURE_NO_WARNINGS /I"{ROOT}/src" /Fo"{WORK}/engine.obj" /Fe"{WORK}/gt5.exe" "{WORK}/engine.cpp"
 if errorlevel 1 exit /b 1
-"C:\\Program Files\\LLVM\\bin\\clang-cl.exe" /nologo /std:c++20 /EHsc /O2 /MD /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /I"{WORK}" /Fo"{WORK}/decryption.obj" /Fe"{WORK}/decryption.exe" "{WORK}/decryption.cpp" /link shell32.lib ole32.lib oleaut32.lib comctl32.lib bcrypt.lib uuid.lib user32.lib winhttp.lib
+"C:\\Program Files\\LLVM\\bin\\clang-cl.exe" /nologo /std:c++20 /EHsc /O2 /MD /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /I"{WORK}" /Fo"{WORK}/decryption.obj" /Fe"{WORK}/decryption.exe" "{WORK}/decryption.cpp" /link "{WORK}/launcher.res" /MANIFEST:NO shell32.lib ole32.lib oleaut32.lib comctl32.lib bcrypt.lib uuid.lib user32.lib winhttp.lib
 ''')
 subprocess.run(['cmd', '/c', str(WORK / 'build.cmd')], check=True)
 # Setup-owned RPCS3 fixture: an archive holding the fixture engine as rpcs3.exe.
@@ -565,3 +586,100 @@ report_run({'PT5_TEST_CRASH': '1', 'PT5_CRASH_REPORT': '0'}, False, None)
 report_run({}, True, None)
 print('PASS: error exit reported; PT5_CRASH_REPORT=0 and a clean exit make no report')
 print('Evidence:', WORK)
+
+# Both versions coexist, and a managed F1-style request crosses engine/root.
+shutil.copyfile(WORK/'gt5.exe', WORK/'gt5_211.exe')
+with (WORK/'pt5-release.ini').open('a') as f:
+    f.write('\n[BCUS98114-v211]\nengine_sha256='+hashlib.sha256((WORK/'gt5_211.exe').read_bytes()).hexdigest()+'\nvolmap=1\n')
+installed211=WORK/'installed 2.11'
+shutil.copytree(installed,installed211)
+sfo(installed211/'PARAM.SFO',TITLE_ID='BCUS98114',APP_VER='02.11')
+elf211=WORK/'update211.elf';elf211.write_bytes(ELF211)
+both_home=WORK/'both versions'
+env_both={'PT5_LAUNCHER_HOME':str(both_home)}
+run('--configure','--game',disc,'--game-data',installed,'--elf',executable,extra=env_both)
+run('--configure','--game',disc,'--game-data',installed211,'--elf',elf211,extra=env_both)
+run('--check','--target=01.04',extra=env_both)
+run('--check','--target=02.11',extra=env_both)
+assert (both_home/'input/EMAIN.ELF').read_bytes()==ELF
+assert (both_home/'targets/BCUS98114-v211/input/EMAIN.ELF').read_bytes()==ELF211
+request=WORK/'version-switch'
+run('--target=01.04',extra={**env_both,'PT5_TEST_SWITCH':str(request)})
+launches=Path(str(request)+'.runs').read_text().splitlines()
+assert len(launches)==2 and launches[0].startswith('01.04 ') and launches[1].startswith('02.11 '),launches
+assert 'targets' in launches[1] and 'targets' not in launches[0]
+run('--target=02.17','--check',success=False,extra=env_both)
+# Wrong executable must leave both installed versions and remembered selection usable.
+before104=snapshot(both_home/'gamedata');before211=snapshot(both_home/'targets')
+run('--configure','--target=02.11','--game',disc,'--game-data',installed211,'--elf',executable,success=False,extra=env_both)
+assert before104==snapshot(both_home/'gamedata') and before211==snapshot(both_home/'targets')
+run('--check',extra=env_both)
+print('PASS: dual-version import, identity rejection, separate roots, managed version switch and 2.17 refusal')
+
+# Run the production package-chain installer with tiny synthetic package pins.
+# Every stage is handled by the fixture RPCS3, never by a real emulator.
+(disc/'INSDIR').mkdir(exist_ok=True)
+(disc/'INSDIR/DATA000.PKG').write_bytes(PKG)
+chain_folder=WORK/'chain packages';chain_folder.mkdir()
+chain_source=WORK/'chain contents';chain_source.mkdir()
+base_source=WORK/'chain base';shutil.copytree(installed,base_source)
+for unwanted in ('EBOOT.elf','EBOOT.ELF','EMAIN.ELF'):
+    (base_source/'USRDIR'/unwanted).unlink(missing_ok=True)
+rows=[]
+for n in range(21):
+    version=('01.'+str(n+5).zfill(2)) if n<9 else ('02.'+str(n-9).zfill(2))
+    name='fixture-'+version+'.pkg'
+    payload=('fixture package '+version).encode()
+    (chain_folder/name).write_bytes(payload+hashlib.sha1(payload).digest()+b'\0'*12)
+    stage=chain_source/Path(name).stem;shutil.copytree(base_source,stage)
+    sfo(stage/'PARAM.SFO',TITLE_ID='BCUS98114',APP_VER=version)
+    inventory=[p for p in stage.rglob('*') if p.is_file()]
+    rows.append('{L"'+version+'",L"'+name+'",L"'+hashlib.sha1(payload).hexdigest()+'",'+str(len(payload)+32)+'ull,'+str(len(inventory))+'ull,'+str(sum(p.stat().st_size for p in inventory))+'ull}')
+(WORK/'fixture-updates.h').write_text('struct UpdatePackage { const wchar_t *version,*file,*sha1; unsigned long long bytes,files,installed_bytes; };\nstatic const UpdatePackage update_packages[]={'+','.join(rows)+'};\n')
+with (WORK/'pt5_launcher_config.h').open('a') as f:
+    f.write('#define PT5_UPDATE_PACKAGES_HEADER "fixture-updates.h"\n')
+    base_files=[p for p in base_source.rglob('*') if p.is_file()]
+    f.write('#undef PT5_DISC_PKG_INSTALLED_FILES\n#undef PT5_DISC_PKG_INSTALLED_BYTES\n'
+            f'#define PT5_DISC_PKG_INSTALLED_FILES {len(base_files)}ull\n'
+            f'#define PT5_DISC_PKG_INSTALLED_BYTES {sum(p.stat().st_size for p in base_files)}ull\n')
+subprocess.run(['cmd','/c',str(WORK/'build_launcher.cmd')],check=True)
+chain_home=WORK/'chain profile'
+chain_log=WORK/'chain log'
+chain_env={**env_both,'PT5_LAUNCHER_HOME':str(chain_home),'PT5_RPCS3_DOWNLOAD':'1',
+           'PT5_RPCS3_ARCHIVE':str(rpcs3_archive),'PT5_KEEP_RPCS3':'1',
+           'PT5_TEST_INSTALL_SOURCE':str(base_source),'PT5_TEST_CHAIN_SOURCE':str(chain_source),
+           'PT5_TEST_CHAIN_LOG':str(chain_log),'PT5_TEST_DECRYPT_SOURCE':str(elf211)}
+# Preserve an existing 01.04 profile across update failure and retry.
+run('--configure','--game',disc,'--game-data',installed,'--elf',executable,extra=chain_env)
+original=snapshot(chain_home/'gamedata')
+chain_args=('--recomplauncher-prepare','--game',disc,'--updates='+str(chain_folder))
+run(*chain_args,success=False,extra={**chain_env,'PT5_TEST_CHAIN_FAIL':'fixture-02.03.pkg'})
+assert original==snapshot(chain_home/'gamedata')
+assert not (chain_home/'targets/BCUS98114-v211/setup.ini').exists()
+assert (chain_home/'tools-v211').is_dir()
+run(*chain_args,extra=chain_env)
+assert original==snapshot(chain_home/'gamedata')
+run('--check','--target=02.11',extra=chain_env)
+log=chain_log.read_text().splitlines()
+assert log.count('fixture-01.05.pkg')==1,log # completed stages reused on retry
+assert log.count('fixture-02.11.pkg')==1,log
+# A malformed package is rejected before the isolated tool is touched.
+last=chain_folder/'fixture-02.11.pkg';good=last.read_bytes();last.write_bytes(b'broken')
+before_log=chain_log.read_bytes()
+run(*chain_args,success=False,extra=chain_env)
+assert chain_log.read_bytes()==before_log
+last.write_bytes(good)
+run('--check',extra=chain_env)
+print('PASS: 21-package validation/install, failed-stage retention, resume, 01.04 preservation and malformed package rejection')
+
+# A complete extraction alone must not hide an unrelated tool failure.
+unknown_home=WORK/'unknown headless failure'
+unknown={**chain_env,'PT5_LAUNCHER_HOME':str(unknown_home),'PT5_TEST_HEADLESS_EXIT':'unknown'}
+run(*chain_args,success=False,extra=unknown)
+assert not (unknown_home/'targets/BCUS98114-v211/setup.ini').exists()
+# The pinned teardown signature is accepted only together with complete output.
+known_home=WORK/'known headless teardown'
+known={**chain_env,'PT5_LAUNCHER_HOME':str(known_home),'PT5_TEST_HEADLESS_EXIT':'known'}
+run(*chain_args,extra=known)
+run('--check','--target=02.11',extra=known)
+print('PASS: complete output with unrelated tool failure rejected; exact pinned headless teardown accepted')

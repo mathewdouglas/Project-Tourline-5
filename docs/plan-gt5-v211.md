@@ -1,9 +1,11 @@
 # Plan: the GT5 2.11 update executable, and master mod
 
-Status: plan only (2026-11-14, branch `feat/gt5-v211` from tag `v0.1.5`).
-Nothing below has been lifted, built or run. Statements are marked
-**measured** (checked on this machine for this plan), **from source** (read
-from a public page, cited) or **hypothesis** (not verified).
+Status: bring-up and player setup in progress (2026-11-15). The 2.11 engine
+reaches the animated main menu. Optional package setup, dual-version imports,
+separate game/save/cache roots, unified packaging and F1 version controls are
+implemented; see [2.11 setup](setup-v211.md). Race/parity and a clean release
+build remain acceptance work. The inventory below retains the original plan's
+measurements and hypotheses.
 
 The current target is `BCUS98114-v104`, the 01.04 executable that the disc's
 `INSDIR/DATA000.PKG` installs. This plan adds a second target,

@@ -77,14 +77,20 @@ const uint32_t kSelect = 1u << 0, kStart = 1u << 3, kUp = 1u << 4, kRight = 1u <
 
 struct Choice { int value; const wchar_t* label; };
 
+// Version selection is UI state; it never enters the PC-settings TOML or
+// changes the runtime settings layout used by other translation units.
+struct UiSettings : Gt5pSettings {
+    int launcher_version = 104;
+    UiSettings& operator=(const Gt5pSettings& value) { Gt5pSettings::operator=(value); return *this; }
+};
 struct Item {
     const wchar_t* section;
     const wchar_t* label;
     const wchar_t* help;
     const char* env;                         /* variable that overrides it */
     std::vector<Choice> choices;
-    int  (*get)(const Gt5pSettings&);
-    void (*set)(Gt5pSettings&, int);
+    int  (*get)(const UiSettings&);
+    void (*set)(UiSettings&, int);
     void (*apply)(int);                      /* live; nullptr: after a restart */
     int key = -1;                            /* a keyboard binding: its button (gt5p_keymap.h) */
 };
@@ -92,8 +98,8 @@ struct Item {
 const std::vector<Choice> kOnOff = { {1, L"On"}, {0, L"Off"} };
 
 /* Keyboard bindings: one item per button, the value a virtual-key code. */
-template <int N> int key_get(const Gt5pSettings& s) { return s.keys[N]; }
-template <int N> void key_set(Gt5pSettings& s, int v) { s.keys[N] = v; }
+template <int N> int key_get(const UiSettings& s) { return s.keys[N]; }
+template <int N> void key_set(UiSettings& s, int v) { s.keys[N] = v; }
 template <int N> void key_apply(int v) { gt5p_keymap_apply_one(N, v); }
 const wchar_t* const kKeyHelp =
     L"Cross or Enter, then press the key for this button. Escape cancels. A key another "
@@ -108,177 +114,183 @@ const std::vector<Item>& items()
           L"natively at it; at 21:9, 1440p is 3440 x 1440 and 4K 5120 x 2160. The view is the same at every "
           L"resolution, only sharper.",
           "GT5P_RESOLUTION", { {720, L"1280 x 720"}, {1080, L"1920 x 1080"}, {1440, L"2560 x 1440"}, {2160, L"3840 x 2160 (4K)"} },
-          [](const Gt5pSettings& s) { return s.resolution; },
-          [](Gt5pSettings& s, int v) { s.resolution = v; }, nullptr },
+          [](const UiSettings& s) { return s.resolution; },
+          [](UiSettings& s, int v) { s.resolution = v; }, nullptr },
         { L"VIDEO", L"Aspect ratio",
           L"21:9 makes the window ultrawide (2560x1080 at 1080p, 3440x1440 at 1440p): races and the dealer show a "
           L"wider view, menus stay centred at 16:9. Best with 1080p. Takes effect after a restart.",
           "GT5P_ULTRAWIDE", { {0, L"16:9"}, {1, L"21:9 ultrawide"} },
-          [](const Gt5pSettings& s) { return s.ultrawide ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.ultrawide = v != 0; }, nullptr },
+          [](const UiSettings& s) { return s.ultrawide ? 1 : 0; },
+          [](UiSettings& s, int v) { s.ultrawide = v != 0; }, nullptr },
         { L"VIDEO", L"Window",
           L"Borderless fullscreen covers the whole monitor with a borderless window; the "
           L"picture is scaled to fit, with black bars if its shape differs. Takes effect after "
           L"a restart.",
           "RSX_WINDOW_MODE", { {0, L"Windowed"}, {1, L"Borderless fullscreen"} },
-          [](const Gt5pSettings& s) { return s.borderless ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.borderless = v != 0; }, nullptr },
+          [](const UiSettings& s) { return s.borderless ? 1 : 0; },
+          [](UiSettings& s, int v) { s.borderless = v != 0; }, nullptr },
         { L"VIDEO", L"Antialiasing",
           L"Multisampling for what the game antialiases. The console used 2x; 4x is smoother "
           L"and costs a little speed.",
           "RSX_MSAA", { {1, L"Off"}, {2, L"2x"}, {4, L"4x"}, {8, L"8x"} },
-          [](const Gt5pSettings& s) { return s.msaa; },
-          [](Gt5pSettings& s, int v) { s.msaa = v; }, nullptr },
+          [](const UiSettings& s) { return s.msaa; },
+          [](UiSettings& s, int v) { s.msaa = v; }, nullptr },
         { L"VIDEO", L"Vsync",
           L"Wait for the monitor's refresh when showing a frame. Off can tear, but never holds "
           L"the game back.",
           "RSX_PRESENT_SYNC", kOnOff,
-          [](const Gt5pSettings& s) { return s.vsync ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.vsync = v != 0; },
+          [](const UiSettings& s) { return s.vsync ? 1 : 0; },
+          [](UiSettings& s, int v) { s.vsync = v != 0; },
           [](int v) { rsx_d3d12_set_present_sync(v ? 1 : 0); } },
         { L"SHADERS", L"Shader cache",
           L"Keep compiled shaders in the shadercache folder, so a screen seen before does not "
           L"stutter while they are rebuilt.",
           "RSX_SHADER_CACHE", kOnOff,
-          [](const Gt5pSettings& s) { return s.shader_cache ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.shader_cache = v != 0; }, nullptr },
+          [](const UiSettings& s) { return s.shader_cache ? 1 : 0; },
+          [](UiSettings& s, int v) { s.shader_cache = v != 0; }, nullptr },
         { L"SHADERS", L"Background shader compilation",
           L"Build new shaders on background threads, all at once, instead of stopping the "
           L"picture to build them one by one. A new screen shows at once, its last details a "
           L"moment later. Needs the shader cache.",
           "RSX_SHADER_ASYNC", kOnOff,
-          [](const Gt5pSettings& s) { return s.shader_precompile ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.shader_precompile = v != 0; }, nullptr },
+          [](const UiSettings& s) { return s.shader_precompile ? 1 : 0; },
+          [](UiSettings& s, int v) { s.shader_precompile = v != 0; }, nullptr },
         { L"SHADERS", L"Preload known shaders",
           L"In background (default): prepare learned menu, then race pipelines while the game "
           L"starts. Before start: prepare them all first, on every CPU core but one; startup "
           L"waits, with a progress badge. Needs shader cache; uses more memory; after a restart.",
           "RSX_SHADER_WARMUP", { {1, L"In background"}, {2, L"Before start"}, {0, L"Off"} },
-          [](const Gt5pSettings& s) { return !s.shader_warmup ? 0 : s.shader_warmup_startup ? 2 : 1; },
-          [](Gt5pSettings& s, int v) { s.shader_warmup = v != 0; s.shader_warmup_startup = v == 2; }, nullptr },
+          [](const UiSettings& s) { return !s.shader_warmup ? 0 : s.shader_warmup_startup ? 2 : 1; },
+          [](UiSettings& s, int v) { s.shader_warmup = v != 0; s.shader_warmup_startup = v == 2; }, nullptr },
         { L"SHADERS", L"Background pipeline creation",
           L"Build driver pipelines on a background worker to reduce render stalls. "
           L"First-seen details can appear a moment later while preparation finishes.",
           "RSX_PSO_ASYNC", kOnOff,
-          [](const Gt5pSettings& s) { return s.pipeline_async ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.pipeline_async = v != 0; }, nullptr },
+          [](const UiSettings& s) { return s.pipeline_async ? 1 : 0; },
+          [](UiSettings& s, int v) { s.pipeline_async = v != 0; }, nullptr },
         { L"SHADERS", L"Prepare race pipelines",
           L"Prepare the race pipelines learned on earlier visits during loading. "
           L"First visits can still compile new states. Needs background pipeline creation "
           L"and shader cache; may extend loading and use more memory.",
           "RSX_RACE_PREWARM", kOnOff,
-          [](const Gt5pSettings& s) { return s.race_preload ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.race_preload = v != 0; }, nullptr },
+          [](const UiSettings& s) { return s.race_preload ? 1 : 0; },
+          [](UiSettings& s, int v) { s.race_preload = v != 0; }, nullptr },
         { L"SHADERS", L"Draw while compiling",
           L"While a shader compiles, draw with a general interpreter shader instead of leaving "
           L"the detail out or stopping the picture. Fewer missing details and hitches on first "
           L"visits; the stand-in costs some GPU time. Takes effect after a restart.",
           "RSX_SHADER_INTERP", kOnOff,
-          [](const Gt5pSettings& s) { return s.shader_interp ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.shader_interp = v != 0; }, nullptr },
+          [](const UiSettings& s) { return s.shader_interp ? 1 : 0; },
+          [](UiSettings& s, int v) { s.shader_interp = v != 0; }, nullptr },
         { L"SHADERS", L"Shader compiler",
           L"DXC builds guest shaders for modern graphics cards. FXC restores the older compiler. "
           L"Each keeps its own cache; switching requires a restart and new shaders must be prepared.",
           "RSX_SHADER_COMPILER", { {0, L"FXC"}, {1, L"DXC"} },
-          [](const Gt5pSettings& s) { return s.shader_dxc ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.shader_dxc = v != 0; }, nullptr },
+          [](const UiSettings& s) { return s.shader_dxc ? 1 : 0; },
+          [](UiSettings& s, int v) { s.shader_dxc = v != 0; }, nullptr },
         { L"INPUT", L"PlayStation / other controllers",
           L"Read DualSense, DualShock, Switch and other controllers through SDL2.dll. Xbox "
           L"controllers work either way.",
           "PAD_NO_SDL", kOnOff,
-          [](const Gt5pSettings& s) { return s.sdl_controllers ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.sdl_controllers = v != 0; }, nullptr },
+          [](const UiSettings& s) { return s.sdl_controllers ? 1 : 0; },
+          [](UiSettings& s, int v) { s.sdl_controllers = v != 0; }, nullptr },
         { L"INPUT", L"Keyboard as controller",
           L"Play with the keyboard when no controller is connected. The keys are on the "
           L"Keyboard page (Z Cross, X Circle, Enter Start, arrows ... unless changed there).",
           "PAD_NO_KEYBOARD", kOnOff,
-          [](const Gt5pSettings& s) { return s.keyboard ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.keyboard = v != 0; },
+          [](const UiSettings& s) { return s.keyboard ? 1 : 0; },
+          [](UiSettings& s, int v) { s.keyboard = v != 0; },
           [](int v) { pad_set_keyboard_enabled(v); } },
         { L"INPUT", L"Button prompts",
           L"The button symbols the game shows. Auto follows the controller in use: Xbox and "
           L"other pads, Switch pads and the keyboard get their own (Kenney's art); a "
           L"PlayStation pad keeps the game's.",
           "GT5P_GLYPHS", { {0, L"Auto"}, {1, L"PlayStation"}, {2, L"Xbox"}, {3, L"Nintendo"}, {4, L"Keyboard"} },
-          [](const Gt5pSettings& s) { return s.button_prompts; },
-          [](Gt5pSettings& s, int v) { s.button_prompts = v; },
+          [](const UiSettings& s) { return s.button_prompts; },
+          [](UiSettings& s, int v) { s.button_prompts = v; },
           [](int v) { gt5p_glyphs_set_style(v); } },
         { L"CONTROLS", L"Trigger dead zone",
           L"Removes the start of both triggers and rescales the remaining travel. Default 0% preserves existing input. Restart to apply.",
           "PAD_TRIGGER_DEADZONE", { {0, L"0%"}, {2, L"2%"}, {5, L"5%"}, {10, L"10%"}, {15, L"15%"}, {20, L"20%"} },
-          [](const Gt5pSettings& s) { return (int)s.trigger_deadzone; },
-          [](Gt5pSettings& s, int v) { s.trigger_deadzone = v; }, nullptr },
+          [](const UiSettings& s) { return (int)s.trigger_deadzone; },
+          [](UiSettings& s, int v) { s.trigger_deadzone = v; }, nullptr },
         { L"CONTROLS", L"Trigger response",
           L"Linear preserves existing response. Gentle gives finer control near rest; Quick reaches high pressure sooner. Both keep full travel. Restart to apply.",
           "PAD_TRIGGER_CURVE", { {0, L"Linear"}, {1, L"Gentle"}, {2, L"Quick"} },
-          [](const Gt5pSettings& s) { return (int)s.trigger_curve; },
-          [](Gt5pSettings& s, int v) { s.trigger_curve = v; }, nullptr },
+          [](const UiSettings& s) { return (int)s.trigger_curve; },
+          [](UiSettings& s, int v) { s.trigger_curve = v; }, nullptr },
         { L"FEEDBACK", L"DualSense fixed resistance",
           L"Experimental: fixed resistance on both DualSense triggers through SDL2, while focused and input is active. No vehicle telemetry. Bluetooth may need a controller power cycle before other apps can use DirectInput. Unsupported devices ignore it. Restart to apply.",
           "PAD_ADAPTIVE_TRIGGERS", kOnOff,
-          [](const Gt5pSettings& s) { return (int)s.adaptive_triggers; },
-          [](Gt5pSettings& s, int v) { s.adaptive_triggers = v; }, nullptr },
+          [](const UiSettings& s) { return (int)s.adaptive_triggers; },
+          [](UiSettings& s, int v) { s.adaptive_triggers = v; }, nullptr },
         { L"FEEDBACK", L"Xbox trigger rumble",
           L"Experimental: sends the game's large/small motor commands to supported left/right Xbox trigger motors through SDL2. No ABS or wheel-slip telemetry. Restart to apply.",
           "PAD_TRIGGER_RUMBLE", kOnOff,
-          [](const Gt5pSettings& s) { return (int)s.trigger_rumble; },
-          [](Gt5pSettings& s, int v) { s.trigger_rumble = v; }, nullptr },
+          [](const UiSettings& s) { return (int)s.trigger_rumble; },
+          [](UiSettings& s, int v) { s.trigger_rumble = v; }, nullptr },
         { L"FEEDBACK", L"SDL controller vibration",
           L"Forwards the game's vibration commands to controller body motors. Also enable vibration in the game's own controller options. Bluetooth DualSense uses enhanced reports; power cycle it before using DirectInput in another app if needed. Restart to apply.",
           "PAD_SDL_RUMBLE", kOnOff,
-          [](const Gt5pSettings& s) { return (int)s.sdl_rumble; },
-          [](Gt5pSettings& s, int v) { s.sdl_rumble = v; }, nullptr },
+          [](const UiSettings& s) { return (int)s.sdl_rumble; },
+          [](UiSettings& s, int v) { s.sdl_rumble = v; }, nullptr },
         KEY_ITEM(0, L"Cross"),  KEY_ITEM(1, L"Circle"), KEY_ITEM(2, L"Square"), KEY_ITEM(3, L"Triangle"),
         KEY_ITEM(4, L"L1"),     KEY_ITEM(5, L"R1"),     KEY_ITEM(6, L"L2"),     KEY_ITEM(7, L"R2"),
         KEY_ITEM(8, L"L3"), KEY_ITEM(9, L"R3"), KEY_ITEM(10, L"Start"), KEY_ITEM(11, L"Select"),
         KEY_ITEM(12, L"Up"),    KEY_ITEM(13, L"Down"),  KEY_ITEM(14, L"Left"),  KEY_ITEM(15, L"Right"),
+        { L"GAME", L"Game version",
+          L"Restart into an installed version. Each keeps separate game data, saves and shaders. 2.11 is experimental. Set it up through the launcher before switching.",
+          "GT5P_GAME_VERSION", {{104,L"GT5 01.04"},{211,L"GT5 2.11 (experimental)"}},
+          [](const UiSettings& s) { return s.launcher_version; },
+          [](UiSettings& s,int v) { s.launcher_version=v; }, nullptr },
+
         { L"GAME", L"Skip opening movie",
           L"Press through the opening movie as soon as it starts. It only plays when the TV "
           L"content is installed.",
           "PAD_SKIP_MOVIE", kOnOff,
-          [](const Gt5pSettings& s) { return s.skip_movie ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.skip_movie = v != 0; }, nullptr },
+          [](const UiSettings& s) { return s.skip_movie ? 1 : 0; },
+          [](UiSettings& s, int v) { s.skip_movie = v != 0; }, nullptr },
         { L"GAME", L"Smooth colour",
           L"Render at 16 bits per channel and drop the game's dither noise: dark areas are "
           L"clean, without banding. Off is the game's own 8-bit picture with its noise. Takes "
           L"effect after a restart.",
           "RSX_HIGH_PRECISION", kOnOff,
-          [](const Gt5pSettings& s) { return s.smooth_colour ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.smooth_colour = v != 0; }, nullptr },
+          [](const UiSettings& s) { return s.smooth_colour ? 1 : 0; },
+          [](UiSettings& s, int v) { s.smooth_colour = v != 0; }, nullptr },
         { L"GAME", L"Texture filtering",
           L"Anisotropic filtering keeps the road, kerbs and boards sharp into the distance; the "
           L"game's own is trilinear, which blurs surfaces seen at a slant. Takes effect after a "
           L"restart.",
           "RSX_ANISO", { {1, L"Trilinear"}, {4, L"4x anisotropic"}, {8, L"8x anisotropic"}, {16, L"16x anisotropic"} },
-          [](const Gt5pSettings& s) { return s.anisotropy; },
-          [](Gt5pSettings& s, int v) { s.anisotropy = v; }, nullptr },
+          [](const UiSettings& s) { return s.anisotropy; },
+          [](UiSettings& s, int v) { s.anisotropy = v; }, nullptr },
         { L"GAME", L"Shader compile indicator",
           L"Show \"Compiling shaders\" in the corner while a draw is waiting on a shader or "
           L"pipeline. Background preloading is not counted here.",
           "GT5P_SHADER_INDICATOR", kOnOff,
-          [](const Gt5pSettings& s) { return s.shader_indicator ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.shader_indicator = v != 0; },
+          [](const UiSettings& s) { return s.shader_indicator ? 1 : 0; },
+          [](UiSettings& s, int v) { s.shader_indicator = v != 0; },
           [](int v) { gt5p_shader_indicator_enable(v); } },
         { L"GAME", L"Shader preload indicator",
           L"Show a smaller, quieter \"Loading shaders\" in the corner while the game prepares "
           L"known shaders in the background. Off by default; \"Compiling shaders\" takes its place "
           L"when both would show.",
           "GT5P_PRELOAD_INDICATOR", kOnOff,
-          [](const Gt5pSettings& s) { return s.preload_indicator ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.preload_indicator = v != 0; },
+          [](const UiSettings& s) { return s.preload_indicator ? 1 : 0; },
+          [](UiSettings& s, int v) { s.preload_indicator = v != 0; },
           [](int v) { gt5p_preload_indicator_enable(v); } },
         { L"PERFORMANCE", L"Frame clock",
           L"The vblank the game paces its frames to. 59.94 Hz is the console's (30 fps at "
           L"most). 62.5 Hz allows 31 fps, but a frame that just misses two vblanks drops to 20.",
           "GT5P_VBLANK_HZ", { {5994, L"59.94 Hz"}, {6250, L"62.5 Hz"} },
-          [](const Gt5pSettings& s) { return s.vblank_hz100; },
-          [](Gt5pSettings& s, int v) { s.vblank_hz100 = v; }, nullptr },
+          [](const UiSettings& s) { return s.vblank_hz100; },
+          [](UiSettings& s, int v) { s.vblank_hz100 = v; }, nullptr },
         { L"PERFORMANCE", L"SPU lanes on own cores",
           L"Keep each SPU render lane on a CPU core of its own. Strict (the default) is about "
           L"14% faster; Hint gains nothing; Off leaves them to Windows.",
           "SPURS_LANE_PIN", { {0, L"Off"}, {1, L"Hint"}, {2, L"Strict"} },
-          [](const Gt5pSettings& s) { return s.lane_cores; },
-          [](Gt5pSettings& s, int v) { s.lane_cores = v; }, nullptr },
+          [](const UiSettings& s) { return s.lane_cores; },
+          [](UiSettings& s, int v) { s.lane_cores = v; }, nullptr },
         /* "Fifth SPU lane" (fifth_spu_lane, SPURS_JL_SPU3) is left off the page:
          * it cannot work, as SPU 3's own bookkeeping row is the render lists'
          * progress row (Phase 64). The file key stays, for testing. */
@@ -286,14 +298,14 @@ const std::vector<Item>& items()
           L"The full runtime log. Auto keeps it off for all launch methods. On makes "
           L"the game stutter.",
           "PS3_VERBOSE", { {-1, L"Auto"}, {0, L"Off"}, {1, L"On"} },
-          [](const Gt5pSettings& s) { return s.verbose_log; },
-          [](Gt5pSettings& s, int v) { s.verbose_log = v; }, nullptr },
+          [](const UiSettings& s) { return s.verbose_log; },
+          [](UiSettings& s, int v) { s.verbose_log = v; }, nullptr },
         { L"DEBUG", L"Debug export",
           L"Keep recent logs and enable Export debug report in F3 (or F8 while F3 is open). "
           L"Saves a ZIP to logs/debug to attach to bug reports. Capture starts when enabled.",
           nullptr, kOnOff,
-          [](const Gt5pSettings& s) { return s.debug_export ? 1 : 0; },
-          [](Gt5pSettings& s, int v) { s.debug_export = v != 0; },
+          [](const UiSettings& s) { return s.debug_export ? 1 : 0; },
+          [](UiSettings& s, int v) { s.debug_export = v != 0; },
           [](int v) { gt5p_debug_enable(v); } },
     };
     return v;
@@ -328,8 +340,8 @@ int s_sel;                      /* row: 0 the section bar, then items, then butt
 int s_section;                  /* the page shown */
 bool s_drop;                    /* the selected item's list is open */
 int s_drop_sel;                 /* the highlighted choice in it */
-Gt5pSettings s_edit;   /* what the page shows and saves */
-Gt5pSettings s_boot;   /* the file as this run started with it */
+UiSettings s_edit;   /* what the page shows and saves */
+UiSettings s_boot;   /* the file as this run started with it */
 std::wstring s_status;
 bool s_quit;                    /* the quit question is up */
 int s_quit_sel;                 /* 0 Cancel, 1 OK */
@@ -337,8 +349,8 @@ volatile LONG s_quit_req;       /* Escape pressed in the game window */
 int s_capture = -1;             /* a key item waiting for its new key */
 uint8_t s_cap_was[256];         /* keys held when the wait began */
 
-enum { kRowRestart = -1, kRowClose = -2, kRowHead = -3, kRowDefaults = -4 };
-bool is_button(int id) { return id == kRowRestart || id == kRowClose || id == kRowDefaults; }
+enum { kRowRestart = -1, kRowClose = -2, kRowHead = -3, kRowDefaults = -4, kRowSetup211 = -5 };
+bool is_button(int id) { return id == kRowRestart || id == kRowClose || id == kRowDefaults || id == kRowSetup211; }
 
 /* The Keyboard page: sixteen bindings in two columns of eight. */
 const int kKeyY = 180, kKeyH = 34, kKeyFieldW = 130;
@@ -354,7 +366,7 @@ bool legacy_ui_flag()
 bool restart_pending()
 {
     for (const Item& it : items())
-        if (!it.apply && !gt5p_settings_overridden(it.env) && it.get(s_edit) != it.get(s_boot))
+        if (!it.apply && (!strcmp(it.env,"GT5P_GAME_VERSION") || !gt5p_settings_overridden(it.env)) && it.get(s_edit) != it.get(s_boot))
             return true;
     return false;
 }
@@ -378,7 +390,10 @@ std::vector<int> rows()
 {
     std::vector<int> r = { kRowHead };
     const wchar_t* sec = sections()[s_section];
-    for (int i = 0; i < (int)items().size(); i++) if (!wcscmp(items()[i].section, sec)) r.push_back(i);
+    for (int i = 0; i < (int)items().size(); i++) if (!wcscmp(items()[i].section, sec) && (strcmp(items()[i].env,"GT5P_GAME_VERSION") || pt5_restart::managed())) r.push_back(i);
+    const char* ready211=getenv("GT5P_VERSION_211_READY");
+    const char* supported211=getenv("GT5P_VERSION_211_SUPPORTED");
+    if (pt5_restart::managed() && !wcscmp(sec,L"GAME") && supported211 && !strcmp(supported211,"1") && (!ready211 || strcmp(ready211,"1"))) r.push_back(kRowSetup211);
     if (restart_pending()) r.push_back(kRowRestart);
     if (keyboard_page()) r.push_back(kRowDefaults);
     r.push_back(kRowClose);
@@ -434,7 +449,7 @@ void relaunch()
 {
     if (pt5_restart::managed()) {
         fflush(stdout); fflush(stderr);
-        ExitProcess(pt5_restart::exit_code); // Launcher waits, then restarts under its existing storage lease.
+        ExitProcess(s_edit.launcher_version != s_boot.launcher_version ? (s_edit.launcher_version == 211 ? pt5_restart::version_211 : pt5_restart::version_104) : pt5_restart::exit_code); // Launcher waits, then restarts under its existing storage lease.
     }
     /* The environment holds the variables loading the old file set; the new
      * process must read the new file instead. Clear the ones it set. */
@@ -462,6 +477,10 @@ void change(int id, int dir)
 {
     if (id == kRowClose) { set_open(false); return; }
     if (id == kRowRestart) { relaunch(); return; }
+    if (id == kRowSetup211) {
+        if (MessageBoxW(nullptr,L"Close the game and open GT5 2.11 setup? Your 01.04 installation and saves will be kept. Finish or save your current session before continuing.",L"Set up GT5 2.11",MB_OKCANCEL|MB_ICONQUESTION)==IDOK) { fflush(stdout); fflush(stderr); ExitProcess(pt5_restart::setup_211); }
+        return;
+    }
     if (id == kRowDefaults) { reset_keys(); return; }
     const Item& it = items()[id];
     if (it.key >= 0) return;
@@ -473,8 +492,13 @@ void change(int id, int dir)
 void set_value(int id, int v)
 {
     const Item& it = items()[id];
+    if (!strcmp(it.env,"GT5P_GAME_VERSION")) {
+        const char* ready=getenv(v == 211 ? "GT5P_VERSION_211_READY" : "GT5P_VERSION_104_READY");
+        if (!pt5_restart::managed() || !ready || strcmp(ready,"1")) { s_status=L"Set up this game version in the launcher first.";return; }
+        it.set(s_edit,v); s_status=L"Select Restart to change game version. Saves stay separate.";return;
+    }
     it.set(s_edit, v);
-    const bool over = gt5p_settings_overridden(it.env);
+    const bool over = strcmp(it.env,"GT5P_GAME_VERSION") && gt5p_settings_overridden(it.env);
     if (!gt5p_settings_enabled()) s_status = L"GT5P_NO_SETTINGS is set: changes are not saved.";
     else if (!gt5p_settings_store(s_edit)) s_status = L"Could not write " + widen(gt5p_settings_path());
     else s_status = L"Saved.";
@@ -806,12 +830,12 @@ void paint(HDC dc)
         const bool sel = (int)i == s_sel;
         if (id == kRowHead) { section_bar(dc, sl[i].x0, sl[i].x1, y, sections()[s_section], sel); continue; }
         if (id < 0) {
-            button(dc, sl[i].x0, y, id == kRowRestart ? L"Restart" : id == kRowDefaults ? L"Defaults" : L"Close", sel);
+            button(dc, sl[i].x0, y, id == kRowRestart ? L"Restart" : id == kRowDefaults ? L"Defaults" : id == kRowSetup211 ? L"Set up 2.11" : L"Close", sel);
             if (sel) cursor(dc, sl[i].x0 + kBtnW / 2 + 2, y + 18);
             continue;
         }
         const Item& it = items()[id];
-        const bool over = gt5p_settings_overridden(it.env);
+        const bool over = strcmp(it.env,"GT5P_GAME_VERSION") && gt5p_settings_overridden(it.env);
         if (it.key >= 0) {
             /* A binding: the button's name, then its key in a box. */
             const int x0 = sl[i].x0, fx = x0 + 160;
@@ -1444,6 +1468,7 @@ void set_open(bool open)
     else s_release_wait = true;
     if (open) {
         s_edit = gt5p_settings_file();
+        s_edit.launcher_version=s_boot.launcher_version;
         s_sel = 1;          /* the page's first item */
         s_drop = false;
         s_status = gt5p_settings_enabled() ? L"" : L"GT5P_NO_SETTINGS is set: changes are not saved.";
@@ -1666,6 +1691,7 @@ DWORD WINAPI ui_thread(LPVOID)
     fprintf(stderr, "[settings-ui] page ready over window %p (%s): F1 or the PS button\n",
             (void*)s_game, s_wnd ? "ok" : "CreateWindow failed");
     s_boot = gt5p_settings_file();
+    s_boot.launcher_version=getenv("GT5P_GAME_VERSION") && !strcmp(getenv("GT5P_GAME_VERSION"),"02.11") ? 211 : 104;
     g_pad_screen_hook = screen_seen;
     rsx_d3d12_on_escape = esc_pressed;
     { const char* e = getenv("GT5P_SETTINGS_UI"); if (e && e[0] == '1') set_open(true); }

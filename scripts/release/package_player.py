@@ -211,6 +211,9 @@ def main():
     ap.add_argument('--output', type=Path, help='write a player ZIP')
     ap.add_argument('--stage-dir', type=Path, help='write an unpacked player folder (must be empty)')
     ap.add_argument('--pgo-profile', type=Path, help='the profile a profile-guided build used; only its SHA-256 is stored')
+    ap.add_argument('--build-211', type=Path, help='completed experimental BCUS98114-v211 Release build to include beside 01.04')
+    ap.add_argument('--elf-211', type=Path, help='private matching 2.11 ELF (validated, never packaged)')
+    ap.add_argument('--pgo-profile-211', type=Path, help='2.11 profile provenance; never use the 01.04 profile')
     args = ap.parse_args()
     version = port_version()
     if not args.output and not args.stage_dir:
@@ -230,13 +233,33 @@ def main():
     if elf.stat().st_size != identity['elf_bytes'] or sha(elf) != identity['elf_sha256']:
         raise ValueError('The supplied ELF does not match the launcher\'s BCUS98114 update 01.04 identity')
     files, generated = collect(args, version)
+    if bool(args.build_211) != bool(args.elf_211):
+        raise ValueError('Supply both --build-211 and --elf-211')
+    additional = ''
+    if args.build_211:
+        pin = identity['targets']['BCUS98114-v211']
+        elf211 = regular(args.elf_211)
+        if elf211.stat().st_size != pin['elf_bytes'] or sha(elf211) != pin['elf_sha256']:
+            raise ValueError('The supplied 2.11 ELF does not match its pinned identity')
+        cache211 = regular(args.build_211 / 'CMakeCache.txt').read_text()
+        if not re.search(r'^GT5P_TARGET:STRING=BCUS98114-v211$', cache211, re.M) or not re.search(r'^CMAKE_BUILD_TYPE:STRING=Release$', cache211,re.M):
+            raise ValueError('--build-211 must be a completed BCUS98114-v211 Release build')
+        files['gt5_211.exe'] = pe_x64(args.build_211 / 'gt5_211.exe')
+        for name in RUNTIME_DLLS:
+            if sha(regular(args.build_211 / name)) != sha(files[name]):
+                raise ValueError(f'2.11 runtime dependency differs: {name}')
+        additional = ('\n[BCUS98114-v211]\nengine_sha256=' + sha(files['gt5_211.exe']) + '\nvolmap=1\nexperimental=1\n')
+        if args.pgo_profile_211:
+            additional += 'pgo_profile_sha256=' + sha(regular(args.pgo_profile_211)) + '\n'
+
     release = ('[release]\nschema=1\nproduct=Project Tourline 5\n'
                f'port_version={version}\ntarget={TARGET}\ngame=BCUS98114 01.04\n'
                f'elf_sha256={sha(elf)}\nengine_sha256={sha(files[ENGINE])}\n')
     if args.pgo_profile:
         release += f'pgo_profile_sha256={sha(regular(args.pgo_profile))}\n'
     # volmap=1: the engine serves virtual-install records (launcher/volmap.h).
-    generated['pt5-release.ini'] = f'[game]\ntarget={TARGET}\nengine_sha256={sha(files[ENGINE])}\nvolmap=1\n'
+    generated['pt5-release.ini'] = f'[game]\ntarget={TARGET}\nengine_sha256={sha(files[ENGINE])}\nvolmap=1\n\n[{TARGET}]\nengine_sha256={sha(files[ENGINE])}\nvolmap=1\n' + additional
+    release += additional
     before = {n: (p.stat().st_size, p.stat().st_mtime_ns) for n, p in files.items()}
     if stage:
         # Prevent copying a source directory into itself (including via aliases).

@@ -64,13 +64,23 @@ all compiler-dependent caches under `dxc-1.8.2502-sm60-v1/`; do not move old FXC
 recipes into it. See [docs/dxc.md](docs/dxc.md) and Phase 34 for the synthetic
 differences, live checks and offline preparation contract.
 
-**2.11 update executable (planned, branch `feat/gt5-v211`).** Plan in
-[docs/plan-gt5-v211.md](docs/plan-gt5-v211.md): a second target
-`BCUS98114-v211` for the master mod's base. 2.11 exactly (the last content
-update; 2.17 is refused). One launcher and one ZIP carry both engines, and
-owned DLC must work offline. No 2.11 inputs are on this machine yet;
-never upgrade the 01.04 RPCS3 install in place. Every v104 value is listed
-there with how to re-derive it; carry none across.
+**2.11 update executable (bring-up, `feat/gt5-v211`).** Plan and inventory in
+[docs/plan-gt5-v211.md](docs/plan-gt5-v211.md). The second target
+`BCUS98114-v211` reaches the animated menu. 2.11 exactly (the last content
+update; 2.17 is refused). One launcher and one ZIP carry both engines; owned
+DLC offline support remains acceptance work. Private 2.11 inputs are present.
+Never upgrade the 01.04 RPCS3 install in place or carry v104 addresses across.
+
+**2.11 player setup (2026-11-15).** Optional RecompLauncher update-package
+folder (all 21 packages through 2.11), or an existing complete installation.
+Native setup verifies the chain, installs with its isolated headless RPCS3 behind one progress window, decrypts
+and imports without replacing 01.04. F1 GAME offers setup and a version
+selector/restart when managed by the launcher. Existing 01.04 storage stays
+in place; 2.11 uses `targets/BCUS98114-v211`, with separate saves/caches and
+shared PC settings. Both engines can be packaged together. 2.11 is still
+experimental; race/parity acceptance is outstanding. See
+[setup-v211.md](docs/setup-v211.md). Tests: `player_setup.py`,
+`recomplauncher_manifest.py`, `player_package.py` under `scripts/test`.
 
 **Virtual install (in progress, `feat/gt5-v211`).** Installed `PDIPFS` files that are
 byte copies of a `GT.VOL` range (6.23 GiB of a 6.5 GB 01.04 install) become 256-byte records;

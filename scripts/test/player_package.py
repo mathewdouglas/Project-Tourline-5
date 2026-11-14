@@ -82,3 +82,35 @@ subprocess.run(['cmake', '-DPT5_ENGINE='+str(files['gt5.exe']), '-DPT5_DEST='+st
 assert (cmake_stage/'recomplauncher.json').read_bytes() == files['recomplauncher.json'].read_bytes()
 print('PASS: stage/ZIP allowlist, launcher/engine manifests, no ELF, existing destinations, wrong identity and changing inputs')
 print('Evidence:',work)
+
+# Unified ZIP: validate the secondary target/ELF and declare its own engine hash.
+header211=header+b'synthetic 2.11 identity'
+elf211=work/'private211.elf';elf211.write_bytes(header211)
+pins=json.loads((fixture/'config/pt5-player.json').read_text())
+pins['targets']={'BCUS98114-v211':{'elf_bytes':len(header211),'elf_sha256':hashlib.sha256(header211).hexdigest()}}
+(fixture/'config/pt5-player.json').write_text(json.dumps(pins))
+secondary=work/'build211';secondary.mkdir()
+(secondary/'CMakeCache.txt').write_text('GT5P_TARGET:STRING=BCUS98114-v211\nCMAKE_BUILD_TYPE:STRING=Release\n')
+# Minimal valid x64 PE header for the production binary validator.
+pe=bytearray(134);pe[:2]=b'MZ';pe[60:64]=(128).to_bytes(4,'little');pe[128:134]=b'PE\0\0\x64\x86'
+(secondary/'gt5_211.exe').write_bytes(pe)
+for name in package.RUNTIME_DLLS:
+    source=fixture/name;source.write_bytes(pe);files[name]=source
+    (secondary/name).write_bytes(pe)
+dual_zip=work/'dual.zip'
+run('--output',dual_zip,'--build-211',secondary,'--elf-211',elf211)
+with zipfile.ZipFile(dual_zip) as z:
+    assert z.read('gt5_211.exe')==pe
+    ini=z.read('pt5-release.ini').decode()
+    assert '[BCUS98114-v104]' in ini and '[BCUS98114-v211]' in ini and 'experimental=1' in ini
+    assert all(not z.read(n).startswith(b'\x7fELF') for n in z.namelist())
+run('--output',work/'incomplete.zip','--build-211',secondary,fails=True)
+elf211.write_bytes(b'wrong')
+run('--output',work/'bad211.zip','--build-211',secondary,'--elf-211',elf211,fails=True)
+print('PASS: unified ZIP includes both engines, independent hashes, experimental marker and no game executables')
+
+subprocess.run(['cmake','-DPT5_ENGINE='+str(secondary/'gt5_211.exe'),'-DPT5_TARGET=BCUS98114-v211',
+                '-DPT5_DEST='+str(cmake_stage),'-DPT5_SOURCE='+str(ROOT),'-P',str(ROOT/'scripts/stage_player.cmake')],check=True)
+metadata=(cmake_stage/'pt5-release.ini').read_text()
+assert '[BCUS98114-v104]' in metadata and '[BCUS98114-v211]' in metadata
+print('PASS: source staging preserves declarations for both engines')

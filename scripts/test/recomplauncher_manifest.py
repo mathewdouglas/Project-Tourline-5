@@ -202,19 +202,27 @@ def main():
     assert not doc['start'].get('args'), 'the Tourline launcher takes no arguments for a normal launch'
     assert 'game' not in doc, 'named inputs carry the disc and installed update separately'
     inputs = {item['id']: item for item in doc['inputs']}
-    assert set(inputs) == {'disc', 'update', 'executable'}
-    for name in ('disc', 'update'):
-        assert bool(inputs[name].get('optional')) == (name == 'update')
+    assert set(inputs) == {'disc', 'update', 'executable', 'updates211'}
+    for name in ('disc', 'update', 'updates211'):
+        assert bool(inputs[name].get('optional')) == (name != 'disc')
         assert inputs[name]['formats'] == [{'type': 'folder'}], 'ISO import is unsupported'
     assert inputs['executable']['optional']
     assert inputs['executable']['formats'] == [{'type': 'file', 'extensions': ['elf', 'exe']}]
     assert all('destination' not in item for item in inputs.values()), 'keep sources outside the install'
     assert doc['prepare']['program'] == ['tourline5.exe']
     assert doc['prepare']['args'] == ['--recomplauncher-prepare', '--game', '{input:disc}',
-                                      '--game-data={input:update}', '--executable={input:executable}']
+                                      '--game-data={input:update}', '--executable={input:executable}', '--updates={input:updates211}']
     assert doc['prepare']['timeout'] >= 3600
     print('Easy Setup: disc required; optional installed data; RPCS3/ELF; disc package preparation')
     print('start: tourline5.exe')
+    packages=json.loads((ROOT/'config/gt5-updates.json').read_text())['packages']
+    header=(ROOT/'launcher/update_packages.h').read_text()
+    assert len(packages)==21 and packages[-1]['version']=='02.11'
+    for p in packages:
+        assert f'L"{p["file"]}"' in header and f'L"{p["sha1"]}"' in header
+        assert f'{p["bytes"]}ull, {p["installed_files"]}ull, {p["installed_bytes"]}ull' in header
+    print('2.11 package metadata: all 21 ordered package pins match the native installer')
+
 
     (config,) = doc['config']
     assert config['id'] == 'main' and config['format'] == 'toml'

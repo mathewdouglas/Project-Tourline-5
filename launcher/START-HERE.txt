@@ -59,3 +59,15 @@ submit it yourself. Nothing is sent automatically.
 tourline5.exe --check validates the saved setup and engine without launching
 the game or opening dialogs. --setup, --choose-storage and --open-data are
 the command-line equivalents of the shortcuts above.
+
+Optional GT5 2.11 (experimental)
+-------------------------------
+A player package containing both engines can also set up BCUS98114 2.11.
+In RecompLauncher, add the folder containing all 21 official update PKGs
+(01.05 through 02.11), or import an existing complete 2.11 installation and
+matching executable. No game updates are downloaded. Native Change game files
+also offers a version choice. F1 > Game > Set up 2.11 opens setup when the
+2.11 engine is included; Game version and Restart switch installed versions.
+Each version keeps separate game data, saves and shaders. PC settings are
+shared. No save conversion is performed. Other updates, including 2.17, are
+refused. 2.11 remains experimental while race and feature parity are checked.

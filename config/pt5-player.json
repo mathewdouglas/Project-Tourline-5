@@ -14,5 +14,18 @@
   "rpcs3_bytes": 37216199,
   "sevenzip_url": "https://github.com/ip7z/7zip/releases/download/26.06/7zr.exe",
   "sevenzip_sha256": "e80db2dad715a6c5adabe292d31ed54e11f4e9b99ca349827b50573b175891bc",
-  "sevenzip_bytes": 600064
+  "sevenzip_bytes": 600064,
+  "targets": {
+    "BCUS98114-v104": {
+      "update_version": "01.04",
+      "elf_sha256": "1b0ebcd676bf4bb782fa598e97fa594c0e772249d4cb0a570ee984b5af1264d1",
+      "elf_bytes": 26705632
+    },
+    "BCUS98114-v211": {
+      "update_version": "02.11",
+      "elf_sha256": "e3b93d86312d7f4fcc069bc1454366b0a4bcd377cc0fe9d414fd5aa4a0da63ad",
+      "elf_bytes": 24926384,
+      "experimental": true
+    }
+  }
 }

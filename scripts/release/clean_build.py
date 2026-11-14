@@ -89,7 +89,16 @@ def main():
                     help='compiled functions the profile may have no record of (default 2000): code the '
                          'profiling run never loaded, such as the launcher, settings page or debug export; '
                          'a profile from other sources misses tens of thousands')
+    ap.add_argument('--target', choices=['BCUS98114-v104','BCUS98114-v211'], default='BCUS98114-v104')
+    ap.add_argument('--engine-only', action='store_true', help='stop after the clean build; use for the secondary 2.11 engine')
+    ap.add_argument('--build-211', type=Path, help='clean 2.11 build directory to include in the unified player ZIP')
+    ap.add_argument('--elf-211', type=Path, help='matching private 2.11 ELF for unified packaging')
+    ap.add_argument('--profile-211', type=Path, help='profile provenance for the separately built 2.11 engine')
     args = ap.parse_args()
+    if args.target == 'BCUS98114-v211' and not args.engine_only:
+        raise ValueError('Build 2.11 with --engine-only, then pass its build and ELF to the 01.04 clean build for one unified ZIP')
+    if bool(args.build_211) != bool(args.elf_211):
+        raise ValueError('Supply both --build-211 and --elf-211')
     if not 1 <= args.jobs <= 8:
         raise ValueError('--jobs must be 1..8')
     work = args.work.resolve()
@@ -125,13 +134,19 @@ def main():
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(('PPU_', 'SPU_', 'GT5P_', 'RSX_', 'GCM_', 'PS3_', 'PAD_'))}
     env['PS3RECOMP_DIR'] = str(work / 'ps3recomp')
-    env['GT5P_TARGET'] = 'BCUS98114-v104'
+    env['GT5P_TARGET'] = args.target
     env['CMAKE_BUILD_PARALLEL_LEVEL'] = str(args.jobs)
     run(py, 'scripts/check_no_game_files.py', '--tracked', cwd=src, env=env)
     run(py, 'scripts/setup_runtime.py', '--path', work / 'ps3recomp', cwd=src, env=env)
 
-    copy(private / 'input/EMAIN.ELF', src / 'input/EMAIN.ELF')
-    (src / 'input/target').write_text('BCUS98114-v104\n', encoding='ascii')
+    private_elf = private / 'input/EMAIN.ELF'
+    if args.target == 'BCUS98114-v211':
+        private_elf = private / 'input/v211/EMAIN.ELF'
+        pin=json.loads((src/'config/pt5-player.json').read_text())['targets'][args.target]
+        if private_elf.stat().st_size != pin['elf_bytes'] or file_sha(private_elf) != pin['elf_sha256']:
+            raise ValueError('Private 2.11 ELF does not match the pinned identity')
+    copy(private_elf, src / 'input/EMAIN.ELF')
+    (src / 'input/target').write_text(args.target+'\n', encoding='ascii')
     for sub in ('dump', 'taskdump'):
         folder = private / 'analysis/spu' / sub
         for blob in sorted(folder.glob('*')):
@@ -142,11 +157,12 @@ def main():
         run('powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', f'scripts/{script}', cwd=src, env=env)
 
     tools = work / 'ps3recomp/tools'
-    code_end = json.loads((src / 'config/targets.json').read_text())['BCUS98114-v104']['code_end']
+    target_config = json.loads((src / 'config/targets.json').read_text())[args.target]
+    code_end = target_config['code_end']
     run(py, 'scripts/jumptables.py', '--write', cwd=src, env=env)
     run(py, 'scripts/code_labels.py', '--write', cwd=src, env=env)
     run(py, tools / 'find_functions.py', 'input/EMAIN.ELF', '--json', '--seed-json',
-        'config/extra_seeds_bcus98114_v104.json', '--output', 'analysis/functions.json', cwd=src, env=env)
+        target_config['seeds'], '--output', 'analysis/functions.json', cwd=src, env=env)
     functions = json.loads((src / 'analysis/functions.json').read_text())
     end = int(code_end, 16)
     (src / 'analysis/functions_code.json').write_text(json.dumps([f for f in functions if int(f['start'], 16) < end]))
@@ -166,7 +182,7 @@ def main():
         same = tree_sha(src / 'generated') == tree_sha(args.compare_generated.resolve())
         print(f'generated/ identical to {args.compare_generated}: {same}', flush=True)
 
-    build = ['cmd', '/d', '/c', r'scripts\build.cmd', '-DGT5P_TARGET=BCUS98114-v104']
+    build = ['cmd', '/d', '/c', r'scripts\build.cmd', '-DGT5P_TARGET='+args.target]
     pgo_args = []
     if profile:
         pgocc = src / 'scripts/pgo/pgocc.py'
@@ -193,6 +209,12 @@ def main():
         if len(missing) > args.profile_max_missing:
             raise ValueError('Too many functions have no record in the profile: it does not fit these '
                              'sources (docs/pgo.md), or pass --profile-max-missing')
+    if args.engine_only:
+        print(f'Clean engine build: {src / "build"} ({args.target})')
+        return
+    if args.build_211:
+        pgo_args += ['--build-211', args.build_211.resolve(), '--elf-211', args.elf_211.resolve()]
+        if args.profile_211: pgo_args += ['--pgo-profile-211', args.profile_211.resolve()]
     out = work / 'out' / f'project-tourline-5-v{version}-windows-x64.zip'
     run(py, 'scripts/release/package_player.py', '--build-dir', src / 'build', '--elf', src / 'input/EMAIN.ELF',
         '--runtime', work / 'ps3recomp', '--third-party', src / 'third_party', '--vc-runtime-dir', vc,

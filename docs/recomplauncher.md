@@ -10,12 +10,16 @@ checks, storage locks and managed F1 restarts. Easy Setup uses named `inputs`
 and a `prepare` hook. Direct launches without RecompLauncher
 still open the built-in storage/game-file dialogs when setup is needed.
 
+For optional 2.11 package setup, imports and F1 version switching, see
+[GT5 2.11 setup](setup-v211.md). PC settings remain shared; saves and caches
+are separate.
+
 ## Easy Setup
 
 Drop the following into RecompLauncher's Easy Setup inputs:
 
 1. The extracted **BCUS98114 v02.00 disc folder**, or its `PS3_GAME` folder.
-   That is all: leave the other two inputs empty.
+   That is all: leave the optional inputs empty.
 
 Preparation then downloads one pinned official RPCS3 build into
 `<storage>\tools\rpcs3`, installs the disc's bundled 01.04 package with it
@@ -32,22 +36,22 @@ not found there. This route supports custom RPCS3 game-data locations.
 
 The supported disc includes the required 01.04 package at
 `PS3_GAME/INSDIR/DATA000.PKG`; no separate update download is required.
-ISO files must be extracted with INSDIR included. Newer updates, other
-regions and the original disc executable are refused by native setup.
+ISO files must be extracted with INSDIR included. 02.11 is supported as an experimental second target through the optional
+update-packages input or an existing installation. Other versions, regions
+and the original disc executable are refused by native setup.
 Disc preparation installs that package into RPCS3 before importing its data
 and verified ELF. An existing different GT5 version or VFS configuration is
 left unchanged; use a separate default-layout RPCS3 folder or explicit import.
 Keep the disc folder available for play.
 
 RecompLauncher runs `tourline5.exe --recomplauncher-prepare --game DISC
-[--game-data=UPDATE] [--executable=ELF_OR_RPCS3]` before Play. This uses the
+[--game-data=UPDATE] [--executable=ELF_OR_RPCS3] [--updates=PKG_FOLDER]` before Play. This uses the
 same staged copy, executable hash and commit/rollback checks as built-in
 setup. It uses default or remembered storage without a picker, emits
 `progress` lines while importing/verifying and exits without starting the
 game. Missing or invalid inputs fail with stderr and `logs/setup.err`;
-they never open another launcher setup dialog. RPCS3 installs packages only
-through its window, so setup answers that window with UI Automation and closes
-RPCS3 when the package's files are all present. The preparation timeout is two hours
+they never open another launcher setup dialog. The 01.04 disc-only route answers RPCS3's installer window automatically. The
+2.11 chain uses its headless installer behind one Tourline 5 progress window. The preparation timeout is four hours
 to allow large imports on slower drives. No shared key or file destinations
 are declared in the manifest: RecompLauncher passes selected paths directly.
 

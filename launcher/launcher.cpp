@@ -27,6 +27,14 @@
 #include "storage_link.h"
 #include "../src/pt5_restart.h"
 #include "crash_report.h"
+#ifndef PT5_UPDATE_PACKAGES_HEADER
+#define PT5_UPDATE_PACKAGES_HEADER "update_packages.h"
+#endif
+#include PT5_UPDATE_PACKAGES_HEADER
+#ifndef PT5_ELF_211_SHA256
+#define PT5_ELF_211_SHA256 L""
+#define PT5_ELF_211_BYTES 0ull
+#endif
 
 namespace fs = std::filesystem;
 struct Failure { std::wstring message; };
@@ -41,9 +49,23 @@ static fs::path install, data;
 static bool quiet = false;
 static bool silent_errors = false;
 static bool easy_setup = false;
+struct Target { const wchar_t *id, *version, *sha256, *engine; uint64_t bytes; };
+static const Target targets[] = {
+    {L"BCUS98114-v104", L"01.04", PT5_ELF_SHA256, L"gt5.exe", PT5_ELF_BYTES},
+    {L"BCUS98114-v211", L"02.11", PT5_ELF_211_SHA256, L"gt5_211.exe", PT5_ELF_211_BYTES}
+};
+static const Target* target = &targets[0];
+static fs::path package_folder;
+static fs::path target_data() { return target == &targets[0] ? data : data/L"targets"/target->id; }
+static const Target* find_target(const std::wstring& id) {
+    for (const auto& t : targets) if (id == t.id || id == t.version || (id == L"2.11" && t.version == std::wstring(L"02.11")) || (id == L"1.04" && t.version == std::wstring(L"01.04"))) return &t;
+    fail(L"Supported GT5 versions are 01.04 and 2.11 exactly. 2.17 is not supported.");
+}
+
 // RecompLauncher consumes these lines from its redirected preparation stdout.
 static void setup_progress(double fraction, const char* message) {
     if (!easy_setup) return;
+    static double previous = 0; fraction = std::max(previous, fraction); previous = fraction;
     printf("progress %.3f %s\n", fraction, message);
     fflush(stdout);
 }
@@ -99,29 +121,32 @@ static void runtime_path(const fs::path& p) {
     if (!n || lossy || n >= 480)
         fail(L"The current game runtime cannot use this path. Choose a shorter folder with characters supported by your Windows language:\n\n" + p.wstring());
 }
-static std::wstring hash(const fs::path& file) {
+static std::wstring hash(const fs::path& file, bool sha1 = false, uint64_t omit = 0) {
     std::ifstream in(file, std::ios::binary);
     if (!in) fail(L"Cannot read: " + file.wstring());
     BCRYPT_ALG_HANDLE alg = nullptr;
     BCRYPT_HASH_HANDLE ctx = nullptr;
-    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
+    if (BCryptOpenAlgorithmProvider(&alg, sha1 ? BCRYPT_SHA1_ALGORITHM : BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
         fail(L"Windows SHA-256 is unavailable.");
     DWORD bytes = 0, got = 0;
     NTSTATUS rc = BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&bytes, sizeof bytes, &got, 0);
     std::vector<unsigned char> obj(bytes), block(65536);
     std::array<unsigned char, 32> digest{};
     if (rc >= 0) rc = BCryptCreateHash(alg, &ctx, obj.data(), bytes, nullptr, 0, 0);
-    while (rc >= 0 && in) {
-        in.read((char*)block.data(), block.size());
+    if (fs::file_size(file) < omit) fail(L"Truncated package.");
+    uint64_t remaining = fs::file_size(file) - omit;
+    while (rc >= 0 && in && remaining) {
+        in.read((char*)block.data(), static_cast<std::streamsize>(std::min<uint64_t>(remaining, block.size())));
+        remaining -= static_cast<uint64_t>(in.gcount());
         if (in.gcount()) rc = BCryptHashData(ctx, block.data(), (ULONG)in.gcount(), 0);
     }
-    if (rc >= 0 && !in.bad()) rc = BCryptFinishHash(ctx, digest.data(), (ULONG)digest.size(), 0);
+    if (rc >= 0 && !in.bad() && !remaining) rc = BCryptFinishHash(ctx, digest.data(), sha1 ? 20 : (ULONG)digest.size(), 0);
     else rc = (NTSTATUS)0xC0000001L;
     if (ctx) BCryptDestroyHash(ctx);
     BCryptCloseAlgorithmProvider(alg, 0);
     if (rc < 0) fail(L"Could not hash: " + file.wstring());
     std::wstring out;
-    for (auto b : digest) { out += L"0123456789abcdef"[b >> 4]; out += L"0123456789abcdef"[b & 15]; }
+    for (size_t i = 0; i < (sha1 ? 20 : digest.size()); ++i) { auto b = digest[i]; out += L"0123456789abcdef"[b >> 4]; out += L"0123456789abcdef"[b & 15]; }
     return out;
 }
 static std::vector<unsigned char> read_small(const fs::path& p) {
@@ -173,9 +198,10 @@ static fs::path installed_folder(fs::path chosen) {
     if (chosen.filename() == L"USRDIR") candidates.push_back(chosen.parent_path());
     for (const auto& p : candidates) {
         if (!fs::is_directory(p / L"USRDIR/PDIPFS") || fs::is_empty(p / L"USRDIR/PDIPFS")) continue;
+        if (target == &targets[1] && !fs::is_regular_file(p/L"PARAM.SFO")) fail(L"2.11 imports require the installation PARAM.SFO. Select the complete installed game folder.");
         if (fs::is_regular_file(p / L"PARAM.SFO") &&
-            (sfo_value(p / L"PARAM.SFO", "TITLE_ID") != "BCUS98114" || sfo_value(p / L"PARAM.SFO", "APP_VER") != "01.04"))
-            fail(L"The installed game data is not GT5 BCUS98114 update 01.04. Select the matching installation, not a newer update.");
+            (sfo_value(p / L"PARAM.SFO", "TITLE_ID") != "BCUS98114" || sfo_value(p / L"PARAM.SFO", "APP_VER") != std::string(target->version, target->version + wcslen(target->version))))
+            fail(L"The installed game data does not match GT5 BCUS98114 " + std::wstring(target->version) + L". Select the matching version.");
         return fs::canonical(p);
     }
     fail(L"No installed GT5 data was found. Select your RPCS3 folder or dev_hdd0\\game\\BCUS98114 containing USRDIR\\PDIPFS. Install update 01.04 in RPCS3 first. A completed GT5 install can also be imported.");
@@ -318,7 +344,7 @@ static bool offer_report(DWORD code) {
 // PT5_RPCS3_ARCHIVE=<file> uses a local copy of the pinned archive instead of
 // downloading it, PT5_KEEP_RPCS3=1 keeps the tool after setup.
 static bool managed_rpcs3_enabled() { return env(L"PT5_RPCS3_DOWNLOAD") != L"0"; }
-static fs::path tools_root() { return data / L"tools"; }
+static fs::path tools_root() { return data / (target == &targets[0] ? L"tools" : L"tools-v211"); }
 static void remove_tools() {
     const auto root = tools_root();
     if (!fs::exists(root)) return;
@@ -481,12 +507,12 @@ static bool press_install(IUIAutomation* uia, DWORD pid) {
     return false;
 }
 // The package's files are all present: the pinned count and total size.
-static bool package_installed(const fs::path& game) {
+static bool package_installed(const fs::path& game, uint64_t expected_files = PT5_DISC_PKG_INSTALLED_FILES, uint64_t expected_bytes = PT5_DISC_PKG_INSTALLED_BYTES) {
     if (!fs::is_regular_file(game / L"PARAM.SFO")) return false;
     uint64_t files = 0, bytes = 0; std::error_code error;
     for (fs::recursive_directory_iterator it(game, error), end; !error && it != end; it.increment(error))
         if (it->is_regular_file(error)) { ++files; bytes += it->file_size(error); }
-    return !error && files == PT5_DISC_PKG_INSTALLED_FILES && bytes == PT5_DISC_PKG_INSTALLED_BYTES;
+    return !error && files == expected_files && bytes == expected_bytes;
 }
 static BOOL CALLBACK close_window(HWND window, LPARAM pid) {
     DWORD owner = 0; GetWindowThreadProcessId(window, &owner);
@@ -494,11 +520,31 @@ static BOOL CALLBACK close_window(HWND window, LPARAM pid) {
         PostMessageW(window, WM_CLOSE, 0, 0);
     return TRUE;
 }
+static CopyState* package_progress = nullptr;
 // Opens RPCS3's installer, answers it, and closes RPCS3 once every file is in
 // place. A player can also click Install themselves (PT5_RPCS3_AUTOCLICK=0).
-static DWORD install_package(const fs::path& rpcs3, const std::wstring& args, const fs::path& game) {
+static DWORD install_package(const fs::path& rpcs3, const std::wstring& args, const fs::path& game, uint64_t expected_files = PT5_DISC_PKG_INSTALLED_FILES, uint64_t expected_bytes = PT5_DISC_PKG_INSTALLED_BYTES) {
     Handle job(INVALID_HANDLE_VALUE), process(INVALID_HANDLE_VALUE); DWORD pid = 0;
-    start_child(rpcs3, args, rpcs3.parent_path(), L"install-package", job, process, &pid);
+    const bool headless = package_progress != nullptr;
+    start_child(rpcs3, (headless ? L"--headless " : L"") + args, rpcs3.parent_path(), L"install-package", job, process, &pid);
+    if (headless) {
+        const auto deadline = GetTickCount64() + 30ull * 60 * 1000;
+        while (WaitForSingleObject(process.h, 250) != WAIT_OBJECT_0) {
+            if (package_progress->cancel) { TerminateJobObject(job.h, 1); WaitForSingleObject(process.h, 5000); throw Cancelled{}; }
+            if (GetTickCount64() > deadline) { TerminateJobObject(job.h, 1); fail(L"The background package installer timed out. See logs\\install-package.err and retry setup."); }
+        }
+        DWORD code = 1; GetExitCodeProcess(process.h, &code);
+        // Pinned RPCS3 0.0.43-20583 extracts successfully, then its headless
+        // manual_typemap destructor aborts. Accept only this exact teardown
+        // signature, with the complete measured output; other failures stop.
+        if (code == 0xc0000409 && package_installed(game, expected_files, expected_bytes)) {
+            std::ifstream f(data/L"logs/install-package.err", std::ios::binary);
+            std::string error((std::istreambuf_iterator<char>(f)), {});
+            if (error.find("Emulation object is unavailable (process teardown)") != std::string::npos &&
+                error.find("fixed_typemap.hpp:220") != std::string::npos) code = 0;
+        }
+        return code == 0 && package_installed(game, expected_files, expected_bytes) ? 0 : (code ? code : 1);
+    }
     Com<IUIAutomation> uia;
     if (env(L"PT5_RPCS3_AUTOCLICK") != L"0")
         CoCreateInstance(__uuidof(CUIAutomation), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(uia.put()));
@@ -511,9 +557,9 @@ static DWORD install_package(const fs::path& rpcs3, const std::wstring& args, co
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
         if (!pressed && uia.p) {
             pressed = press_install(uia.p, pid);
-            if (pressed) setup_progress(0.07, "RPCS3 is installing the update from your disc");
+            if (pressed && package_folder.empty()) setup_progress(0.07, "RPCS3 is installing the update from your disc");
         }
-        stable = package_installed(game) ? stable + 1 : 0;
+        stable = package_installed(game, expected_files, expected_bytes) ? stable + 1 : 0;
         if (stable >= 3) { complete = true; break; }
         if (GetTickCount64() > deadline) break;
     }
@@ -530,39 +576,40 @@ static DWORD install_package(const fs::path& rpcs3, const std::wstring& args, co
 }
 static fs::path decrypt_executable(const fs::path& installed, const fs::path& temporary, const fs::path& rpcs3, bool managed = false) {
     const auto original = installed / L"USRDIR/EBOOT.BIN";
-    if (!fs::is_regular_file(original)) fail(L"The installed update is missing USRDIR\\EBOOT.BIN. Select your decrypted update 1.04 ELF instead.");
+    if (!fs::is_regular_file(original)) fail(L"The installed update is missing USRDIR\\EBOOT.BIN. Select your decrypted matching update ELF instead.");
     fs::copy_file(original, temporary / L"EBOOT.BIN");
     if (run(rpcs3, std::wstring(managed ? L"--allow-any-location " : L"") + L"--decrypt " + quote(temporary / L"EBOOT.BIN"),
             rpcs3.parent_path(), L"decrypt") != 0)
         fail(L"RPCS3 decryption failed. See logs\\decrypt.err, or use RPCS3's Decrypt PS3 Binaries menu and select the resulting ELF.");
     const auto result = temporary / L"EBOOT.elf";
-    if (!fs::is_regular_file(result)) fail(L"RPCS3 did not produce EBOOT.elf. Decrypt update 1.04 in RPCS3 and select the ELF.");
+    if (!fs::is_regular_file(result)) fail(L"RPCS3 did not produce EBOOT.elf. Decrypt the selected update in RPCS3 and select the ELF.");
     return result;
 }
 static fs::path installed_executable(const fs::path& installed) {
     for (const wchar_t* name : {L"EBOOT.elf", L"EBOOT.ELF", L"EMAIN.ELF"}) {
         const auto candidate = installed / L"USRDIR" / name;
-        if (fs::is_regular_file(candidate) && hash(candidate) == PT5_ELF_SHA256) return candidate;
+        if (fs::is_regular_file(candidate) && hash(candidate) == target->sha256) return candidate;
     }
     return {};
 }
 static fs::path executable_for(const fs::path& installed, const fs::path& temporary) {
     if (const auto found = installed_executable(installed); !found.empty()) return found;
-    TASKDIALOG_BUTTON buttons[] = {{100,L"Select my decrypted 1.04 executable"}, {101,L"Decrypt it using my installed RPCS3"}};
+    TASKDIALOG_BUTTON buttons[] = {{100,L"Select my decrypted executable"}, {101,L"Decrypt it using my installed RPCS3"}};
     TASKDIALOGCONFIG td{}; td.cbSize = sizeof td;
     td.dwFlags = static_cast<TASKDIALOG_FLAGS>(TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION);
     td.pszWindowTitle = L"Project Tourline 5 - game executable";
-    td.pszMainInstruction = L"Select the GT5 update 1.04 executable";
+    td.pszMainInstruction = L"Select the matching GT5 update executable";
     td.pszContent = L"Choose the decrypted EBOOT.elf from your installed GT5 update 1.04, or let your installed RPCS3 decrypt a temporary copy of EBOOT.BIN. The original files are left unchanged. No game files, keys or RPCS3 are included.";
     td.cButtons = 2; td.pButtons = buttons; td.dwCommonButtons = TDCBF_CANCEL_BUTTON; brand(td);
     int choice = IDCANCEL;
     if (FAILED(TaskDialogIndirect(&td, &choice, nullptr, nullptr))) fail(L"Could not open executable setup.");
     if (choice == IDCANCEL) throw Cancelled{};
-    if (choice == 100) return pick(false, L"Select decrypted GT5 BCUS98114 update 1.04 EBOOT.elf");
+    if (choice == 100) return pick(false, L"Select the matching decrypted GT5 EBOOT.elf");
     auto rpcs3 = pick(false, L"Select your installed RPCS3", L"RPCS3 executable", L"rpcs3.exe");
     if (rpcs3.empty()) throw Cancelled{};
     return decrypt_executable(installed, temporary, rpcs3);
 }
+static fs::path validate_engine();
 // Install the package supplied on the supported disc, without booting the game
 // or asking the player to locate an update download. RPCS3 owns PKG decryption.
 static fs::path disc_update(const fs::path& disc, const fs::path& rpcs3, bool managed = false) {
@@ -599,12 +646,73 @@ static fs::path disc_update(const fs::path& disc, const fs::path& rpcs3, bool ma
         if (FAILED(TaskDialogIndirect(&td, &choice, nullptr, nullptr))) fail(L"Could not open disc preparation instructions.");
         if (choice != IDOK) throw Cancelled{};
     }
-    setup_progress(0.06, "Installing the update from your disc with RPCS3 (its window opens and closes by itself)");
+    setup_progress(0.06, package_progress ? "Installing the base files from your disc" : "Installing the update from your disc with RPCS3 (its window opens and closes by itself)");
     if (install_package(rpcs3, std::wstring(managed ? L"--allow-any-location " : L"") + L"--installpkg " + quote(package), game) != 0)
         fail(L"RPCS3 could not install the package from your disc. See logs\\install-package.err. Close other RPCS3 windows and retry.");
     if (!fs::is_regular_file(game/L"PARAM.SFO"))
         fail(L"The disc package was not found in RPCS3's standard game-data folder after installation. Close other RPCS3 windows and retry; if RPCS3 asks, click Install and close RPCS3 when finished. If you use a custom dev_hdd0 location, select that installed 01.04 folder in the optional Installed data input instead.");
     return installed_folder(game);
+}
+// Validate every input before RPCS3 starts. These pins cover the complete
+// official chain through 2.11; later updates and other regions are never inferred.
+static void verify_packages(const fs::path& folder) {
+    CopyState state; state.total = std::size(update_packages);
+    with_progress(L"Checking GT5 2.11 update packages", L"Checking every required package before installation. No game files are downloaded.", state, [&] {
+        for (const auto& pkg : update_packages) {
+            if (state.cancel) throw Cancelled{};
+            const auto file = folder/pkg.file;
+            if (fs::exists(file) && (GetFileAttributesW(file.c_str()) & FILE_ATTRIBUTE_REPARSE_POINT))
+                fail(L"Update package links are not supported: " + file.wstring());
+            if (!fs::is_regular_file(file) || fs::file_size(file) != pkg.bytes || hash(file, true, 32) != pkg.sha1)
+                fail(L"Missing or damaged GT5 update " + std::wstring(pkg.version) + L":\n\n" + file.wstring() + L"\n\nProvide all 21 BCUS98114 packages from 01.05 through 02.11. No installed version has been changed.");
+            ++state.copied;
+        }
+    });
+}
+static fs::path install_updates(const fs::path& disc, fs::path& executable) {
+    verify_packages(package_folder);
+    if (!managed_rpcs3_enabled()) fail(L"2.11 package installation requires setup's isolated RPCS3. Enable it, supply its pinned archive with PT5_RPCS3_ARCHIVE, or import an existing 2.11 installation.");
+    if (fs::space(data).available < 2ull * update_packages[std::size(update_packages)-1].installed_bytes + (512ull<<20))
+        fail(L"GT5 2.11 setup needs about 8.3 GiB free for its isolated installation and verified import. Free some space and retry.");
+    const auto rpc = managed_rpcs3();
+    const auto game = rpc.parent_path()/L"dev_hdd0/game/BCUS98114";
+    int completed = -1;
+    if (fs::exists(game)) {
+        if (fs::is_regular_file(game/L"PARAM.SFO") && sfo_value(game/L"PARAM.SFO", "TITLE_ID") == "BCUS98114") {
+            const auto version = sfo_value(game/L"PARAM.SFO", "APP_VER");
+            if (version == "01.04" && package_installed(game)) completed = 0;
+            for (size_t i = 0; i < std::size(update_packages); ++i) {
+                const auto& p = update_packages[i];
+                if (version == std::string(p.version, p.version+wcslen(p.version)) && package_installed(game, p.files, p.installed_bytes)) completed = static_cast<int>(i)+1;
+            }
+        }
+        // Preserve a partial attempt for inspection. Never repair a live profile.
+        if (completed < 0) fs::rename(game, game.parent_path()/(L"incomplete-"+unique_name()));
+    }
+    CopyState progress; progress.total = std::size(update_packages)+1;
+    progress.copied = completed < 0 ? 0 : completed+1;
+    with_progress(L"Installing GT5 2.11", L"Applying your update packages in the background. RPCS3 does not open a window.", progress, [&] {
+    struct ProgressScope { ProgressScope(CopyState& p) { package_progress=&p; } ~ProgressScope() { package_progress=nullptr; } } scope(progress);
+    if (completed < 0) {
+        { std::lock_guard<std::mutex> guard(progress.mutex); progress.current=L"Installing base files from your disc"; }
+        const Target* selected = target; target = &targets[0];
+        try { disc_update(disc, rpc, true); } catch (...) { target = selected; throw; }
+        target = selected; completed = 0; progress.copied=1;
+    }
+    for (size_t i = static_cast<size_t>(completed); i < std::size(update_packages); ++i) {
+        const auto& p = update_packages[i];
+        if (progress.cancel) throw Cancelled{};
+        { std::lock_guard<std::mutex> guard(progress.mutex); progress.current=L"Installing GT5 update "+std::wstring(p.version); }
+        std::string message = "Installing GT5 update " + std::string(p.version, p.version+wcslen(p.version));
+        setup_progress(0.07 + 0.025 * i / std::size(update_packages), message.c_str());
+        if (install_package(rpc, L"--allow-any-location --installpkg " + quote(package_folder/p.file), game, p.files, p.installed_bytes) != 0 ||
+            !package_installed(game, p.files, p.installed_bytes) ||
+            sfo_value(game/L"PARAM.SFO", "APP_VER") != std::string(p.version, p.version+wcslen(p.version)))
+            fail(L"RPCS3 did not finish GT5 update " + std::wstring(p.version) + L". See logs\\install-package.err and retry. Existing playable installations are unchanged.");
+        progress.copied=i+2;
+    }
+    });
+    executable = rpc; return game;
 }
 static void configure(fs::path disc, fs::path installed, fs::path executable) {
     setup_progress(0.02, "Checking GT5 disc and update folders");
@@ -612,7 +720,30 @@ static void configure(fs::path disc, fs::path installed, fs::path executable) {
     if (disc.empty()) throw Cancelled{};
     disc = game_folder(disc);
     bool managed = false;
-    if (installed.empty() && !easy_setup && executable.empty() && !silent_errors) {
+    if (!package_folder.empty()) {
+        if (!installed.empty()) fail(L"Choose update packages or an existing installation, not both.");
+        installed = install_updates(disc, executable); managed = true;
+    }
+    if (target == &targets[1] && installed.empty() && !easy_setup && executable.empty() && !silent_errors) {
+        TASKDIALOG_BUTTON buttons[] = {{100,L"Install my 01.05-2.11 update packages"}, {101,L"Import my existing 2.11 installation"}};
+        TASKDIALOGCONFIG td{}; td.cbSize=sizeof td;
+        td.dwFlags=static_cast<TASKDIALOG_FLAGS>(TDF_USE_COMMAND_LINKS|TDF_ALLOW_DIALOG_CANCELLATION);
+        td.pszWindowTitle=L"Project Tourline 5 - GT5 2.11 setup";
+        td.pszMainInstruction=L"Set up GT5 2.11 (experimental)";
+        td.pszContent=L"2.11 keeps separate game data, saves and shaders. Your 01.04 progression is retained. Supply the full official update chain; no game files are downloaded.";
+        td.pButtons=buttons;td.cButtons=2;td.dwCommonButtons=TDCBF_CANCEL_BUTTON;brand(td);
+        int choice=IDCANCEL; if(FAILED(TaskDialogIndirect(&td,&choice,nullptr,nullptr))) fail(L"Could not open 2.11 setup.");
+        if(choice==IDCANCEL) throw Cancelled{};
+        if(choice==100) {
+            package_folder=pick(true,L"Select your 21 GT5 BCUS98114 update packages (01.05 through 02.11)");
+            if(package_folder.empty()) throw Cancelled{};
+            installed=install_updates(disc,executable);managed=true;
+        } else {
+            installed=pick(true,L"Select installed GT5 2.11 data or its RPCS3 folder");
+            if(installed.empty()) throw Cancelled{};
+        }
+    }
+    if (target == &targets[0] && installed.empty() && !easy_setup && executable.empty() && !silent_errors) {
         const bool automatic = managed_rpcs3_enabled();
         TASKDIALOG_BUTTON buttons[] = {
             {100, L"Prepare from my disc (recommended)\nNothing else to select. Setup downloads the official RPCS3 build (37 MB) only to unpack the update already on your disc, then removes it."},
@@ -633,6 +764,7 @@ static void configure(fs::path disc, fs::path installed, fs::path executable) {
         if (installed.empty() && executable.empty() && !managed) throw Cancelled{};
     }
     if (installed.empty()) {
+        if (target == &targets[1]) fail(L"2.11 requires the full update-packages folder or an existing 2.11 installation.");
         if (executable.empty()) {
             if (!managed_rpcs3_enabled())
                 fail(L"Select rpcs3.exe in the RPCS3 / Executable input to prepare from your disc, or supply an existing 01.04 installation in Installed data. You do not need to find an update download.");
@@ -642,6 +774,7 @@ static void configure(fs::path disc, fs::path installed, fs::path executable) {
             fail(L"Select rpcs3.exe in the RPCS3 / Executable input to prepare from your disc, leave it empty to let setup fetch RPCS3, or supply an existing 01.04 installation in Installed data. You do not need to find an update download.");
         installed = disc_update(disc, executable, managed);
     }
+    validate_engine();
     const auto selected_update = installed;
     installed = installed_folder(installed);
     Import staging;
@@ -662,16 +795,16 @@ static void configure(fs::path disc, fs::path installed, fs::path executable) {
             fail(L"No matching decrypted update executable was found. Add your update 01.04 EBOOT.elf or installed rpcs3.exe to the optional Executable / RPCS3 input in Easy Setup, then retry.");
         if (_wcsicmp(executable.extension().c_str(), L".exe") == 0) {
             if (_wcsicmp(executable.filename().c_str(), L"rpcs3.exe") != 0 || !fs::is_regular_file(executable))
-                fail(L"Select your installed rpcs3.exe or the decrypted GT5 update 01.04 EBOOT.elf.");
+                fail(L"Select your installed rpcs3.exe or the decrypted matching GT5 EBOOT.elf.");
             setup_progress(0.12, managed ? "Decrypting a temporary copy with RPCS3" : "Decrypting a temporary copy with your RPCS3");
             executable = decrypt_executable(installed, staging.path, executable, managed);
         }
     } else if (executable.empty()) executable = executable_for(installed, staging.path);
     if (executable.empty()) throw Cancelled{};
-    if (!fs::is_regular_file(executable) || fs::file_size(executable) != PT5_ELF_BYTES || hash(executable) != PT5_ELF_SHA256)
+    if (!fs::is_regular_file(executable) || fs::file_size(executable) != target->bytes || hash(executable) != target->sha256)
         fail(L"That executable does not match GT5 BCUS98114 update 01.04. The original disc executable and newer updates are different builds. Select the decrypted update 1.04 EBOOT.elf.");
-    const fs::path game = data / L"gamedata/dev_hdd0/game/BCUS98114";
-    if (within(staging.path, installed) || within(installed, staging.path) || within(data, installed))
+    const fs::path game = target_data() / L"gamedata/dev_hdd0/game/BCUS98114";
+    if (within(staging.path, installed) || within(installed, staging.path) || (within(data, installed) && !(managed && within(tools_root(), installed))))
         fail(L"Choose the source installation outside the launcher's import/storage root.");
     const bool reuse = fs::exists(game) && fs::equivalent(game, installed);
     setup_progress(0.20, "Copying and verifying installed update data");
@@ -679,9 +812,9 @@ static void configure(fs::path disc, fs::path installed, fs::path executable) {
                               disc / L"USRDIR/GT.VOL");
     setup_progress(0.90, "Verifying imported executable");
     fs::copy_file(executable, staging.path / L"EMAIN.ELF");
-    if (hash(staging.path / L"EMAIN.ELF") != PT5_ELF_SHA256) fail(L"The executable changed during import. Previous setup is unchanged.");
-    fs::create_directories(game.parent_path()); fs::create_directories(data / L"input");
-    const auto backup = data / L"backups" / unique_name(); const auto elf = data / L"input/EMAIN.ELF";
+    if (hash(staging.path / L"EMAIN.ELF") != target->sha256) fail(L"The executable changed during import. Previous setup is unchanged.");
+    fs::create_directories(game.parent_path()); fs::create_directories(target_data() / L"input");
+    const auto backup = data / L"backups" / unique_name(); const auto elf = target_data() / L"input/EMAIN.ELF";
     bool old_game = false, old_elf = false, new_game = false, new_elf = false;
     setup_progress(0.95, "Activating verified GT5 setup");
     try {
@@ -689,7 +822,7 @@ static void configure(fs::path disc, fs::path installed, fs::path executable) {
         if (!reuse) { fs::rename(staging.path/L"game", game); new_game = true; }
         if (fs::exists(elf)) { fs::create_directories(backup); fs::rename(elf, backup/L"EMAIN.ELF"); old_elf = true; }
         fs::rename(staging.path/L"EMAIN.ELF", elf); new_elf = true;
-        atomic_ini(data/L"setup.ini", {{L"directory", disc}, {L"target", L"BCUS98114-v104"}});
+        atomic_ini(target_data()/L"setup.ini", {{L"directory", disc}, {L"target", target->id}});
     } catch (...) {
         if (new_elf) fs::rename(elf, staging.path/L"EMAIN.ELF");
         if (old_elf) fs::rename(backup/L"EMAIN.ELF", elf);
@@ -718,11 +851,11 @@ static fs::path storage_picker() {
     return choice == 100 ? data : pick(true, L"Choose an empty folder for Project Tourline 5 storage");
 }
 static void validate_setup() {
-    if (profile(data/L"setup.ini", L"game", L"target") != L"BCUS98114-v104") fail(L"Setup is missing. Run tourline5.exe --setup.");
-    game_folder(profile(data/L"setup.ini", L"game", L"directory"));
-    installed_folder(data/L"gamedata/dev_hdd0/game/BCUS98114");
-    const auto elf = data/L"input/EMAIN.ELF";
-    if (!fs::is_regular_file(elf) || fs::file_size(elf) != PT5_ELF_BYTES || hash(elf) != PT5_ELF_SHA256)
+    if (profile(target_data()/L"setup.ini", L"game", L"target") != target->id) fail(L"Setup is missing. Run tourline5.exe --setup.");
+    game_folder(profile(target_data()/L"setup.ini", L"game", L"directory"));
+    installed_folder(target_data()/L"gamedata/dev_hdd0/game/BCUS98114");
+    const auto elf = target_data()/L"input/EMAIN.ELF";
+    if (!fs::is_regular_file(elf) || fs::file_size(elf) != target->bytes || hash(elf) != target->sha256)
         fail(L"The imported executable is missing or changed. Run tourline5.exe --setup.");
 }
 // Virtual install after the game's own first-boot install (or any other new
@@ -730,10 +863,10 @@ static void validate_setup() {
 // only when the installed files changed since the last pass; a cancelled pass
 // is not offered again until they change. PT5_VOLMAP=0 off.
 static void link_installed_data(const fs::path& disc) {
-    const auto pdipfs = data/L"gamedata/dev_hdd0/game/BCUS98114/USRDIR/PDIPFS";
+    const auto pdipfs = target_data()/L"gamedata/dev_hdd0/game/BCUS98114/USRDIR/PDIPFS";
     const auto volume = disc/L"USRDIR/GT.VOL";
     if (!volmap::enabled() || !fs::is_directory(pdipfs) || !fs::is_regular_file(volume)) return;
-    const auto ini = data/L"volmap.ini";
+    const auto ini = target_data()/L"volmap.ini";
     if (profile(ini, L"game", L"signature") == volmap::signature(pdipfs)) return;
     CopyState state; state.total = 1000;
     volmap::Result result;
@@ -752,11 +885,18 @@ static void link_installed_data(const fs::path& disc) {
 }
 static fs::path validate_engine() {
     const auto release = install/L"pt5-release.ini";
-    const auto engine = fs::is_regular_file(install/L"gt5.exe") ? install/L"gt5.exe" : install/L"runtime/gt5.exe";
-    if (profile(release, L"game", L"target") != L"BCUS98114-v104" ||
-        !fs::is_regular_file(engine) || hash(engine) != profile(release, L"game", L"engine_sha256"))
-        fail(L"The launcher and engine do not match. Rebuild or re-extract the complete Project Tourline 5 player folder.");
+    const auto engine = fs::is_regular_file(install/target->engine) ? install/target->engine : install/L"runtime"/target->engine;
+    auto expected = profile(release, target->id, L"engine_sha256");
+    if (expected.empty() && profile(release, L"game", L"target") == target->id)
+        expected = profile(release, L"game", L"engine_sha256");
+    if (expected.empty() || !fs::is_regular_file(engine) || hash(engine) != expected)
+        fail(L"The engine for GT5 " + std::wstring(target->version) + L" is missing or mismatched. Re-extract the complete player package containing that version.");
     return engine;
+}
+static bool target_ready(const Target& candidate, bool setup = true) {
+    const Target* previous = target; target = &candidate;
+    try { validate_engine(); if (setup) validate_setup(); target = previous; return true; }
+    catch (...) { target = previous; return false; }
 }
 static void report(const std::wstring& message) {
     fwprintf(stderr, L"%ls\n", message.c_str());
@@ -778,12 +918,18 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     try {
         bool force = false, open = false, change_storage = false, configure_only = false;
         fs::path storage, disc, installed, elf;
+        bool explicit_target = false;
         int argc = 0; auto argv = CommandLineToArgvW(GetCommandLineW(), &argc);
         if (!argv) fail(L"Could not read launcher options.");
         struct Arguments { LPWSTR* value; ~Arguments() { LocalFree(value); } } arguments{argv};
         for (int i = 1; i < argc; ++i) {
             const std::wstring arg = argv[i];
-            if (arg == L"--setup") force = true;
+            if (arg.rfind(L"--target=",0)==0) { target=find_target(arg.substr(9)); explicit_target=true; }
+            else if (arg.rfind(L"--updates=",0)==0) {
+                if(arg.size()==10) fail(L"The update packages input is empty.");
+                package_folder=fs::absolute(arg.substr(10)); target=&targets[1]; explicit_target=true;
+            }
+            else if (arg == L"--setup") force = true;
             else if (arg == L"--recomplauncher-prepare") { easy_setup = true; force = true; configure_only = true; silent_errors = true; }
             else if (arg == L"--configure") { force = true; configure_only = true; silent_errors = true; }
             else if (arg == L"--check") { quiet = true; silent_errors = true; }
@@ -805,12 +951,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 else elf = value;
             } else fail(L"Supported options: --setup, --check, --open-data, --choose-storage, --set-storage <empty folder>, --configure --game <dump> [--elf <ELF or rpcs3.exe>] [--game-data <installation> --elf <ELF or rpcs3.exe>], --recomplauncher-prepare --game <dump> [--game-data=<installation>] [--executable=<ELF or rpcs3.exe>].");
         }
+        if (!package_folder.empty() && target != &targets[1]) fail(L"Update packages select GT5 2.11; remove the conflicting --target option.");
         if ((quiet && (force || open || change_storage || !storage.empty())) ||
             (open && (force || change_storage || !storage.empty())) ||
             (force && (change_storage || !storage.empty())) ||
             (change_storage && !storage.empty()) ||
             (configure_only && (disc.empty() || (!easy_setup && elf.empty() && !installed.empty()))) ||
-            (!configure_only && (!disc.empty() || !installed.empty() || !elf.empty())))
+            (!configure_only && (!disc.empty() || !installed.empty() || !elf.empty() || !package_folder.empty())))
             fail(L"Use --configure with --game (setup fetches RPCS3), optionally --elf, and --game-data with --elf when importing existing data, or --setup for the file pickers. --check cannot change setup or storage.");
         if (FAILED(com)) fail(L"Windows COM initialization failed.");
         std::array<wchar_t, 32768> module{};
@@ -834,9 +981,19 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             }
         }
         runtime_path(data);
+        if (!explicit_target && !installed.empty()) {
+            for (const auto& p : {installed, installed/L"dev_hdd0/game/BCUS98114", installed/L"gamedata/dev_hdd0/game/BCUS98114", installed/L"game/BCUS98114", installed/L"BCUS98114", installed.parent_path()})
+                if (fs::is_regular_file(p/L"PARAM.SFO") && sfo_value(p/L"PARAM.SFO","TITLE_ID")=="BCUS98114") {
+                    const auto version=sfo_value(p/L"PARAM.SFO","APP_VER"); target=find_target(std::wstring(version.begin(),version.end())); explicit_target=true;break;
+                }
+        }
+        if (!explicit_target) {
+            auto selected=profile(data/L"selection.ini",L"game",L"target");
+            if(!selected.empty()) target=find_target(selected);
+        }
         if (quiet) { validate_setup(); validate_engine(); return 0; }
         if (!open && !change_storage && storage.empty()) {
-            validate_engine(); // Reject an incomplete/mismatched package before importing game data.
+            if (!force || configure_only || explicit_target) validate_engine(); // Native setup chooses its version below.
             if (!fs::is_directory(install/L"assets/glyphs")) fail(L"The player assets folder is missing. Rebuild or re-extract the complete player folder.");
         }
         fs::create_directories(home); fs::create_directories(data);
@@ -850,7 +1007,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         if (home_lock.h == INVALID_HANDLE_VALUE || data_lock.h == INVALID_HANDLE_VALUE)
             fail(L"Project Tourline 5 is already running, or this storage is not writable.");
         if (!override_data) link_storage(home);
-        const bool first = !fs::exists(data/L"setup.ini") && !override_data && !configure_only && env(L"PT5_STORAGE_PICKER") != L"0" && !silent_errors;
+        const bool first = !fs::exists(data/L"setup.ini") && !fs::exists(data/L"selection.ini") && !override_data && !configure_only && env(L"PT5_STORAGE_PICKER") != L"0" && !silent_errors;
         if (!override_data && (change_storage || !storage.empty() || first)) {
             auto selected = storage.empty() ? storage_picker() : storage;
             if (selected.empty()) throw Cancelled{};
@@ -863,20 +1020,36 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             link_storage(home);
             if (change_storage || !storage.empty()) return 0;
         }
+        if (force && !configure_only && !explicit_target && !silent_errors) {
+            TASKDIALOG_BUTTON buttons[]={{104,L"GT5 01.04 - prepare from disc or import"},{211,L"GT5 2.11 (experimental) - update packages or import"}};
+            TASKDIALOGCONFIG td{};td.cbSize=sizeof td;td.dwFlags=static_cast<TASKDIALOG_FLAGS>(TDF_USE_COMMAND_LINKS|TDF_ALLOW_DIALOG_CANCELLATION);
+            td.pszWindowTitle=L"Project Tourline 5 - game setup";td.pszMainInstruction=L"Choose the game version to set up";
+            td.pszContent=L"Each version keeps separate game data and saves. Your current installation is retained.";
+            td.pButtons=buttons;td.cButtons=2;td.dwCommonButtons=TDCBF_CANCEL_BUTTON;brand(td);int choice=IDCANCEL;
+            if(FAILED(TaskDialogIndirect(&td,&choice,nullptr,nullptr))) fail(L"Could not open version selection.");
+            if(choice==IDCANCEL) throw Cancelled{};
+            target=choice==211 ? &targets[1] : &targets[0];validate_engine();
+        }
         bool valid = false;
         if (!force) { try { validate_setup(); valid = true; } catch (const Failure&) {} catch (const fs::filesystem_error&) {} }
         if (!valid) {
             if (silent_errors && !configure_only) fail(L"Setup is missing or invalid. Run tourline5.exe --setup.");
+            if (disc.empty() && target == &targets[1]) disc=profile(data/L"setup.ini", L"game", L"directory");
             configure(disc, installed, elf);
+            validate_setup();
+            atomic_ini(data/L"selection.ini", {{L"target", target->id}});
         }
         if (configure_only) {
             if (easy_setup) { validate_setup(); setup_progress(1.0, "GT5 setup complete"); }
             return 0;
         }
+        const auto cache_override = env(L"RSX_SHADER_CACHE");
+        for (;;) { // A version change starts a fresh engine under the same storage lease.
         validate_setup(); const auto engine = validate_engine();
+        atomic_ini(data/L"selection.ini", {{L"target", target->id}});
         if (!fs::is_directory(install/L"assets/glyphs")) fail(L"The player assets folder is missing. Rebuild or re-extract the complete player folder.");
-        fs::create_directories(data/L"assets");
-        fs::copy(install/L"assets/glyphs", data/L"assets/glyphs", fs::copy_options::recursive|fs::copy_options::overwrite_existing);
+        fs::create_directories(target_data()/L"assets");
+        fs::copy(install/L"assets/glyphs", target_data()/L"assets/glyphs", fs::copy_options::recursive|fs::copy_options::overwrite_existing);
         const auto settings = data/L"gt5p_settings.toml";
         if (!fs::exists(settings)) {
             std::ofstream f(settings);
@@ -884,22 +1057,42 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             f << "# Project Tourline 5 first-run preset. F1 opens settings.\n[video]\nresolution = \"720p\"\nmsaa = 2\nshader_compiler = \"dxc\"\nshader_warmup = true\n";
             if (!f) fail(L"Could not write initial settings.");
         }
-        setenv(L"GT5P_ROOT", data.wstring()); setenv(L"PS3_VFS_ROOT", data.wstring());
+        setenv(L"GT5P_ROOT", target_data().wstring()); setenv(L"PS3_VFS_ROOT", target_data().wstring());
         setenv(L"GT5P_SETTINGS", settings.wstring());
-        const auto selected_game = game_folder(profile(data/L"setup.ini", L"game", L"directory"));
+        const auto selected_game = game_folder(profile(target_data()/L"setup.ini", L"game", L"directory"));
         setenv(L"GT5P_GAME_DIR", selected_game.wstring()+L"/");
         link_installed_data(selected_game);
-        if (env(L"RSX_SHADER_CACHE").empty()) setenv(L"RSX_SHADER_CACHE", (data/L"shadercache").wstring());
+        setenv(L"RSX_SHADER_CACHE", cache_override.empty() ? (target_data()/L"shadercache").wstring() : cache_override);
+        setenv(L"GT5P_GAME_VERSION", target->version);
+        setenv(L"GT5P_VERSION_211_SUPPORTED", target_ready(targets[1], false) ? L"1" : L"0");
+        setenv(L"GT5P_VERSION_104_READY", target_ready(targets[0]) ? L"1" : L"0");
+        setenv(L"GT5P_VERSION_211_READY", target_ready(targets[1]) ? L"1" : L"0");
         setenv(L"GT5P_LAUNCHER_RESTART", L"1");
         if (env(L"PS3_VERBOSE").empty()) setenv(L"PS3_VERBOSE", L"0");
+        bool version_change = false;
         for (;;) {
-            const auto code = run(engine, quote(data/L"input/EMAIN.ELF"), data, L"play");
+            const auto code = run(engine, quote(target_data()/L"input/EMAIN.ELF"), target_data(), L"play");
             if (code == pt5_restart::exit_code) continue;
+            if (code == pt5_restart::version_104 || code == pt5_restart::version_211 || code == pt5_restart::setup_211) {
+                const Target* previous=target;
+                target = code == pt5_restart::version_104 ? &targets[0] : &targets[1];
+                try {
+                    validate_engine();
+                    if (code == pt5_restart::setup_211) configure(selected_game, {}, {});
+                    validate_setup();
+                    atomic_ini(data/L"selection.ini", {{L"target",target->id}});
+                } catch (const Cancelled&) { target=previous; }
+                  catch (const Failure& f) { report(f.message); target=previous; }
+                  catch (const fs::filesystem_error&) { report(L"A setup file operation failed. Your previous game version remains selected. Check free space and folder access, then retry setup."); target=previous; }
+                version_change = true; break;
+            }
             if (offer_report(code)) { if (code) return 1; break; }
             if (code) fail(L"The game exited with code " + std::to_wstring(code) + L". Logs are in:\n\n" + (data/L"logs").wstring());
             break;
         }
+        if (version_change) continue;
         return 0;
+        }
     } catch (const Cancelled&) { return 0; }
       catch (const Failure& e) { report(e.message); }
       catch (const std::exception&) { report(L"A file operation failed. Check free space and folder access, then run tourline5.exe --setup again. Your original game files are unchanged."); }

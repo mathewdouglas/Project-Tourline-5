@@ -563,7 +563,7 @@
     },
     {
       "id": "update",
-      "label": "Installed data (optional, advanced): existing GT5 01.04 / RPCS3 folder",
+      "label": "Installed data (optional, advanced): existing GT5 01.04 or 2.11 / RPCS3 folder",
       "optional": true,
       "role": "update",
       "formats": [
@@ -574,7 +574,7 @@
     },
     {
       "id": "executable",
-      "label": "RPCS3 / Executable (optional): leave empty and setup fetches RPCS3 itself; or your rpcs3.exe / a decrypted 01.04 EBOOT.elf",
+      "label": "RPCS3 / Executable (optional): your rpcs3.exe or matching decrypted GT5 EBOOT.elf",
       "optional": true,
       "formats": [
         {
@@ -583,6 +583,17 @@
             "elf",
             "exe"
           ]
+        }
+      ]
+    },
+    {
+      "id": "updates211",
+      "label": "GT5 2.11 (optional, experimental): folder containing all 21 BCUS98114 update PKGs, 01.05 through 02.11",
+      "optional": true,
+      "role": "update",
+      "formats": [
+        {
+          "type": "folder"
         }
       ]
     }
@@ -596,9 +607,10 @@
       "--game",
       "{input:disc}",
       "--game-data={input:update}",
-      "--executable={input:executable}"
+      "--executable={input:executable}",
+      "--updates={input:updates211}"
     ],
-    "label": "Preparing GT5 (an RPCS3 window opens and closes by itself)",
-    "timeout": 7200
+    "label": "Preparing GT5 game files",
+    "timeout": 14400
   }
 }

@@ -1,5 +1,10 @@
 # Project Tourline 5 setup
 
+Optional **GT5 2.11** installation, separate saves/caches and F1 version
+switching are described in [2.11 setup](setup-v211.md). Disc-only setup
+continues to prepare 01.04.
+
+
 Run **tourline5.exe**. A source build puts it in `build/`; **Setup and play.cmd**
 opens it too. In a player package, run the launcher at the top of the extracted
 folder. Setup follows Tourline Prologue's storage and file-selection flow:
