@@ -122,4 +122,6 @@ in isolated temporary tool folders. Every headless stage matched its measured
 file count and bytes. The production installer accepted the real final package
 with the pinned teardown signature. The final imported ELF matched the pinned
 2.11 identity. The F1 version choices were rendered and inspected in game.
-No clean dual-engine release or race/parity acceptance was run for this change.
+Subsequent [live checks](gt5-v211-live-checks.md) validate F1 and managed
+restart, but find nonfinite race audio and a race stall. No clean dual-engine
+release or full race/parity acceptance has passed.

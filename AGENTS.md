@@ -78,7 +78,8 @@ and imports without replacing 01.04. F1 GAME offers setup and a version
 selector/restart when managed by the launcher. Existing 01.04 storage stays
 in place; 2.11 uses `targets/BCUS98114-v211`, with separate saves/caches and
 shared PC settings. Both engines can be packaged together. 2.11 is still
-experimental; race/parity acceptance is outstanding. See
+experimental: [live checks](docs/gt5-v211-live-checks.md) pass F1/restart but
+find a race stall and nonfinite race audio. Race/parity acceptance is outstanding. See
 [setup-v211.md](docs/setup-v211.md). Tests: `player_setup.py`,
 `recomplauncher_manifest.py`, `player_package.py` under `scripts/test`.
 
