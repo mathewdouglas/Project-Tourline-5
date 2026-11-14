@@ -10,6 +10,8 @@
 [![No game files](https://github.com/mathewdouglas/Project-Tourline-5/actions/workflows/no-game-files.yml/badge.svg)](https://github.com/mathewdouglas/Project-Tourline-5/actions/workflows/no-game-files.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![Status: early](https://img.shields.io/badge/status-early-orange)
+[![Release](https://img.shields.io/github/v/release/mathewdouglas/Project-Tourline-5?label=release)](https://github.com/mathewdouglas/Project-Tourline-5/releases)
+[![Downloads](https://img.shields.io/github/downloads/mathewdouglas/Project-Tourline-5/total)](https://github.com/mathewdouglas/Project-Tourline-5/releases)
 ![Windows x64](https://img.shields.io/badge/platform-Windows%20x64-0078D6)
 ![Direct3D 12](https://img.shields.io/badge/graphics-Direct3D%2012-555)
 
