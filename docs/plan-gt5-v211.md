@@ -83,6 +83,29 @@ which is already done. Any patching of installed data that the game does
 itself on its first boot after an update still runs in the port, and has
 yet to be measured.
 
+**Installed, 2026-11-15.** The user supplied all 21 packages (01.05-02.11,
+in `D:\Games\ROMS\PS3\GT5 Updates`). `scripts/gt5_updates.py check` passes
+for all of them:
+- sizes as in Sony's list;
+- SHA-1 as in Sony's list, which covers each package without its last 32
+  bytes (those hold the same digest and 12 zero bytes);
+- every `TARGET_APP_VER` is the version before it, and 01.05 names none.
+
+`scripts/gt5_updates.py install` then extracted them in order over the 01.04
+disc package's 1,330 files, into `input/v211/root/gamedata/dev_hdd0/game/BCUS98114`
+(ignored; the root also holds `input/EMAIN.ELF`, the 2.11 executable, so
+`GT5P_ROOT` can name it):
+- result: 21,664 files, 3.88 GiB;
+- largest packages by file count: 02.00 5,325, 01.10 4,126, 01.05 2,018,
+  02.02 2,007.
+
+`volmap.py convert --dry-run` on that `PDIPFS` finds only 123 files
+(0.03 GiB) that copy a `GT.VOL` range. The updates' data is new, so the
+2.11 version costs about 4 GB that records cannot remove. Its own
+first-boot install of `GT.VOL` copies has not run yet. Pins:
+`config/gt5-updates.json`. Not yet measured: whether 2.11's first boot
+patches installed files.
+
 ### What the user must provide
 
 1. **The US update packages from 01.05 up to and including 02.11**, as `.pkg`

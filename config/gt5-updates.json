@@ -1,0 +1,133 @@
+{
+  "_comment": "GT5 (BCUS98114) update packages from the 01.04 disc package up to the 2.11 target, in install order. Sizes and SHA-1 from Sony's public update list (BCUS98114-ver.xml), read 2026-11-15. Players supply the files; scripts/gt5_updates.py checks and installs them.",
+  "title_id": "BCUS98114",
+  "base_version": "01.04",
+  "packages": [
+    {
+      "version": "01.05",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0105-V0100-PE.pkg",
+      "bytes": 637423280,
+      "sha1": "1a154c8d1513f54f99782157be99b4e60af4cde1"
+    },
+    {
+      "version": "01.06",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0106-V0100-PE.pkg",
+      "bytes": 314873312,
+      "sha1": "be9032fe3876c9387154eae4ef040d1082839da5"
+    },
+    {
+      "version": "01.07",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0107-V0100-PE.pkg",
+      "bytes": 48650880,
+      "sha1": "2d015392a89152f843a8fb7652c81e51402f34ce"
+    },
+    {
+      "version": "01.08",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0108-V0100-PE.pkg",
+      "bytes": 1805056,
+      "sha1": "525a869915a21f5bce2487233dcfc7b7dbdaa349"
+    },
+    {
+      "version": "01.09",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0109-V0100-PE.pkg",
+      "bytes": 49298736,
+      "sha1": "2fd60f02507ccd2360cd8ac75d868368b4d79c5f"
+    },
+    {
+      "version": "01.10",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0110-V0100-PE.pkg",
+      "bytes": 398418784,
+      "sha1": "b2f9e57f253c69daa40f9c5c2a4b1af13c66c0d5"
+    },
+    {
+      "version": "01.11",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0111-V0101-PE.pkg",
+      "bytes": 64123456,
+      "sha1": "50f234e30a7a070aa1cbe4e9dc50cf7ea302566a"
+    },
+    {
+      "version": "01.12",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0112-V0100-PE.pkg",
+      "bytes": 13512448,
+      "sha1": "901c9b5dbdfaad93c626d1eca778e106f2623f42"
+    },
+    {
+      "version": "01.13",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0113-V0100-PE.pkg",
+      "bytes": 1175872,
+      "sha1": "fd6b533008582e79da5cc55a0a2e422fa544b419"
+    },
+    {
+      "version": "02.00",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0200-V0100-PE.pkg",
+      "bytes": 1249152240,
+      "sha1": "04fefad7cf11cd5debc83b4a2cfafb8202219a71"
+    },
+    {
+      "version": "02.01",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0201-V0100-PE.pkg",
+      "bytes": 117369568,
+      "sha1": "58b504a4e31c70c243f2b37438c86914ac7b97ab"
+    },
+    {
+      "version": "02.02",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0202-V0100-PE.pkg",
+      "bytes": 256980640,
+      "sha1": "335762a919059e279deb3488f3a49e3a71fdd0ab"
+    },
+    {
+      "version": "02.03",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0203-V0100-PE.pkg",
+      "bytes": 234996768,
+      "sha1": "b72ff837ce2fa5b03f9cd61383518863cc66d851"
+    },
+    {
+      "version": "02.04",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0204-V0100-PE.pkg",
+      "bytes": 81953344,
+      "sha1": "9ef70d5ca54492ae459348bf71c236b1f0e9e223"
+    },
+    {
+      "version": "02.05",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0205-V0100-PE.pkg",
+      "bytes": 25323536,
+      "sha1": "6c04b831f33fce409e3e877c7dfaf50e178c50c8"
+    },
+    {
+      "version": "02.06",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0206-V0100-PE.pkg",
+      "bytes": 497668864,
+      "sha1": "e26656bc11c22b353c68a18f8b7d99a8a1132072"
+    },
+    {
+      "version": "02.07",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0207-V0100-PE.pkg",
+      "bytes": 2244720,
+      "sha1": "ead2a136f259efa3e5dc246acd9625921d9da213"
+    },
+    {
+      "version": "02.08",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0208-V0100-PE.pkg",
+      "bytes": 237496816,
+      "sha1": "1136234eed871209d9f2f02a7a5b16e1d09480dd"
+    },
+    {
+      "version": "02.09",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0209-V0100-PE.pkg",
+      "bytes": 106075712,
+      "sha1": "b7965a4c338aca271d7446a65cfd01e6a1f574f7"
+    },
+    {
+      "version": "02.10",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0210-V0100-PE.pkg",
+      "bytes": 57156384,
+      "sha1": "b6cb8d33d107a18ee4b85105c66ab65beab6baae"
+    },
+    {
+      "version": "02.11",
+      "file": "UP9000-BCUS98114_00-0000000000000000-A0211-V0100-PE.pkg",
+      "bytes": 46668464,
+      "sha1": "887bd624c75f44a9186c1ecca0dcd0c141ded068"
+    }
+  ]
+}
