@@ -3,6 +3,31 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
+## [0.1.6] - Unreleased
+
+In progress on `release/v0.1.6`.
+
+### Added
+- **The first-boot install takes about 240 MB instead of 6.5 GB.** Files the
+  game copies unchanged from the disc's `GT.VOL` are stored as small links
+  to the disc, written while the game's own install runs. All installed files
+  read back byte for byte as before. The install is also faster: 295-342 s
+  instead of 427 s in tests. `PS3_FS_VOLMAP_INSTALL=0` stores full copies.
+- **No install prompt.** A first boot answers the game's "Data Installation
+  Recommendation" with its default, Yes, and closes "Installation complete".
+  `GT5P_AUTO_INSTALL=0` leaves both to the player.
+- **Existing installs shrink too.** Before play, the launcher converts an
+  install's verified copies of `GT.VOL` into links, once. This applies to
+  installs imported from RPCS3 and installs made by earlier versions.
+  `PT5_VOLMAP=0` turns it off.
+
+### Known issues
+- The launcher's conversion of an existing install has not yet been run on
+  real player storage. The same method, run by `scripts/volmap.py`, has
+  been run on real data, and a race played on the converted data.
+- To undo the links, use `scripts/volmap.py restore`. The launcher has no
+  option for this yet.
+
 ## [0.1.5] - 2026-11-14
 
 Smoother first visits, fewer hitches when other programs are busy, and
