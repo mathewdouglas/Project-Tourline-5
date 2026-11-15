@@ -4,7 +4,12 @@ import os, re, subprocess, sys, tempfile
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import spin_patch
 import target
-assert target.NAME=='BCUS98114-v104', 'select GT5P_TARGET=BCUS98114-v104'
+# Per executable: the loop that reads progress rows inline, and the progress
+# check the other loops call. Measured; never carried across executables.
+SHAPES={'BCUS98114-v104':('00D1B930','func_00D1AB10(ctx)'),
+        'BCUS98114-v211':('00B99648','func_00B98828(ctx)')}
+assert target.NAME in SHAPES, 'select GT5P_TARGET=' + ' or '.join(SHAPES)
+inline_func,check_call=SHAPES[target.NAME]
 for func_s,label_s in target.TARGET['spin_waits']:
  func,label=f'{int(func_s,16):08X}',f'{int(label_s,16):08X}'
  path,text,start,end=spin_patch.find_function(func)
@@ -15,7 +20,7 @@ for func_s,label_s in target.TARGET['spin_waits']:
  loop=body[body.index('loc_'+label+':'):body.index('goto loc_'+label+';')]
  # No guest memory stores, atomics or time/service calls on the waiting path.
  assert not re.search(r'vm_write|ppu_stwcx|func_00C32230|ps3_indirect_call',loop),func
- if func!='00D1B930': assert 'func_00D1AB10(ctx)' in loop,func
+ if func!=inline_func: assert check_call in loop,func
  else: assert 'PPU_FENCE(acq_rel)' in loop and loop.count('vm_read16')==7
  print(f'{func} -> {label}: one read-only progress-wait back edge; patch/restore exact')
 

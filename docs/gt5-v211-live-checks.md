@@ -71,5 +71,79 @@ material and must not be tracked.
 
 Before release, diagnose the normal race stall and nonfinite audio, repeat
 the race through a complete lap and exit/save/reload, and verify cold boots.
+
+## Follow-up diagnosis (2026-11-15, later)
+
+Same route, settings and private 2.11 root (the launcher-test copy under
+`scratch/release016-live/home/targets/BCUS98114-v211`), one game at a time.
+Eight runs. Every run reached the race and froze between about 85 and 120
+seconds. Neither failure is fixed yet.
+
+**Spin waits (kept).** v104's five `spin_waits` were mapped to 2.11 by
+masked byte matching (call targets and TOC offsets ignored). Two loops match
+uniquely: `0x00B99648` (loop `0x00B996C8`) and `0x00B9BB90` (loop `0x00B9BBB8`).
+v104's three single sites (`0x00C34BDC`, `0x00C35254`, `0x00C357FC`) have no
+2.11 counterpart: 2.11 polls the same check (`func_00AA8528`) from
+`func_00AA85F0`/`func_00AA86C0`, sleeping 100 us with `sys_timer_usleep`
+between tries. They need no patch. `scripts/test/spin_waits.py` now takes
+either target and passes for 2.11 (one read-only back edge each, exact
+patch/restore). This is v104 parity work; it does not fix the freeze, and its
+2.11 performance effect is not measured.
+
+**Race freeze: one input list measured, more than one trigger.** Each
+frozen run follows the same sequence. A render SPU job does not finish its
+command block. The FIFO walker parks on that block, and after 3 s it resyncs
+past it (`jump-park-timeout`). The guest's pollers (`func_00AA85F0`) then
+never see their progress marker again, and nothing is presented. The resync
+turns a late or broken job into a permanent freeze.
+
+In four of the eight runs the broken job was body `0x015DCC00`. A one-off
+hook (private; `scratch/v211/b015DCC00-listcheck.diff`, removed from
+`generated/` afterwards) showed:
+
+- The job walks a PPU-built record list. Each record has a type byte and a
+  size byte at bits 16-23, and the list ends with a zero word. The list
+  arrives by DMA from guest `0x4FF8E300`, with the size from the job's
+  descriptor. PPU writers: `func_00831DD8` (reserve a record against a limit)
+  and the per-type helpers at `0x00871xxx`.
+- In 6,400 good jobs the terminator is exactly the last 4 bytes of the
+  DMA'd size. In every one the guest buffer was already reset (zero at `+0`)
+  when the job body began. The input is fetched when the job is loaded, and
+  the PPU reuses the buffer straight after.
+- Bad jobs (1 in about 800-1,100) get a list that does not end inside the
+  DMA'd size. Twice the data ended exactly at the size and the rest of local
+  store still held a previous job body (`0x014FBC00` at its `0x4000` load
+  address). The walk then either reaches a zero-size record and spins
+  forever at `0x4840` (lane step count frozen; event mask 2), or runs on and
+  produces a bad block.
+- Hypothesis, not proven: the PPU rebuilds `0x4FF8E300` before or during that
+  job's input fetch. The job lists' progress rows (`+0x40 + 16*q`: a take
+  counter and per-SPU current-job halfwords, `FFFF` = idle) looked
+  consistent for the stuck job in the one row log taken
+  (`SPU_ROWLOG`, workload 1, SPU 3 holding job `0x18`). The guard the PPU uses
+  before reusing the buffer has not been found.
+
+The other runs froze differently. A workload 4 lane waited on `0x03000480`
+while the walker waited on that lane's block. With `SPURS_LANE_PRUNE=0`
+(worse: froze at about 85 s), every SPU workload was idle and the FIFO sat on
+an unfilled self-jump at `0x00A69080`. No bad list was seen in that run.
+
+**Race audio: not the extended-zero case.** 2.11 has a new sound image,
+`socepdidist` (`j18DE3719`), and a changed `socepdirta` (`jCF635263`).
+Neither had the extended-zero fix. A build with the fix on both, and a build
+with it on all 15 sound images, still produced the same port-0 NaNs from
+race start (`input_nan` 128-768 per block). The round-to-zero scopes in
+`j9804ABA8` are present in the 2.11 lift. That experiment was reverted: the
+target keeps its measured list. Next step: trace the invalid samples back
+stage by stage, as the v104 investigation did ([audio.md](audio.md)).
+
+Next for the freeze:
+
+- find the PPU's guard before it rebuilds `0x4FF8E300`;
+- log the take counter and slot writes together with that job's input DMA;
+- find who should fill the self-jump at `0x00A69080`.
+
+Do not shorten or extend the walker's 3 s resync, and do not skip unfilled
+blocks to hide the freeze.
 01.04 regression play, the separate renderer-error validation, matching PGO
 builds and a final dual-engine player-ZIP smoke remain required.
