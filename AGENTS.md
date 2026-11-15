@@ -180,6 +180,11 @@ coefficient constructor calls in round-toward-zero
 `spu_native_patch.py` after any SPU lift. Tests: `audio_extended.py`,
 `audio_coefficients.py`. See [docs/audio.md](docs/audio.md).
 
+**Release 0.1.6** (tag `v0.1.6`, commit `48fbb76`) is the first ZIP with
+both engines: PGO 01.04 plus the experimental, non-PGO 2.11 engine
+(`clean_build.py --build-211 --elf-211`). Its 01.04 profile came from the
+clean build's own lift (the dev `generated/` differed); see progress-gt5.md.
+
 **Release 0.1.3** (tag `v0.1.3`) is 0.1.2 plus the antivirus fix
 (runtime env defaults from one table; Bitdefender `Gen:Variant.Lazy`), built
 from the 0.1.2 tag, not from main.

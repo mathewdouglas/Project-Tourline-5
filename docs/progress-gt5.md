@@ -4,6 +4,40 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.1.6 published (2026-11-16)
+
+Tag `v0.1.6` (commit `48fbb76`), merged into main. First release with the
+experimental 2.11 engine beside 01.04 in one ZIP.
+
+Two repository fixes came out of the clean builds: the tracked HLE NID table
+lacked `cellGcmProcessReportMethod` (exported by the runtime patch; dev
+builds had run with the stale table), and the 2.11 seeds file is rewritten by
+the lift without a final newline. Both made `clean_build.py` refuse the tag.
+
+01.04 regression (clean non-PGO build of `3367fa6`, same runtime as the
+release): 3 of 3 boots reached MusicDecode at 28.3 s; High Speed Ring frame
+test 56.7 FPS; rainy Eiger 57.7 FPS at 720p; car list renders; no fatal,
+crash or watchdog line. The clean 01.04 lift differs from the dev
+checkout's `generated/` (0.1.5 lift), so the profile was made from the clean
+lift: instrumented build in its `src/`, `gt5boot.ps1 -Route race -FrameTest
+-Exe <instrumented> GT5P_ROOT=<dev checkout>` with `LLVM_PROFILE_FILE`
+(reached RaceStart, raced 60 s), merged: SHA-256 `f4e47d47...3267`.
+`clean_build.py --profile --build-211 --elf-211` from `48fbb76`: lift
+identical to the profiled one, 0 functions lost counts, 596 without a
+record. The 2.11 engine is a clean non-PGO build of the same commit
+(`pgo.py` handles 01.04 only). Player ZIP
+`project-tourline-5-v0.1.6-windows-x64.zip`, 126 files, SHA-256
+`391c94105601732dd4cd7a18bcdc2bbf5dc8f3c41b2e7baf6b111d0cc58beed9`.
+
+Packaged smoke: `gt5.exe` (`r016-pkg-smoke`) RaceStart, 58.7 FPS, median
+16.8 ms, p99 23.2 ms, 5.1% over 20 ms (0.1.5: 57.5, p99 30.1; one run each);
+16 `[spu-smc]` lines as before, no fault lines. `gt5_211.exe` (`run-fix.ps1`,
+private 2.11 root) raced to 230 s at 60 FPS with the lap clock running. The
+packaged launcher's `--check` accepts the 2.11 setup with the packaged engine
+hash. Renderer failure paths were validated on 2.11 the same day
+(renderer-errors.md). 2.11 ships labelled experimental (launcher, F1,
+START-HERE, changelog); master mod support is announced as coming.
+
 ## Fatal renderer errors: explicit exit, report and restart (2026-11-15)
 
 Issue #7's logs report device loss with INVALID_CALL as scene rendering begins,
@@ -17,10 +51,29 @@ with minimized/occluded windows exempt. Freeze excerpts select the longest/lates
 snapshot. Existing reporting privacy/off/silent behavior is retained.
 
 Built and smoke-tested on 2026-11-15 (2.11 engine and launcher; a 230 s HSR race
-at 60 FPS without a renderer-failure message). The failure paths, launcher dialogs
-and a v104 build are still unvalidated.
+at 60 FPS without a renderer-failure message). The failure paths and launcher dialogs were
+validated with injected failures on 2026-11-16 (`RSX_FAIL_TEST`).
 The invalid rendering operation behind #7 is still unproven. Design, diagnostics
 and the deferred validation checklist: [renderer-errors.md](renderer-errors.md).
+
+## Release 0.1.5 published (2026-11-14)
+
+Tag `v0.1.5` (commit `5b13226`), main fast-forwarded to it. A new PGO
+profile was made from the tag's sources (`pgo.py gen`/`play`/`merge`; the
+instrumented route reached RaceStart and raced 60 s), SHA-256
+`af85a90f...d0ab`. `clean_build.py --profile` from a fresh clone of the tag:
+0 functions lost counts, 501 without a record. Player ZIP
+`project-tourline-5-v0.1.5-windows-x64.zip`, 125 files, SHA-256
+`aaa78fc1f7951bc6a3110d66e8e28498b399f12fb1590baaa8bab3a996b8435c`.
+
+Packaged `gt5.exe` smoke (`release015-pkg-smoke`, `gt5boot.ps1 -Route race
+-FrameTest`): RaceStart, 60.6 s window at 57.5 FPS, median 16.8 ms, p99
+30.1 ms, 9.5% over 20 ms. 0.1.4's packaged build measured 55.1-55.7 in its
+own session; this is one run, not a controlled comparison. The same 16
+`[spu-smc]` microstep lines as the merged-build smoke; no crash, watchdog or
+device-loss line. The final capture shows road, HUD, mirror and lap timer.
+Published as a full (not pre-) release with the 0.1.5 changelog section.
+Known issue carried: Course Maker at 21:9 (misplaced map, clipped labels).
 
 ## Completed work integrated into release/v0.1.5 (2026-11-14)
 
