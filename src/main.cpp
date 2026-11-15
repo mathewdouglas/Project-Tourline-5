@@ -818,6 +818,12 @@ static int locate_project_root(void)
  * - SPURS_LANE_PIN_SCOPE=1, GT5 with race scope: outside races pin workload
  *   4's lanes (the car list's render pass) instead of 0 and 1 (GT5 Phase 46);
  *   =0 the fixed SPURS_LANE_CPU_WIDS set.
+ * - SPURS_LANE_RETRY=0, GT5 only: a lane that finds no job leaves instead of
+ *   sleeping 1 ms and retrying. The runtime's SPURS_LANE_JOIN (default on)
+ *   sends lanes back while the ready count stands, as idle SPUs would; the
+ *   retries kept 2.11's car-list workload busy after its pass and put a
+ *   ready unit back that started an empty pass (Zonda R ~26 -> ~33 FPS;
+ *   01.04 car list and race unchanged).
  * - RSX_SHADER_ASYNC=1: shaders compile on background threads (Phase 65).
  * - GT5 only: RSX_SHADER_INTERP=1 and RSX_SHADER_INTERP_VP=1, the shader
  *   interpreters stand in for draws whose pipeline is still being built,
@@ -860,6 +866,7 @@ static void apply_env_defaults()
         {"SPURS_LANE_PIN",       "2",                true},
         {"SPURS_LANE_STAGGER_MS", "0",               stagger},
         {"SPURS_LANE_PIN_SCOPE", "1",                gt5 && race_scope},
+        {"SPURS_LANE_RETRY",     "0",                gt5},
         {"RSX_SHADER_ASYNC",     "1",                true},
         {"RSX_SHADER_INTERP",    "1",                gt5},
         {"RSX_SHADER_INTERP_VP", "1",                gt5},

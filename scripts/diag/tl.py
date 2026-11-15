@@ -62,6 +62,9 @@ def desc(e):
     if k == 'C': return 'frame cpu %d us of %d us wall since last prepare' % (a, b)
     if k == 'Q': return 'spin-wait sleep %d us (iteration %d)' % (b, a)
     if k == 'V': return 'vblank tick'
+    if k == 'G': return 'lane woke wid%d lane%d' % (a >> 8, a & 255)
+    if k == 'j': return 'join wid%d lane%d (ready %d)' % (a >> 8, a & 255, b)
+    if k == 'r': return 'ready wid%d %d -> %d (SPU write)' % (a, b >> 8, b & 255)
     return '%s %d %d' % (k, a, b)
 
 if not summ:

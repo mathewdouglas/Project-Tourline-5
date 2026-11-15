@@ -675,14 +675,41 @@ Milestones:
   dispatches were single-lane.
 - **Fix:** `SPURS_WKL_FLAG_LANES` (runtime, default on; `=0` one lane) gives
   a flag kick the workload's full contention. Measured gain: about 15 FPS.
-- **Still slower than 01.04:**
-  - 2.11's lane runs are cheaper (10 ms against 20 ms each);
-  - but it runs about 3 workload-4 passes a frame where 01.04 runs about 1;
-  - the render thread polls with `usleep(100)` (`lr=0x00B95280`) meanwhile.
-  - Serving those sleeps from a timer instead of spinning made no
-    difference.
-
-Next: what the frame waits on between passes.
+- **The earlier comparison used different cars.** 01.04's list opens on a
+  Fiat 500, 2.11's on the Zonda R, the last car of 01.04's list. On the same
+  car (Zonda R, 720p, 2x MSAA) 01.04 runs about 37 FPS and 2.11 ran 15-17.
+  Other 2.11 cars ran 24-31 FPS.
+- **Second cause (timeline, `PS3_TIMELINE`):** each frame's workload-4 work
+  (about 96 ms of lane time) was shared by whichever lanes happened to be
+  running. 2.11 kicks the workload before it appends the jobs, so most lanes
+  found nothing and left within microseconds; one lane then ran the list
+  alone (one lane ~96 ms, three ~32 ms). Later kicks only met a busy
+  workload.
+- **Fixes (runtime, `SPURS_LANE_JOIN`, default on, `=0` off):**
+  - a kick, or the kernel's poll while the ready count stands, sends the
+    pass's lanes that left back in, up to the ready count;
+  - a workload-flag kick to the running workload is taken at once, with
+    lanes joining, instead of starting an empty pass afterwards;
+  - joins and a dispatch's setup share a lock: without it a kick could
+    join a lane the kernel was also sending, and the pass waited for ever
+    (seen once, at the track list);
+  - `SPURS_LANE_RETRY=0` is now GT5's default (`src/main.cpp`): a lane that
+    finds nothing leaves instead of sleeping 1 ms and putting back the
+    ready unit the module took. Those retries held the pass open and the
+    returned unit started an empty pass after it.
+- **Result (Zonda R):** 15 -> 32-35 FPS. Per frame: pass 24.4 ms (01.04
+  24.2), pass end to next kick 0.9 ms (01.04 2.1), kick to work start
+  3.3 ms (01.04 0). The last is 2.11's own order: an SPU job of another
+  workload raises workload 4's ready count about 3 ms after the PPU's kick.
+  `SPURS_SPU_KICK_WAKE=1` gave about 1 FPS more, within noise; left off.
+- **01.04 with the same runtime:** car list at the Zonda R unchanged (about
+  37 FPS) and a High Speed Ring race at 60 FPS.
+- New timeline kinds: `G` (lane woke), `j` (lane sent to join), `r` (SPU
+  changed a ready count; needs `SPURS_SPU_KICK_WAKE=2` to watch the line).
+- **Open, separate: white specks on car edges.** On 2.11 the Zonda R shows
+  bright white pixels along its silhouette (windscreen frame, fender, sill,
+  wheel arches); 01.04 at the same car and settings does not. Not
+  investigated yet.
 
 **SPU tuning keys (T11, 2026-11-15).** 01.04's render bodies were matched to
 2.11's by content:
