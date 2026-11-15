@@ -122,7 +122,7 @@ Live, 2.11 High Speed Ring at 720p, scrubbing off (`AUDIO_NONFINITE_SCRUB=0`):
 
 The races still freeze later; that is separate. v104 is not re-measured with
 this change. It affects only lanes that the old code turned into NaN or Inf,
-but a v104 race listen is owed.
+but a v104 race listen is owed. (It was owed: see the 0.1.8 section below.)
 
 `scripts/test/audio_extended.py` adds these checks, in portable, scalar and
 FMA builds: extended products, saturation, truncation, sums, compares, and
@@ -131,6 +131,31 @@ FMA builds: extended products, saturation, truncation, sums, compares, and
 The DMA scan that found this (`SPU_NANSCAN`, with `SPU_NANSCAN_RANGE` and
 `SPU_NANSCAN_IMG`) is a private runtime diff, `scratch/v211/nanscan.diff`.
 It is not in the runtime patch.
+
+## 01.04 race stutter from the extended-range check (fixed 0.1.8)
+
+The "v104 race listen" owed above was not done before 0.1.6 shipped, and
+01.04 race audio stuttered in 0.1.6 and 0.1.7. Same High Speed Ring route at
+720p/2x MSAA (`AUDIO_RATE=1 SPURS_JC_STATS=1`):
+
+| Engine | Jobs/s | Per job | Chain busy | Underruns | Silent blocks |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0.1.5 | 2,250 | 0.38 ms | 84% | 6 | 0% |
+| 0.1.7 | 1,450 | 0.67 ms | 98% | ~360 | ~30% |
+| 0.1.7, `GT5P_AUDIO_EXTENDED_RANGE=0` | | | | 274 | 19% |
+| 0.1.8 build, no range check | 2,251 | 0.36 ms | 80% | 11 | 0% |
+
+The lifted audio code was identical between the two releases. The check's
+lane test (and, at run time, a `volatile` flag read) on every float op made
+the job chain CPU-bound, so turning it off at run time recovered only part.
+Undoing 0.1.6's other changes (`SPURS_LANE_RETRY=1`, `SPURS_LANE_JOIN=0`,
+`PS3_TLS_FROM_CRT=0`) changed nothing. Menus were unaffected.
+
+The check is now built only for targets with `"audio_extended_range": true`
+in `config/targets.json` (2.11), as `GT5P_AUDIO_EXTENDED_RANGE_BUILD=1`.
+Without it the header is 0.1.5's arithmetic (only `0 x extended = 0`).
+`audio_extended.py` runs every mode with and without the range build. 2.11
+keeps the cost; its race audio has not been measured for this.
 
 ## Diagnostics
 

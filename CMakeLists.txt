@@ -356,6 +356,13 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
     set(audio_images "")
     set(audio_math_images "")
     string(JSON math_images ERROR_VARIABLE math_images_err GET "${GT5P_T}" audio_extended_zero_images)
+    # Extended-range recomputation in those images: only where a target's
+    # audio needs it (2.11); it costs every float op a lane check.
+    string(JSON audio_range ERROR_VARIABLE audio_range_err GET "${GT5P_T}" audio_extended_range)
+    set(audio_range_def "GT5P_AUDIO_EXTENDED_RANGE_BUILD=0")
+    if(NOT audio_range_err AND audio_range)
+        set(audio_range_def "GT5P_AUDIO_EXTENDED_RANGE_BUILD=1")
+    endif()
     if(NOT math_images_err)
         string(JSON math_count LENGTH "${math_images}")
         math(EXPR math_last "${math_count} - 1")
@@ -366,7 +373,7 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
                 APPEND PROPERTY COMPILE_OPTIONS
                 "/FI${CMAKE_SOURCE_DIR}/src/gt5p_spu_audio_math.h")
             set_property(SOURCE "${GT5P_SPU_GENERATED_DIR}/${image}/spu_recomp.c"
-                APPEND PROPERTY COMPILE_DEFINITIONS "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>")
+                APPEND PROPERTY COMPILE_DEFINITIONS "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>" "${audio_range_def}")
         endforeach()
     endif()
     set(audio_manifest "/* Target-specific identities; generated from targets.json. */\n")
@@ -434,7 +441,7 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
                     APPEND PROPERTY COMPILE_OPTIONS
                     "/FI${CMAKE_SOURCE_DIR}/src/gt5p_spu_audio_math.h")
                 set_property(SOURCE "${native_source}" APPEND PROPERTY COMPILE_DEFINITIONS
-                    "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>")
+                    "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>" "${audio_range_def}")
             endif()
         endforeach()
         set_source_files_properties(src/gt5p_audio_native.cpp PROPERTIES

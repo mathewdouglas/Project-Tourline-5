@@ -11,26 +11,38 @@
 #ifndef GT5P_AUDIO_EXTENDED_ZERO
 #define GT5P_AUDIO_EXTENDED_ZERO 1
 #endif
+/* The extended-range recomputation below costs every float add, multiply and
+ * compare a lane check: GT5 01.04's race audio jobs took 0.67 ms instead of
+ * 0.38 and the job chain fell behind (about 17 underruns a second, 0.1.6 and
+ * 0.1.7). Only targets whose audio needs it build it in
+ * (audio_extended_range in config/targets.json: 2.11). */
+#ifndef GT5P_AUDIO_EXTENDED_RANGE_BUILD
+#define GT5P_AUDIO_EXTENDED_RANGE_BUILD 0
+#endif
 #if GT5P_AUDIO_EXTENDED_ZERO
 #define spu_fi gt5p_audio_base_fi
 #define spu_fm gt5p_audio_base_fm
 #define spu_fma gt5p_audio_base_fma
 #define spu_fms gt5p_audio_base_fms
 #define spu_fnms gt5p_audio_base_fnms
+#if GT5P_AUDIO_EXTENDED_RANGE_BUILD
 #define spu_fa gt5p_audio_base_fa
 #define spu_fs gt5p_audio_base_fs
 #define spu_fceq gt5p_audio_base_fceq
 #define spu_fcgt gt5p_audio_base_fcgt
+#endif
 #include "spu_helpers.h"
 #undef spu_fi
 #undef spu_fm
 #undef spu_fma
 #undef spu_fms
 #undef spu_fnms
+#if GT5P_AUDIO_EXTENDED_RANGE_BUILD
 #undef spu_fa
 #undef spu_fs
 #undef spu_fceq
 #undef spu_fcgt
+#endif
 #include <math.h>
 #include <emmintrin.h>
 
@@ -50,6 +62,7 @@ static inline int gt5p_audio_zero_extended(uint32_t a, uint32_t b)
  * recomputed in double precision with the SPU's reading; every other lane
  * keeps the runtime's result. GT5P_AUDIO_EXTENDED_RANGE=0: the old behaviour
  * (only 0 x extended = 0). Not exact for fused ops near the rounding edge. */
+#if GT5P_AUDIO_EXTENDED_RANGE_BUILD
 static inline int gt5p_audio_range_on(void)
 {
     static volatile int on = -1; /* benign race: every thread computes the same */
@@ -118,6 +131,13 @@ static inline u128 gt5p_audio_compare(u128 r, u128 a, u128 b, int gt)
 }
 static inline u128 spu_fceq(u128 a, u128 b) { return gt5p_audio_compare(gt5p_audio_base_fceq(a, b), a, b, 0); }
 static inline u128 spu_fcgt(u128 a, u128 b) { return gt5p_audio_compare(gt5p_audio_base_fcgt(a, b), a, b, 1); }
+#else
+static inline u128 gt5p_audio_range(u128 r, u128 a, u128 b, u128 c, int op)
+{
+    (void)a; (void)b; (void)c; (void)op;
+    return r;
+}
+#endif
 
 static inline u128 spu_fi(u128 a, u128 b)
 {

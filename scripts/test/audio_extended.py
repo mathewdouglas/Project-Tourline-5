@@ -9,7 +9,10 @@ runtime = Path(os.environ.get("PS3RECOMP_DIR", root.parent / "ps3recomp-tourline
 folder = Path(tempfile.mkdtemp(prefix="audio-extended-", dir=root / "scratch"))
 vc = ('@echo off\nset "PATH=C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer;%PATH%"\n'
       'call "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat" >nul\n')
-for name, flags in (("portable", "-msse4.1"), ("scalar", "-msse4.1 /DSPU_FI_SCALAR /DSPU_FMA_LIBM"), ("native", "-msse4.1 -mfma")):
+modes = (("portable", "-msse4.1"), ("scalar", "-msse4.1 /DSPU_FI_SCALAR /DSPU_FMA_LIBM"), ("native", "-msse4.1 -mfma"))
+# Each mode with the extended-range build (2.11, audio_extended_range) and without (01.04).
+for name, flags in [(n + suffix, f + define) for n, f in modes
+                    for suffix, define in (("-range", " /DGT5P_AUDIO_EXTENDED_RANGE_BUILD=1"), ("", ""))]:
     command = (f'"C:/Program Files/LLVM/bin/clang-cl.exe" /nologo /O2 /MD /D_CRT_SECURE_NO_WARNINGS '
                f'/DSPU_LS_NO_PROBES {flags} /I"{runtime}/runtime/spu" /I"{root}/src" '
                f'/Fo"{folder}/{name}.obj" /Fe"{folder}/{name}.exe" "{root}/scripts/test/audio_extended.c"\n')

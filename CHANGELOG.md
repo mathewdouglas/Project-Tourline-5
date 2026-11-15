@@ -3,6 +3,26 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
+## [0.1.8] - unreleased
+
+### Fixed
+- **Windows 10: the game no longer stops with a graphics error when a race
+  loads or in the dealership** (issues #16, #18, #19; "frame command list
+  Close hr=0x80070057"). A 1x1 cube texture's faces were staged 256 bytes
+  apart, but texture copies must start on 512-byte boundaries. Windows 11's
+  graphics runtime accepted the copy; Windows 10's rejected the frame. Each
+  face now starts on a 512-byte boundary (`RSX_TEX_CUBE_ALIGN=0`: as before).
+- **Race sound no longer stutters** (01.04, since 0.1.6). The arithmetic
+  added for 2.11's race audio made 01.04's audio jobs about 75% slower, so
+  the sound fell behind in races: about 17 dropouts a second and a third of
+  the audio blocks silent. 01.04 builds without it again (0.1.5's audio
+  speed); 2.11 keeps it (`audio_extended_range` in `config/targets.json`).
+
+### Added
+- `RSX_CMD_CHECK=1` (diagnostic): logs graphics commands that an older
+  Windows graphics runtime rejects (copy alignment and bounds, viewports,
+  barriers, root bindings). See `docs/renderer-errors.md`.
+
 ## [0.1.7] - 2026-11-16
 
 Fixes a crash in the F1 settings page. Otherwise the same as 0.1.6,

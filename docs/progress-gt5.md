@@ -4,6 +4,36 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.8 preparation (2026-11-16): Windows 10 Close failure, 01.04 race audio
+
+**Windows 10 Close failure (#16, #18, #19).** All three reports are Windows
+10 build 19045; every working machine is Windows 11, including a local
+debug-layer run at the reporter's settings. Close's `E_INVALIDARG` therefore
+pointed at a command Windows 11's runtime accepts and Windows 10's rejects.
+The new `RSX_CMD_CHECK=1` (renderer-errors.md) found one, in the first race
+frame: a 1x1 RGBA8 cube's faces 1/3/5 copied from 256-byte offsets. Fixed by
+512-aligned face slots (`RSX_TEX_CUBE_ALIGN=0` old; it brings the reports
+back). Clean over a race and the car list; not run on Windows 10.
+
+Method: a test engine is the 0.1.7 release build's objects relinked with
+changed objects compiled by the release build's own commands
+(`ninja -t commands <obj>`; the link's response file is deleted after the
+build, so rebuild it from `build.ninja`'s inputs and `LINK_LIBRARIES`).
+`/MAP` on such a relink also names crash addresses in a shipped engine.
+
+**01.04 race audio stutter (0.1.6 regression).** Heard in these test runs.
+0.1.5: 6 underruns, 0% silent; 0.1.7: ~360 and ~30%. The audio job chain
+went from 0.38 to 0.67 ms a job (98% busy). Lifted audio code is identical;
+the cause is the 2.11 extended-range check in `gt5p_spu_audio_math.h`,
+compiled into 01.04's audio images too. Now built only for targets with
+`audio_extended_range` (2.11): 11 underruns, 0% silent, 0.36 ms a job.
+Details in audio.md.
+
+The patch's backend block was updated by splicing the edits into its
+existing hunks (three new hunks where the edits touch unmodified base code);
+it reverse-applies to the private runtime, and forward-applied to a clean
+5244db9 export it reproduces all 98 files (CR-stripped compare).
+
 ## 0.1.8 preparation (2026-11-16): issue #12 queue teardown
 
 Branch `release/v0.1.8`, based on the recorded 0.1.7 release. Issue #12's

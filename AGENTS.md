@@ -180,6 +180,15 @@ coefficient constructor calls in round-toward-zero
 `spu_native_patch.py` after any SPU lift. Tests: `audio_extended.py`,
 `audio_coefficients.py`. See [docs/audio.md](docs/audio.md).
 
+**0.1.8 (in progress, `release/v0.1.8`).** Windows 10 "Close
+0x80070057" (#16/#18/#19) was a cube texture's faces staged at 256-byte
+offsets; faces are now 512-aligned (`RSX_TEX_CUBE_ALIGN=0` old).
+`RSX_CMD_CHECK=1` logs commands older runtimes reject (renderer-errors.md):
+Windows 11's runtime and debug layer accept some. 01.04 race audio stuttered
+since 0.1.6: the 2.11 extended-range audio check is now built only for
+targets with `audio_extended_range` (audio.md). Check race audio with
+`AUDIO_RATE=1 SPURS_JC_STATS=1` before a release.
+
 **Release 0.1.7** (tag `v0.1.7`, commit `2d6439c`) is 0.1.6 plus the F1
 DEBUG page crash fix (issue #17), built the same way with the 0.1.6 profile.
 To find a crash in a release engine, relink its build's objects with `/MAP`

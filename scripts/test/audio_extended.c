@@ -70,6 +70,7 @@ int main(void)
     u128 result=spu_fma(residual,half,product);
     assert(result._u32[0]==0);
     for (int i=1;i<4;i++) assert(isfinite(result._f32[i]) && fabsf(result._f32[i]-sqrtf(x._f32[i]))<0.0001f);
+#if GT5P_AUDIO_EXTENDED_RANGE_BUILD
     /* Extended range (2.11 EQ): exponent 255 is a finite SPU value. Products,
      * sums and compares use it as a number, saturate at +-0x7FFFFFFF and
      * truncate; the host's NaN/Inf reading must never reach a result. */
@@ -105,5 +106,11 @@ int main(void)
         }
     }
     puts("audio extended/zero: synthetic zero, interpolation, ordinary parity, sqrt and extended-range checks passed");
+#else
+    /* Without the range build (01.04): ordinary adds and compares are the
+     * runtime's own, so 0 x extended stays the only special case. */
+    same(spu_fs(splat(0x3F800000u), splat(0x3F800000u)), splat(0));
+    puts("audio extended/zero: synthetic zero, interpolation, ordinary parity and sqrt checks passed (no range build)");
+#endif
     return 0;
 }
