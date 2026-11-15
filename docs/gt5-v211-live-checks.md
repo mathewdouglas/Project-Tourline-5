@@ -293,6 +293,32 @@ logs in `scratch/release016-live/bootstall-*`) the game reached
 stayed at 60 FPS with 8 draws. This is the cold-boot logo stall from the
 first checks, not the race freeze.
 
+Startup stall, later the same day: the shape is the boot movie (980 MB
+PAMF, one AVC and one ATRAC3plus stream), skipped by the route's Cross
+presses. The game ended the audio sequence (`[cellAdec] ... sequence
+done`) but never the video one: no `cellVdec` EndSeq, no idle drain and
+no end-of-stream AU, so the movie never closed and the menu never loaded.
+A good boot logs `[cellVdec] ... sequence done: 232 AUs, 226 pictures`
+and then closes the audio port, taskset, decoder and demuxer. Four
+distinct stuck boots in 76 before the TLS and lane fixes: two from
+instrumented diagnostic builds (`lag2`, `ev3`) and two from the older
+`engine` with the `root` home (`race-route`, `race-route2`).
+
+It did not reproduce on the current build, each boot stopped at
+`MusicDecode` (`scratch/release016-live/boot-loop.ps1`):
+
+| Boots | Settings | Stuck |
+|---|---|---|
+| 15 | `VDEC_TRACE=1 DMUX_TRACE=1` | 0 |
+| 20 | defaults | 0 |
+| 30 | `PS3_TLS_FROM_CRT=0` (shared TLS) | 0 |
+| 30 | `SPURS_LANE_JOIN=0 SPURS_LANE_RETRY=1` (old lanes) | 0 |
+
+Neither fix alone brings it back, so its cause is not found; the old
+runs' slower diagnostic builds may have been part of it. Left open: if it
+returns, run the loop with `VDEC_TRACE=1 DMUX_TRACE=1` and compare the
+video decoder's last commands with the audio decoder's.
+
 Next for the freeze:
 
 - find which threads append to the list. Watch the list object's write
