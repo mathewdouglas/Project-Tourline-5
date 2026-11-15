@@ -70,6 +70,40 @@ int main(void)
     u128 result=spu_fma(residual,half,product);
     assert(result._u32[0]==0);
     for (int i=1;i<4;i++) assert(isfinite(result._f32[i]) && fabsf(result._f32[i]-sqrtf(x._f32[i]))<0.0001f);
-    puts("audio extended/zero: synthetic zero, interpolation, ordinary parity and sqrt checks passed");
+    /* Extended range (2.11 EQ): exponent 255 is a finite SPU value. Products,
+     * sums and compares use it as a number, saturate at +-0x7FFFFFFF and
+     * truncate; the host's NaN/Inf reading must never reach a result. */
+    same(spu_fm(splat(0xFFFFFFFFu), splat(0x3A800000u)), splat(0xFAFFFFFFu));   /* -max_ext * 2^-10 */
+    same(spu_fm(splat(0x7F800000u), splat(0x40800000u)), splat(0x7FFFFFFFu));   /* 2^128 * 4 saturates */
+    same(spu_fm(splat(0x7F000000u), splat(0x40800000u)), splat(0x7FFFFFFFu));   /* 2^127 * 4 = 2^129 saturates */
+    same(spu_fm(splat(0x7F000000u), splat(0x40000000u)), splat(0x7F800000u));   /* 2^127 * 2 = 2^128 */
+    same(spu_fa(splat(0x7F800000u), splat(0x3F800000u)), splat(0x7F800000u));   /* 2^128 + 1 truncates */
+    same(spu_fs(splat(0xFFFFFFFFu), splat(0xFFFFFFFFu)), splat(0));
+    same(spu_fma(splat(0xFFFFFFFFu), splat(0x00000000u), splat(0x3F800000u)), splat(0x3F800000u));
+    same(spu_fnms(splat(0x7F800000u), splat(0x34000000u), splat(0x7F800000u)),  /* 2^128 - 2^128*2^-23 */
+         splat(0x7F7FFFFEu));
+    same(spu_fcgt(splat(0x7F800000u), splat(0x3F800000u)), splat(0xFFFFFFFFu));
+    same(spu_fcgt(splat(0xFFFFFFFFu), splat(0xBF800000u)), splat(0));
+    same(spu_fceq(splat(0x7FC00000u), splat(0x7FC00000u)), splat(0xFFFFFFFFu));
+    /* Random lanes with an exponent-255 operand match an independent
+     * double-precision SPU model (truncate, saturate, flush). */
+    for (unsigned k=0;k<200000;k++) {
+        u128 a,b;
+        for (int i=0;i<4;i++) { a._u32[i]=random32(); b._u32[i]=random32(); if (k&1) a._u32[i]|=0x7F800000u; }
+        const u128 r=spu_fm(a,b);
+        for (int i=0;i<4;i++) {
+            const uint32_t x=a._u32[i], y=b._u32[i];
+            const int ex=(x>>23)&255, ey=(y>>23)&255;
+            if (ex!=255 && ey!=255) continue;
+            if (!ex || !ey) { assert(r._u32[i]==0); continue; }
+            const double v=ldexp(1.0+(x&0x7FFFFF)/8388608.0,ex-127)*ldexp(1.0+(y&0x7FFFFF)/8388608.0,ey-127);
+            const uint32_t s=(x^y)&0x80000000u;
+            uint32_t want;
+            if (v<0x1p-126) want=0; else if (v>=0x1p129) want=s|0x7FFFFFFFu;
+            else { int e; const double m=frexp(v,&e)*2.0; want=s|((uint32_t)(e+126)<<23)|(uint32_t)((m-1.0)*8388608.0); }
+            assert(r._u32[i]==want);
+        }
+    }
+    puts("audio extended/zero: synthetic zero, interpolation, ordinary parity, sqrt and extended-range checks passed");
     return 0;
 }

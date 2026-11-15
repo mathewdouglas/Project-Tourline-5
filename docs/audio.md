@@ -77,6 +77,61 @@ Live, build `6e224f6e102d252a` (SHA-256 prefix), native audio,
 
 The containment below stays enabled: it is now a safety net, not the fix.
 
+## 2.11 race NaNs: extended-range arithmetic (2026-11-15)
+
+GT5 2.11's races put invalid samples in port 0 from race start. They are not
+host-made NaNs. They are `0xFFFFFFFF` words: one whole channel, 256 per block.
+Traced backwards through every SPU transfer (a private DMA scan, below):
+
+- image 18 `socedmix` (`jFDFFAAC1`) writes them to the port ring;
+- it copies them from `0x40A3BB10`, written by image 10 `socecomp`;
+- that copies them from the bus `0x40A41B10`, where image 4 `soceamp`
+  finds them already;
+- image 2 `socepdideq` (`j0B07CA3D`) puts them there. That is the EQ, which
+  changed in 2.11. Its own 0xD80-byte state block gains one more
+  `0xFFFFFFFF` per tick from boot.
+
+On the SPU, exponent 255 is an ordinary finite value up to about 2^129. A
+reciprocal estimate of 0 is one, and `0xFFFFFFFF` is the most negative
+value. Multiplied by a small coefficient it gives a normal number. The host
+reads the same bits as NaN and propagates the payload, so one extended value
+in the EQ state poisoned its output once the race used that path.
+v104's fix covered only `0 x extended`. Running the whole image in
+round-toward-zero, or on the SPU interpreter, did not help.
+
+The fix is in `src/gt5p_spu_audio_math.h`, for the same
+`audio_extended_zero_images`:
+
+- `fa`, `fs`, `fm`, `fma`, `fms`, `fnms`, `fceq` and `fcgt` recompute, in
+  double precision with the SPU's reading of exponent 255, any lane where an
+  operand or the host result has exponent 255;
+- results truncate, saturate at `+-0x7FFFFFFF` and flush below 2^-126;
+- every other lane keeps the runtime's result, so ordinary arithmetic is
+  unchanged;
+- an SSE test skips the slow path when no lane needs it;
+- `GT5P_AUDIO_EXTENDED_RANGE=0` turns it off. It is not exact for fused ops
+  at the rounding edge.
+
+Live, 2.11 High Speed Ring at 720p, scrubbing off (`AUDIO_NONFINITE_SCRUB=0`):
+
+- three default runs had 0 invalid-PCM reports, with peaks up to 0.36-0.38;
+- the same build with `GT5P_AUDIO_EXTENDED_RANGE=0` brought the NaNs back
+  (peak 1.0);
+- extended values still pass between the EQ stages, as on the SPU, but the
+  port output stays finite.
+
+The races still freeze later; that is separate. v104 is not re-measured with
+this change. It affects only lanes that the old code turned into NaN or Inf,
+but a v104 race listen is owed.
+
+`scripts/test/audio_extended.py` adds these checks, in portable, scalar and
+FMA builds: extended products, saturation, truncation, sums, compares, and
+200,000 random extended lanes against an independent model.
+
+The DMA scan that found this (`SPU_NANSCAN`, with `SPU_NANSCAN_RANGE` and
+`SPU_NANSCAN_IMG`) is a private runtime diff, `scratch/v211/nanscan.diff`.
+It is not in the runtime patch.
+
 ## Diagnostics
 
 `AUDIO_RATE=1` reports finite silence separately from invalid blocks, mixed

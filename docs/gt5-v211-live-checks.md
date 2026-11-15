@@ -128,6 +128,14 @@ while the walker waited on that lane's block. With `SPURS_LANE_PRUNE=0`
 (worse: froze at about 85 s), every SPU workload was idle and the FIFO sat on
 an unfilled self-jump at `0x00A69080`. No bad list was seen in that run.
 
+**Race audio: fixed later the same day.** The invalid samples are
+`0xFFFFFFFF` words from 2.11's EQ image (`socepdideq`), whose state holds
+SPU extended-range values that the host treated as NaN. Extended-range
+arithmetic for the audio images removes them: 0 invalid-PCM reports in three
+races, and they return with `GT5P_AUDIO_EXTENDED_RANGE=0`. See
+[audio.md](audio.md), "2.11 race NaNs". The paragraph below is the earlier
+reading, kept for the record.
+
 **Race audio: not the extended-zero case.** 2.11 has a new sound image,
 `socepdidist` (`j18DE3719`), and a changed `socepdirta` (`jCF635263`).
 Neither had the extended-zero fix. A build with the fix on both, and a build
