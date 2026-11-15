@@ -35,6 +35,8 @@
 #include "gt5p_settings.h"
 #include "gt5p_debug_export.h"
 #include "pt5_resources.h"
+#include "pt5_restart.h"
+#include "gt5p_build_info.h"
 #include "ps3emu/timeline.h"
 
 #ifndef GT5P_DEFAULT_WINDOW_TITLE
@@ -164,6 +166,9 @@ static void dump_threads_now(int regs)
 extern "C" {
 int  rsx_d3d12_backend_init(unsigned width, unsigned height, const char* title);
 void rsx_d3d12_backend_present(void);
+unsigned rsx_d3d12_backend_failure(void);
+unsigned long long rsx_d3d12_backend_present_count(void);
+int rsx_d3d12_backend_present_suspended(void);
 int  rsx_d3d12_backend_pump_messages(void);
 void cellGcmTickVBlank(void);
 void cellGcmTickFlip(void);
@@ -686,14 +691,37 @@ static void stall_print_stack(const char* tag, DWORD tid)
     fprintf(stderr, "%s\n", line);
 }
 
-static void stall_dump_check(unsigned presents_total)
+/* Called on the presentation owner, after runtime diagnostics are published.
+ * Exit instead of joining workers or destroying a removed device. The launcher
+ * offers reporting/restart after this process has released its driver state. */
+static void renderer_failure_check(void)
+{
+    if (s_rsx_live) return;
+    const unsigned hr = rsx_d3d12_backend_failure();
+    if (!hr) return;
+    fprintf(stderr, "[renderer-report] source=%s target=%s built=%s %s\n",
+            GT5P_REPORT_REVISION, GT5P_REPORT_TARGET, __DATE__, __TIME__);
+    gt5p_debug_snapshot(stderr);
+    fflush(stdout); fflush(stderr);
+    gt5p_debug_shutdown();
+    if (!pt5_restart::managed()) {
+        char message[512];
+        snprintf(message, sizeof message, "Graphics rendering stopped (0x%08X).\n\n"
+                 "Close and restart the game. Diagnostic details were written to the game log.\n"
+                 "The launcher can save a problem report and restart the game.", hr);
+        MessageBoxA(NULL, message, "Project Tourline 5 - graphics error", MB_OK | MB_ICONERROR);
+    }
+    ExitProcess(pt5_restart::renderer_error);
+}
+
+static void stall_dump_check(unsigned long long presents_total, bool suspended = false)
 {
     static int on = -1;
     if (on < 0) { const char* e = getenv("GT5P_STALL_DUMP"); on = (e && *e == '0') ? 0 : 1; }
     if (!on) return;
-    static unsigned last_n = 0; static ULONGLONG last_ms = 0; static int dumped = 0;
+    static unsigned long long last_n = 0; static ULONGLONG last_ms = 0; static int dumped = 0;
     const ULONGLONG now = GetTickCount64();
-    if (presents_total != last_n) { last_n = presents_total; last_ms = now; dumped = 0; return; }
+    if (suspended || presents_total != last_n) { last_n = presents_total; last_ms = now; dumped = 0; return; }
     /* GT5P_STALL_MS lowers the first snapshot threshold for short recoverable
      * stalls in diagnostic runs. Normal play keeps the 3/8-second thresholds. */
     static unsigned threshold = 0;
@@ -735,7 +763,7 @@ static void stall_dump_check(unsigned presents_total)
         fd = _open(path, _O_WRONLY | _O_CREAT | _O_APPEND | _O_BINARY, _S_IREAD | _S_IWRITE);
         if (fd >= 0) { saved = _dup(2); if (saved < 0 || _dup2(fd, 2) != 0) { if (saved >= 0) _close(saved); saved = -1; } }
     }
-    fprintf(stderr, "[stall] no present for %llu ms after %u presents\n",
+    fprintf(stderr, "[stall] no present for %llu ms after %llu presents\n",
             (unsigned long long)(now - last_ms), presents_total);
     dump_threads_now(1);
     /* Each SPURS pool lane's host call stack (offsets from the executable
@@ -957,6 +985,7 @@ static DWORD WINAPI present_thread(LPVOID)
         else fprintf(stderr, "[GT5P] could not start the vblank thread\n");
     }
     for (;;) {
+        renderer_failure_check();
         PROF_T(p_wait, cellGcm_fifo_kick_wait(outer_sleep));
         ps3_tl_tick();
         ULONGLONG now = GetTickCount64();
@@ -990,7 +1019,9 @@ static DWORD WINAPI present_thread(LPVOID)
             next_tick = qpc_now();   /* fell behind -- resync */
 
         dump_threads();
-        stall_dump_check(p_pres_total);
+        renderer_failure_check();
+        stall_dump_check(s_rsx_live ? p_pres_total : rsx_d3d12_backend_present_count(),
+                         !s_rsx_live && rsx_d3d12_backend_present_suspended());
 
         /* Drain again at the outer cadence: titles fence every render pass on
          * an RSX label the drain writes, and waiting a full 16 ms per fence

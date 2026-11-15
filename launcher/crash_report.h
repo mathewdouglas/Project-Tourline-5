@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 #include "../src/pt5_zip.h"
+#include "../src/pt5_restart.h"
 #pragma comment(lib, "advapi32.lib")   // GetUserNameW
 
 #ifndef PT5_VERSION
@@ -36,7 +37,7 @@
 namespace crash_report {
 namespace fs = std::filesystem;
 
-enum class Kind { none, crash, freeze, error };
+enum class Kind { none, crash, freeze, renderer, error };
 
 struct Analysis {
     Kind kind = Kind::none;
@@ -111,15 +112,16 @@ inline unsigned long long freeze_threshold() {
 inline Analysis analyze(unsigned long code, const std::string& err) {
     Analysis a; a.code = code;
     const auto ls = lines(err);
-    int crash_at = -1, stall_at = -1;
+    int crash_at = -1, stall_at = -1, renderer_at = -1;
     for (int i = 0; i < (int)ls.size(); i++) {
         const auto& l = ls[i];
         if (starts(l, "[milestone]")) a.milestone = l;
+        if (renderer_at < 0 && (starts(l, "[renderer-fatal] operation=") || starts(l, "[D3D12] DEVICE REMOVED"))) renderer_at = i;
         if (crash_at < 0 && (starts(l, "[GT5P] ACCESS VIOLATION") || starts(l, "[GT5P] EXCEPTION 0x"))) crash_at = i;
         if (starts(l, "[stall] no present for ")) {
             const unsigned long long ms = strtoull(l.c_str() + 23, nullptr, 10);
+            if (stall_at < 0 || ms >= a.longest_stall_ms) stall_at = i;
             if (ms > a.longest_stall_ms) a.longest_stall_ms = ms;
-            if (stall_at < 0) stall_at = i;
         }
     }
     const bool exception_code = (code & 0xF0000000u) == 0xC0000000u || code == 0xE06D7363 || code == 0x80000003;
@@ -131,6 +133,20 @@ inline Analysis analyze(unsigned long code, const std::string& err) {
         if (crash_at >= 0)
             for (int i = crash_at; i < (int)ls.size() && a.detail.size() < 24; i++)
                 if (starts(ls[i], "[GT5P]")) a.detail.push_back(ls[i]);
+    } else if (renderer_at >= 0 || code == pt5_restart::renderer_error) {
+        a.kind = Kind::renderer;
+        a.what = "stopped rendering (graphics device or command failure)";
+        if (renderer_at >= 0) {
+            a.detail.push_back(ls[renderer_at]);
+            const auto hr = ls[renderer_at].find("hr=0x");
+            const auto legacy = ls[renderer_at].find("(0x");
+            if (hr != std::string::npos) a.what = "stopped rendering (" + ls[renderer_at].substr(hr + 3, 10) + ")";
+            else if (legacy != std::string::npos) a.what = "stopped rendering " + ls[renderer_at].substr(legacy, 12);
+            // Preserve the reason and validation context before the long draw summaries.
+            for (int i = renderer_at + 1; i < (int)ls.size() && a.detail.size() < 24; ++i)
+                if (starts(ls[i], "[renderer-") || starts(ls[i], "[DRED]") || starts(ls[i], "GPU stamp:") ||
+                    starts(ls[i], "GPU:") || starts(ls[i], "Guest compiler:")) a.detail.push_back(ls[i]);
+        }
     } else if (a.longest_stall_ms >= freeze_threshold()) {
         a.kind = Kind::freeze;
         a.what = "froze (no new picture for " + std::to_string(a.longest_stall_ms / 1000) + " s)";
@@ -275,7 +291,7 @@ inline std::string system_info() {
 
 // ---- The issue text ----
 inline const char* kind_title(Kind k) {
-    return k == Kind::crash ? "Crash" : k == Kind::freeze ? "Freeze" : "Error exit";
+    return k == Kind::renderer ? "Graphics error" : k == Kind::crash ? "Crash" : k == Kind::freeze ? "Freeze" : "Error exit";
 }
 
 inline std::string summary(const Analysis& a, const std::string& sys, const std::string& zip_name, size_t budget = 2400) {
@@ -321,7 +337,7 @@ inline Report write(const fs::path& data, const Analysis& a) {
     const Scrubber sc = scrubber();
     SYSTEMTIME st; GetLocalTime(&st);
     char stamp[64];
-    snprintf(stamp, sizeof stamp, "%s-%04u%02u%02u-%02u%02u%02u", a.kind == Kind::crash ? "crash" : a.kind == Kind::freeze ? "freeze" : "error",
+    snprintf(stamp, sizeof stamp, "%s-%04u%02u%02u-%02u%02u%02u", a.kind == Kind::renderer ? "graphics" : a.kind == Kind::crash ? "crash" : a.kind == Kind::freeze ? "freeze" : "error",
              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
     const fs::path dir = data / L"logs" / L"reports";
     fs::create_directories(dir);

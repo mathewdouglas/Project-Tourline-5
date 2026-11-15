@@ -4,6 +4,24 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Fatal renderer errors: explicit exit, report and restart (2026-11-15)
+
+Issue #7's logs report device loss with INVALID_CALL as scene rendering begins,
+then keep advancing the guest/audio behind the stale loading picture. The
+runtime now latches the first fatal frame/upload Close, Present or detected
+removal error, cancels queued builders without joining driver calls, stops
+submission and publishes diagnostics. The engine exits with a renderer-specific
+status; the launcher offers a graphics report and report-before-restart.
+Visible-picture stall detection counts successful non-occluded Present returns,
+with minimized/occluded windows exempt. Freeze excerpts select the longest/latest
+snapshot. Existing reporting privacy/off/silent behavior is retained.
+
+Built and smoke-tested on 2026-11-15 (2.11 engine and launcher; a 230 s HSR race
+at 60 FPS without a renderer-failure message). The failure paths, launcher dialogs
+and a v104 build are still unvalidated.
+The invalid rendering operation behind #7 is still unproven. Design, diagnostics
+and the deferred validation checklist: [renderer-errors.md](renderer-errors.md).
+
 ## Completed work integrated into release/v0.1.5 (2026-11-14)
 
 Merged the completed Course Maker scissored-clear correction, integer SPU

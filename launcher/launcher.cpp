@@ -295,10 +295,23 @@ static DWORD run(const fs::path& exe, const std::wstring& args, const fs::path& 
 // After a crash, freeze or error exit: offer a report (crash_report.h). False
 // when there is nothing to report or reporting is off, so the caller keeps
 // its old message. Silent setups (PT5_SETUP_UI=0) save the ZIP without asking.
-static bool offer_report(DWORD code) {
-    if (!crash_report::enabled()) return false;
+static bool offer_report(DWORD code, bool* restart = nullptr) {
+    if (restart) *restart = false;
+    const bool reports = crash_report::enabled();
+    if (!reports && code != pt5_restart::renderer_error) return false;
     const auto a = crash_report::analyze(code, crash_report::read_tail(data/L"logs/play.err", 32ull << 20));
     if (a.kind == crash_report::Kind::none) return false;
+    const bool graphics = a.kind == crash_report::Kind::renderer;
+    if (!reports) {
+        if (silent_errors) fwprintf(stderr, L"Graphics rendering stopped. See logs\\play.err.\n");
+        else {
+            const std::wstring message = L"The game " + crash_report::widen(a.what) +
+                L". Details are in logs\\play.err.\n\nRestart the game?";
+            if (MessageBoxW(nullptr, message.c_str(), L"Project Tourline 5 - graphics error",
+                            MB_YESNO | MB_ICONERROR) == IDYES && restart) *restart = true;
+        }
+        return true;
+    }
     if (silent_errors) {
         try {
             const auto r = crash_report::write(data, a);
@@ -308,7 +321,8 @@ static bool offer_report(DWORD code) {
         } catch (const std::exception&) { fwprintf(stderr, L"The game stopped; the report could not be saved.\n"); }
         return true;
     }
-    const std::wstring heading = a.kind == crash_report::Kind::crash ? L"Gran Turismo 5 crashed"
+    const std::wstring heading = graphics ? L"Graphics rendering stopped"
+                               : a.kind == crash_report::Kind::crash ? L"Gran Turismo 5 crashed"
                                : a.kind == crash_report::Kind::freeze ? L"Gran Turismo 5 froze"
                                : L"Gran Turismo 5 stopped with an error";
     const std::wstring body = L"The game " + crash_report::widen(a.what) + L".\n\n"
@@ -319,17 +333,27 @@ static bool offer_report(DWORD code) {
         L"attach the report file and submit it yourself.";
     TASKDIALOG_BUTTON buttons[] = {
         {100, L"Report this on GitHub\nSaves the report, shows it in Explorer and opens a new GitHub issue (needs a GitHub account)."},
-        {101, L"Save the report only\nSaves it and shows it in Explorer, to share another way."}};
+        {101, L"Save the report only\nSaves it and shows it in Explorer, to share another way."},
+        {102, L"Save report and restart\nKeeps the diagnostics from this run, then starts the game again."}};
     TASKDIALOGCONFIG td{}; td.cbSize = sizeof td;
     td.dwFlags = static_cast<TASKDIALOG_FLAGS>(TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION);
     td.pszWindowTitle = L"Project Tourline 5 - problem report";
     td.pszMainInstruction = heading.c_str(); td.pszContent = body.c_str();
-    td.cButtons = 2; td.pButtons = buttons; td.dwCommonButtons = TDCBF_CLOSE_BUTTON; brand(td);
+    td.cButtons = graphics ? 3 : 2; td.pButtons = buttons; td.dwCommonButtons = TDCBF_CLOSE_BUTTON; brand(td);
     int choice = IDCLOSE;
-    if (FAILED(TaskDialogIndirect(&td, &choice, nullptr, nullptr)) || (choice != 100 && choice != 101)) return true;
+    if (FAILED(TaskDialogIndirect(&td, &choice, nullptr, nullptr))) {
+        if (!graphics) return true;
+        const std::wstring fallback = L"The game " + crash_report::widen(a.what) +
+            L".\n\nSave a report and restart?\nYes: save and restart. No: save and close. Cancel: close without saving.";
+        const int answer = MessageBoxW(nullptr, fallback.c_str(), L"Project Tourline 5 - graphics error",
+                                       MB_YESNOCANCEL | MB_ICONERROR);
+        choice = answer == IDYES ? 102 : answer == IDNO ? 101 : IDCLOSE;
+    }
+    if (choice != 100 && choice != 101 && !(graphics && choice == 102)) return true;
     crash_report::Report r;
     try { r = crash_report::write(data, a); }
     catch (const std::exception&) { fail(L"The report could not be saved. The game's logs are in:\n\n" + (data/L"logs").wstring()); }
+    if (choice == 102) { if (restart) *restart = true; return true; }
     const std::wstring select = L"/select," + quote(r.zip);
     ShellExecuteW(nullptr, L"open", L"explorer.exe", select.c_str(), nullptr, SW_SHOWNORMAL);
     if (choice == 100)
@@ -1086,7 +1110,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                   catch (const fs::filesystem_error&) { report(L"A setup file operation failed. Your previous game version remains selected. Check free space and folder access, then retry setup."); target=previous; }
                 version_change = true; break;
             }
-            if (offer_report(code)) { if (code) return 1; break; }
+            bool restart = false;
+            if (offer_report(code, &restart)) { if (restart) continue; if (code) return 1; break; }
             if (code) fail(L"The game exited with code " + std::to_wstring(code) + L". Logs are in:\n\n" + (data/L"logs").wstring());
             break;
         }

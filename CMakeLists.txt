@@ -288,7 +288,7 @@ if(GT5P_REPORT_DIRTY)
 endif()
 set(GT5P_REPORT_REVISION "v${PROJECT_VERSION} (commit ${GT5P_REPORT_COMMIT})")
 configure_file(src/gt5p_build_info.h.in gt5p_build_info.h @ONLY)
-set_source_files_properties(src/gt5p_debug_export.cpp PROPERTIES
+set_source_files_properties(src/gt5p_debug_export.cpp src/gt5p_present.cpp PROPERTIES
     INCLUDE_DIRECTORIES "${CMAKE_CURRENT_BINARY_DIR}")
 
 # Scoped to main.cpp, the only file that reads them. On the whole target, any
