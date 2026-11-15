@@ -4,6 +4,29 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.1.8 published (2026-11-16)
+
+Tag `v0.1.8` = `1258f29`. Both engines built at once for the first time
+(`clean_build.py --wait-211 90`; 2.11 with `--jobs 2`, 01.04 with 4): 21
+minutes from clone to ZIP, against 26 for 0.1.7 built one after the other.
+Free memory (excluding the file cache) hovered at 0.2-1 GB for about 10
+minutes, lowest 0.05 GB: workable on this 16 GB machine, not much headroom.
+The 0.1.6 profile was reused (`--profile-max-stale 5000`): 20 functions lost
+counts, all in changed code (`sys_event.c` 12, `sys_timer.c` 1, audio image
+`j9804ABA8` 5, the D3D12 backend 2); 625 had no record. The lift was
+byte-identical to 0.1.7's. ZIP 126 files, SHA-256 `6f19d96e...c5da`.
+
+Packaged smoke: 01.04 High Speed Ring 58.4 FPS, p99 23.7 ms; audio chain
+2,250 jobs/s at 0.37-0.39 ms (83-87% busy), 6 underruns; `RSX_CMD_CHECK=1`
+0 reports over about 757,000 copies. 2.11 (private root
+`input/v211/root`, `scratch/release016-live/run-route-exe.ps1`): race at
+60 FPS, 1:40 in; audio 1,383 jobs/s at 0.71 ms, 98% busy, ~650 underruns,
+as before (it keeps the extended-range check). A 2.11 run with
+`GT5P_ROOT` set to the worktree has no 2.11 game data and faults on the
+present thread within 15 s; that is the wrong root, not a release defect.
+The ZIP's own CHANGELOG still says "unreleased" (notes were finished after
+the build); the GitHub release has the final notes.
+
 ## 0.1.8 preparation (2026-11-16): Windows 10 Close failure, 01.04 race audio
 
 **Windows 10 Close failure (#16, #18, #19).** All three reports are Windows

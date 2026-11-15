@@ -3,7 +3,11 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
-## [0.1.8] - unreleased
+## [0.1.8] - 2026-11-16
+
+Fixes for the Windows 10 graphics error, 01.04 race sound and a shutdown
+hang. GT5 2.11 is still experimental (may have issues; GT5 master mod support
+is still to come).
 
 ### Fixed
 - **Windows 10: the game no longer stops with a graphics error when a race
@@ -26,6 +30,13 @@ versions follow [SemVer](https://semver.org/).
 - `RSX_CMD_CHECK=1` (diagnostic): logs graphics commands that an older
   Windows graphics runtime rejects (copy alignment and bounds, viewports,
   barriers, root bindings). See `docs/renderer-errors.md`.
+
+### Known issues
+- GT5 2.11: race sound still stutters. 2.11 keeps the arithmetic that stops
+  its race audio going silent, and that makes its sound fall behind in
+  races. 01.04 is not affected.
+- The Windows 10 fix was confirmed against a reporter's log, not yet on a
+  Windows 10 PC.
 
 ## [0.1.7] - 2026-11-16
 
