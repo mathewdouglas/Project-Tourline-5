@@ -239,6 +239,7 @@ extern "C" {
     void cellGcm_request_tick(void);
     void cellGcmTickVBlank(void);
     void cellGcmTickFlip(void);
+    void cellGcmProcessReportMethod(void);
     void cellGcm_take_flip_pending_synced(void);
     void cellGcm_fifo_kick_event(void);
     void cellGcm_fifo_kick_wait(void);
@@ -1471,6 +1472,7 @@ extern "C" void ppu_hle_register_all(void) {
     ps3_hle_register(0x37C6880Du, "cellGcm_request_tick", (void*)cellGcm_request_tick);
     ps3_hle_register(0x519386B9u, "cellGcmTickVBlank", (void*)cellGcmTickVBlank);
     ps3_hle_register(0x23BB5407u, "cellGcmTickFlip", (void*)cellGcmTickFlip);
+    ps3_hle_register(0xE19A7A1Bu, "cellGcmProcessReportMethod", (void*)cellGcmProcessReportMethod);
     ps3_hle_register(0xE0252286u, "cellGcm_take_flip_pending_synced", (void*)cellGcm_take_flip_pending_synced);
     ps3_hle_register(0xAD1F71FCu, "cellGcm_fifo_kick_event", (void*)cellGcm_fifo_kick_event);
     ps3_hle_register(0x9D310E99u, "cellGcm_fifo_kick_wait", (void*)cellGcm_fifo_kick_wait);
