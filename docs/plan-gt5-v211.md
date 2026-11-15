@@ -634,6 +634,53 @@ below). The launcher converts installs that already exist (item 4).
 | M10 | Master mod | overlay switch, mod's debug menu reachable, Arcade race with mod data |
 | M11 | DLC offline | DLC layout and licence type measured; owned packs imported, listed and usable in a race with the network off; missing packs hidden cleanly; shop reports unavailable without hanging |
 
+## Task status (2026-11-15)
+
+Read from the commits, AGENTS.md and the live-check report:
+
+- **done**: T1-T4, T6, T8, T9, T14, T14a, T17, T24.
+- **partly done**:
+  - T10: spin waits only; aspect, listbox, top-menu word and glyphs remain.
+  - T11: audio images and extended range only; native hooks, regions, FMA
+    and regpromo remain.
+  - T13: 2.11 inputs live under `input/v211`.
+  - T23: in game on 01.04; the launcher's own conversion has not been run.
+- **not started**: T5 (a private masked matcher was used for the spin
+  waits), T7, T12, T15, T16, T18-T22.
+
+T9 details: the screen markers were measured from file-open times in three
+runs and set in `config/targets.json`. They fire in route order: Arcade 34 s,
+TrackList 44 s, CarList 49 s, Transmission 59 s, RaceLoad 64 s, RaceAssets
+78 s, RaceGrid 79 s, RaceStart 85 s. `movie_screen` (skip movie) and the
+Options marker are not measured yet. The race route is still a private
+script (`scratch/release016-live/run-fix.ps1`), not `gt5boot.ps1`.
+
+Milestones:
+
+- **reached**: M0-M6.
+- **open**:
+  - M6: the race still freezes after about 85-120 s.
+  - M7: race scope and race pack are in; F1 race pause and the rest are not.
+  - M8-M11.
+
+**Car list (2026-11-15).** 2.11 ran the car list at about 10 FPS, against
+32-37 FPS on 01.04 (same machine, `gt5boot.ps1 -Route carlist`).
+
+- **Cause found:** workload 4 (the car's render list) is woken by 2.11's
+  workload flag between `ready=4` kicks. The runtime ran each flag kick on
+  one lane and could not add lanes while that lane was busy, so 72% of
+  dispatches were single-lane.
+- **Fix:** `SPURS_WKL_FLAG_LANES` (runtime, default on; `=0` one lane) gives
+  a flag kick the workload's full contention. Measured gain: about 15 FPS.
+- **Still slower than 01.04:**
+  - 2.11's lane runs are cheaper (10 ms against 20 ms each);
+  - but it runs about 3 workload-4 passes a frame where 01.04 runs about 1;
+  - the render thread polls with `usleep(100)` (`lr=0x00B95280`) meanwhile.
+  - Serving those sleeps from a timer instead of spinning made no
+    difference.
+
+Next: what the frame waits on between passes.
+
 ## 6. Ordered tasks
 
 Sizes: S under half a day, M one or two days, L three days or more. The

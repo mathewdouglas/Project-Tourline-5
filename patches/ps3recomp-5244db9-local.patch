@@ -65977,3 +65977,24 @@ index 794abe77..8caf8e34 100644
      ("cellSpurs", "cellSpursGetInfo"),
      # SPURS event flag
      ("cellSpurs", "cellSpursEventFlagInitializeIWL"),
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -2995,7 +2995,16 @@
+             { static int s_rl = -1;
+               if (s_rl < 0) { const char* e = getenv("SPURS_READY_LANES"); s_rl = e ? atoi(e) : 1; }
+               if (s_gate) {
+-                  u8 want = *rdy ? *rdy : 1;
++                  /* SPURS_WKL_FLAG_LANES (on): a workload-flag kick with no ready
++                   * count runs on its full contention. Gran Turismo 5 2.11's
++                   * car list (workload 4) is woken by the flag between
++                   * ready=4 kicks; one lane took the kick and stayed busy, so
++                   * the four-lane kicks were skipped and the list ran serially
++                   * (10 FPS). On hardware idle SPUs join a running workload up
++                   * to its contention; lanes that find no job exit. =0: one lane. */
++                  static int s_fl = -1;
++                  if (s_fl < 0) { const char* e = getenv("SPURS_WKL_FLAG_LANES"); s_fl = !(e && *e == '0'); }
++                  u8 want = *rdy ? *rdy : ((flag_kick && s_fl) ? maxcont : 1);
+                   if (!s_rl) want = 1;
+                   if (want < maxcont) maxcont = want;
+               } }
