@@ -96,6 +96,11 @@ struct Item {
     int key = -1;                            /* a keyboard binding: its button (gt5p_keymap.h) */
 };
 
+/* Whether an item is overridden by variable `name`. Some items have no
+ * variable (env is nullptr): never pass it to strcmp (issue #17, the DEBUG
+ * page crashed on open in 0.1.6). */
+bool env_is(const Item& it, const char* name) { return it.env && !strcmp(it.env, name); }
+
 const std::vector<Choice> kOnOff = { {1, L"On"}, {0, L"Off"} };
 
 /* Keyboard bindings: one item per button, the value a virtual-key code. */
@@ -373,7 +378,7 @@ bool legacy_ui_flag()
 bool restart_pending()
 {
     for (const Item& it : items())
-        if (!it.apply && (!strcmp(it.env,"GT5P_GAME_VERSION") || !gt5p_settings_overridden(it.env)) && it.get(s_edit) != it.get(s_boot))
+        if (!it.apply && (env_is(it,"GT5P_GAME_VERSION") || !gt5p_settings_overridden(it.env)) && it.get(s_edit) != it.get(s_boot))
             return true;
     return false;
 }
@@ -397,7 +402,7 @@ std::vector<int> rows()
 {
     std::vector<int> r = { kRowHead };
     const wchar_t* sec = sections()[s_section];
-    for (int i = 0; i < (int)items().size(); i++) if (!wcscmp(items()[i].section, sec) && (strcmp(items()[i].env,"GT5P_GAME_VERSION") || pt5_restart::managed())) r.push_back(i);
+    for (int i = 0; i < (int)items().size(); i++) if (!wcscmp(items()[i].section, sec) && (!env_is(items()[i],"GT5P_GAME_VERSION") || pt5_restart::managed())) r.push_back(i);
     const char* ready211=getenv("GT5P_VERSION_211_READY");
     const char* supported211=getenv("GT5P_VERSION_211_SUPPORTED");
     if (pt5_restart::managed() && !wcscmp(sec,L"GAME") && supported211 && !strcmp(supported211,"1") && (!ready211 || strcmp(ready211,"1"))) r.push_back(kRowSetup211);
@@ -499,7 +504,7 @@ void change(int id, int dir)
 void set_value(int id, int v)
 {
     const Item& it = items()[id];
-    if (!strcmp(it.env,"GT5P_GAME_VERSION")) {
+    if (env_is(it,"GT5P_GAME_VERSION")) {
         const char* ready=getenv(v == 211 ? "GT5P_VERSION_211_READY" : "GT5P_VERSION_104_READY");
         if (!pt5_restart::managed() || !ready || strcmp(ready,"1")) { s_status=L"Set up this game version in the launcher first.";return; }
         it.set(s_edit,v); s_status=L"Select Restart to change game version. Saves stay separate.";return;
@@ -509,7 +514,7 @@ void set_value(int id, int v)
         return;
     }
     it.set(s_edit, v);
-    const bool over = strcmp(it.env,"GT5P_GAME_VERSION") && gt5p_settings_overridden(it.env);
+    const bool over = !env_is(it,"GT5P_GAME_VERSION") && gt5p_settings_overridden(it.env);
     if (!gt5p_settings_enabled()) s_status = L"GT5P_NO_SETTINGS is set: changes are not saved.";
     else if (!gt5p_settings_store(s_edit)) s_status = L"Could not write " + widen(gt5p_settings_path());
     else s_status = L"Saved.";
@@ -850,7 +855,7 @@ void paint(HDC dc)
             continue;
         }
         const Item& it = items()[id];
-        const bool over = strcmp(it.env,"GT5P_GAME_VERSION") && gt5p_settings_overridden(it.env);
+        const bool over = !env_is(it,"GT5P_GAME_VERSION") && gt5p_settings_overridden(it.env);
         if (it.key >= 0) {
             /* A binding: the button's name, then its key in a box. */
             const int x0 = sl[i].x0, fx = x0 + 160;
