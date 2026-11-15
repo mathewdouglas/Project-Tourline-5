@@ -65,6 +65,40 @@ after that frame (default 600); unset, it never fires:
 drives it through the launcher or the engine alone, presses the dialog
 buttons through UI Automation and saves a shot of each dialog.
 
+## Close failed on Windows 10 only (issues #16, #18, #19; fixed 0.1.8)
+
+`frame command list Close hr=0x80070057 removed=0x00000000` while a race
+loads or in the dealership, reported only on Windows 10 build 19045 (RTX
+3070, 3090 Ti, 4060 Ti; DXC and FXC). Close returns `E_INVALIDARG` for an
+invalid argument recorded earlier in the frame, and Windows 11's runtime
+(where the debug layer was clean) accepts things Windows 10's does not.
+
+`RSX_CMD_CHECK=1` wraps the frame command list (and the device's
+CreateRootSignature) and logs, as `[cmd-check]`, each kind of command an
+older runtime rejects: placed-footprint offsets not 512-aligned, pitches not
+256-aligned, BC footprints not block-sized, copy boxes past either resource,
+subresource indexes out of range, copies between dimensions or formats,
+CopyResource/ResolveSubresource shape mismatches, invalid viewports and
+scissors, barriers with equal states or to states the resource cannot take,
+root bindings of the wrong type or index for the bound signature, null
+PSOs/handles. Every 600 frames it prints how many calls it checked. The
+runtime swaps the list's method table on Close/Reset, so the wrapper is put
+back after every Reset. Diagnostic only: calls are forwarded unchanged.
+
+At 720p/2x MSAA, High Speed Ring, it reported exactly one thing, in the first
+race frame (just before `[ZONLY] depth-only surface 0xA87BE00`, where the #16
+log has its fatal line): a 1x1 RGBA8 cube texture uploaded with faces 1, 3
+and 5 at 256-byte offsets (`pitch * rows` = 256 per face). Faces now start
+on 512-byte boundaries of the staging buffer (`RSX_TEX_CUBE_ALIGN=0`: packed
+as before, which brings the three reports back). After the fix: no report in
+about 760,000 checked copies over a race and the car list; 58.5 FPS; the car
+list renders the same. Not run on Windows 10 itself.
+
+Seen while checking, not changed: the MSAA depth-resolve pass draws with
+whatever root signature the last draw bound (debug-layer ID 201; its PSO uses
+`vp_root_sig`), and DXC fallback pipelines that pair the vs_5_0 fallback
+vertex shader with an SM6 pixel shader fail creation (ID 1046).
+
 ## Validation
 
 **2026-11-16, 2.11 engine (`gt5_211.exe`) and launcher built from this
