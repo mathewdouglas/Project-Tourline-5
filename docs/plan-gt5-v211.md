@@ -659,7 +659,10 @@ Milestones:
 
 - **reached**: M0-M6.
 - **open**:
-  - M6: the race still freezes after about 85-120 s.
+  - M6: the race freeze (85-120 s) is fixed: created guest threads shared
+    one TLS block (`PS3_TLS_FROM_CRT`, `PS3_TLS_PACK`; see
+    gt5-v211-live-checks.md). Three 230 s races ran clean; a longer soak
+    and full-race finish are still owed.
   - M7: race scope and race pack are in; F1 race pause and the rest are not.
   - M8-M11.
 
@@ -705,7 +708,8 @@ Ported to `BCUS98114-v211`:
   functions.
   - An Eiger race with `GT5P_SPU_REGION=3` (merged and original alternating)
     ran until the known freeze with no visible fault.
-  - Its speed is not measured: the freeze leaves too few race windows.
+  - Its speed is not measured: the freeze left too few race windows (now
+    fixed; measure next).
 - **`spu_fma_images`**: all four bodies, with fingerprints read from memory
   at boot. `[spu-fma]` now prints the value found on a mismatch. FMA stays
   opt-in, as on 01.04.

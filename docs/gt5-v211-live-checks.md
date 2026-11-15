@@ -3,6 +3,8 @@
 The 0.1.6 candidate is not ready for release. The normal 2.11 race route
 reaches playable High Speed Ring, but produces invalid audio and subsequently
 stops presenting. These are bring-up failures, not a completed race pass.
+Both are now fixed: the audio NaNs (see `docs/audio.md`) and the freeze (see
+"Race freeze fixed" below). The startup stall is separate and still open.
 
 ## Build and method
 
@@ -71,6 +73,44 @@ material and must not be tracked.
 
 Before release, diagnose the normal race stall and nonfinite audio, repeat
 the race through a complete lap and exit/save/reload, and verify cold boots.
+
+## Race freeze fixed: per-thread TLS (2026-11-15, fifth pass)
+
+Cause: every guest thread made by `sys_ppu_thread_create` shared one TLS
+block. The runtime only learns the TLS template from `ppu_load_elf`; this
+port loads the ELF itself (`src/elf_loader.h`), so the template stayed empty
+and `ppu_tls_new_block()` gave every created thread `r13 = 0x10F07000`. Only
+the main thread had its own block (from `sys_initialize_tls`, `0x0E007000`).
+
+GT5 2.11 keeps the thread's current render list in TLS (`r13-0x6FF8`, set by
+`func_008F3A8C`, read by `func_008F32AC`, finished by `func_008F34B4`). Its
+two race render threads (guest ids 30 and 32) began their own lists
+(`0x4FFEE090`, `0x4FFEE0D8`), but thread 30 then finished thread 32's list,
+under the list lock but while thread 32 was still appending outside it. The
+terminator was written mid-record and the write pointer moved backward
+(`PTR-BACKWARD` in the reserve trace), so job body `0x015DCC00` read a
+malformed list: the loop at LS `0x4840` or a bad command block, then the
+walker's 3 s resync and the freeze in the passes below.
+
+Fix (runtime, `patches/ps3recomp-5244db9-local.patch`):
+
+- `sys_initialize_tls` passes the template to `ppu_tls_set_template()`, so
+  created threads get their own copy (`PS3_TLS_FROM_CRT=0`: old shared block).
+- Thread blocks are packed by the template size (0x1FC, so 4 KB each) instead
+  of 32 KB. The 1 MB window held 31 blocks at 32 KB; thread 30 got the 36th
+  (`PS3_TLS_PACK=0`: 32 KB). A full window now prints `[ppu] TLS window full`.
+
+Measured: with the fix, threads 30 and 32 run at `r13 = 0x10F2B000` and
+`0x10F2D000`, each finishes only its own list, and no backward move is
+logged. Three 230 s High Speed Ring races (one instrumented, two clean)
+reached lap 2 (2:09-2:13 race time) with no stall; before it, every race run
+today froze at about 85-120 s. A 01.04 race on the same change also ran to
+the end of the window (1:50 race time, about 60 FPS).
+
+This was not a 01.04 fix missing from 2.11: 01.04 shares the same TLS block
+across threads in every earlier build. Why 01.04 never froze from it is not
+measured (its list code may not keep the current list in TLS from two
+threads).
 
 ## Follow-up diagnosis (2026-11-15, later)
 

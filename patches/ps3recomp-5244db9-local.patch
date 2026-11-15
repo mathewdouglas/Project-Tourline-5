@@ -41740,10 +41740,10 @@ index acbaf126..0c80b8d2 100644
          /* Recorded before the diagnostic paths below, several of which return
           * early. An import moving between resolved and unresolved is exactly the
 diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
-index e73a1512..fb5d8df8 100644
+index e73a1512..4a2f063a 100644
 --- a/runtime/ppu/ppu_loader.cpp
 +++ b/runtime/ppu/ppu_loader.cpp
-@@ -1,3870 +1,4515 @@
+@@ -1,3870 +1,4551 @@
 -/*
 - * ps3recomp - PPU runtime loader
 - *
@@ -49696,17 +49696,53 @@ index e73a1512..fb5d8df8 100644
 + * ponytail: bump allocator, never freed. A thread's block is dead once it
 + * exits, but the window holds dozens and titles create their threads at boot
 + * and keep them. Reuse a free list if a title ever churns threads. */
++/* Hosts with their own ELF loader never run ppu_load_elf, so g_tls_* stayed
++ * 0 and ppu_tls_new_block() always returned 0: every created thread shared
++ * the PPU_TLS_TP block (only main had its own, from sys_initialize_tls).
++ * sys_initialize_tls passes the template here so created threads get their
++ * own blocks too. PS3_TLS_FROM_CRT=0 keeps the old shared block. */
++extern "C" void ppu_tls_set_template(uint32_t vaddr, uint32_t filesz, uint32_t memsz)
++{
++    if (g_tls_memsz) return;                    /* ppu_load_elf already set it */
++    const char* e = getenv("PS3_TLS_FROM_CRT");
++    if (e && *e == '0') return;
++    g_tls_vaddr = vaddr; g_tls_filesz = filesz; g_tls_memsz = memsz;
++    fprintf(stderr, "[ppu] TLS template from sys_initialize_tls: 0x%08X filesz 0x%X memsz 0x%X\n",
++            vaddr, filesz, memsz);
++}
++
 +static uint32_t ppu_tls_new_block(void)
 +{
 +    if (!g_tls_memsz) return 0;                 /* no PT_TLS: nothing to copy */
 +    uint32_t total = (g_tls_memsz + 0x7000u + 0xFFFu) & ~0xFFFu;
 +    uint32_t lim   = 0x11000000u;               /* same bound the main block uses */
 +    if (ppu_vm_size && ppu_vm_size < lim) lim = ppu_vm_size;
++    /* PS3_TLS_PACK (default on): a thread only touches its template's bytes
++     * at r13-0x7000 .. r13-0x7000+memsz, so blocks need not reserve the whole
++     * 0x7000 below the thread pointer. With 32 KB blocks the 1 MB window held
++     * 31 threads, and every later thread silently shared one block. GT5's
++     * race render threads (guest ids 30 and 32) got the 36th and 37th
++     * blocks; sharing, they shared the "current command list" slot at
++     * r13-0x6FF8 and finished each other's lists mid-append (corrupt list ->
++     * SPU job hang -> race freeze on 2.11).
++     * Packed blocks are memsz rounded to 4 KB, after the main block's full
++     * reservation. PS3_TLS_PACK=0 restores the 32 KB stride. */
++    static int s_pack = -1;
++    if (s_pack < 0) { const char* e = getenv("PS3_TLS_PACK"); s_pack = (e && *e == '0') ? 0 : 1; }
++    uint32_t stride = s_pack ? ((g_tls_memsz + 0xFFFu) & ~0xFFFu) : total;
++    uint32_t need   = s_pack ? g_tls_memsz : total;
 +    /* Threads are created concurrently, so hand out offsets atomically. */
 +    static uint32_t s_bump = 0;
-+    uint32_t off  = __atomic_fetch_add(&s_bump, total, __ATOMIC_RELAXED);
++    uint32_t off  = __atomic_fetch_add(&s_bump, stride, __ATOMIC_RELAXED);
 +    uint32_t base = PPU_TLS_IMG + total + off;  /* main block occupies the first */
-+    if (base + total > lim) return 0;           /* out of room: share, as before */
++    if (base + need > lim) {                    /* out of room: share, as before */
++        static int s_warned = 0;
++        if (!__atomic_exchange_n(&s_warned, 1, __ATOMIC_RELAXED))
++            fprintf(stderr, "[ppu] TLS window full: further threads share the main "
++                            "thread's TLS block (memsz 0x%X, stride 0x%X)\n",
++                    g_tls_memsz, stride);
++        return 0;
++    }
 +    if (g_tls_filesz) memcpy(vm_base + base, vm_base + g_tls_vaddr, g_tls_filesz);
 +    if (g_tls_memsz > g_tls_filesz)
 +        memset(vm_base + base + g_tls_filesz, 0, g_tls_memsz - g_tls_filesz);
@@ -50128,7 +50164,7 @@ index e73a1512..fb5d8df8 100644
 +}
 +
 diff --git a/runtime/ppu/ppu_sysprx.cpp b/runtime/ppu/ppu_sysprx.cpp
-index d857f308..a6100aa9 100644
+index d857f308..a367f1a4 100644
 --- a/runtime/ppu/ppu_sysprx.cpp
 +++ b/runtime/ppu/ppu_sysprx.cpp
 @@ -16,6 +16,9 @@
@@ -50141,15 +50177,25 @@ index d857f308..a6100aa9 100644
  /* win32_compat.h is <windows.h> on Windows (CRITICAL_SECTION for the real
   * lwmutex exclusion) and the POSIX shims elsewhere -- Sleep, DWORD, QPC. */
  #include "../platform/win32_compat.h"
-@@ -27,6 +30,7 @@ extern "C" uint32_t vm_read32(uint64_t a);
+@@ -27,6 +30,8 @@ extern "C" uint32_t vm_read32(uint64_t a);
  extern "C" uint64_t vm_read64(uint64_t a);
  extern "C" void     vm_write32(uint64_t a, uint32_t v);
  extern "C" void     vm_write64(uint64_t a, uint64_t v);
 +extern "C" void     ps3_gcm_pump_if_present(void);   /* ppu_hle.cpp */
++extern "C" void     ppu_tls_set_template(uint32_t, uint32_t, uint32_t); /* ppu_loader.cpp */
  
  /* Simple bump allocator for TLS areas, in a free vm region below the stack. */
  static uint32_t s_tls_next = 0x0E000000u;
-@@ -61,18 +65,30 @@ static void sys_initialize_tls(ppu_context* ctx)
+@@ -50,6 +55,8 @@ static void sys_initialize_tls(ppu_context* ctx)
+ 
+     ctx->gpr[13] = block + 0x7000u;   /* thread pointer; TLS data at r13-0x7000 */
+     ctx->gpr[3]  = 0;                  /* CELL_OK */
++    /* Created threads copy the same template (ppu_loader.cpp). */
++    ppu_tls_set_template(seg_addr, seg_size, mem_size);
+     fprintf(stderr, "[crt] sys_initialize_tls: block 0x%08X, r13=0x%08X (seg 0x%X+%u, mem %u)\n",
+             block, (uint32_t)ctx->gpr[13], seg_addr, seg_size, mem_size);
+ }
+@@ -61,18 +68,30 @@ static void sys_initialize_tls(ppu_context* ctx)
   * lands here) paced the intro at ~1/10th speed: video decoded at <1 fps,
   * the audio preload threshold took forever to fill (movie stayed silent),
   * and every frontend animation timed off it crawled. */
@@ -50184,7 +50230,7 @@ index d857f308..a6100aa9 100644
  
  /* sys_process_is_stack(u32 addr) -> 1 if addr is in the stack region. We model
   * a single stack just below the TLS region; good enough for boot checks. */
-@@ -109,6 +125,7 @@ static void sys_process_is_stack(ppu_context* ctx)
+@@ -109,6 +128,7 @@ static void sys_process_is_stack(ppu_context* ctx)
  
  #ifdef _WIN32
  static HANDLE lwm_sem(uint32_t addr);   /* fwd (defined below) */
@@ -50192,7 +50238,7 @@ index d857f308..a6100aa9 100644
  #endif
  static void sys_lwmutex_create(ppu_context* ctx)
  {
-@@ -128,7 +145,7 @@ static void sys_lwmutex_create(ppu_context* ctx)
+@@ -128,7 +148,7 @@ static void sys_lwmutex_create(ppu_context* ctx)
      /* A recreate at a reused address must not inherit a locked slot (e.g. the
       * previous holder exited while holding). Force the semaphore signaled;
       * over-release of an already-free sem fails harmlessly at max count 1. */
@@ -50201,7 +50247,7 @@ index d857f308..a6100aa9 100644
  #endif
      ctx->gpr[3] = 0;
  }
-@@ -147,9 +164,10 @@ static void sys_lwmutex_create(ppu_context* ctx)
+@@ -147,9 +167,10 @@ static void sys_lwmutex_create(ppu_context* ctx)
   * race-free). Keyed by guest address in an open-addressed table. */
  #ifdef _WIN32
  #define LWM_HASH 65536u
@@ -50214,7 +50260,7 @@ index d857f308..a6100aa9 100644
  extern "C" { extern volatile long long g_gcm_ref_pub_count;    /* cellGcmSys.c */
               unsigned long long ppu_thread_cpu_us(unsigned tid);   /* sys_ppu_thread.c */
               unsigned ppu_thread_prof_pc(unsigned tid); }
-@@ -159,7 +177,42 @@ static volatile long g_lwm_tab_lock = 0;
+@@ -159,7 +180,42 @@ static volatile long g_lwm_tab_lock = 0;
   * contended block it logs who holds it and for how long; on unlock it flags a
   * long hold. The leaf holder (the one blocked on a non-lwmutex wait) is the
   * convoy root. Default OFF. */
@@ -50257,7 +50303,7 @@ index d857f308..a6100aa9 100644
  static long long lwm_now_us(void){
  #ifdef _WIN32
      static LARGE_INTEGER freq={0}; if(!freq.QuadPart) QueryPerformanceFrequency(&freq);
-@@ -204,6 +257,51 @@ static HANDLE lwm_sem(uint32_t addr)
+@@ -204,6 +260,51 @@ static HANDLE lwm_sem(uint32_t addr)
      }
      return nullptr;   /* table full (raise LWM_HASH) */
  }
@@ -50309,7 +50355,7 @@ index d857f308..a6100aa9 100644
  #else
  static void* lwm_sem(uint32_t) { return nullptr; }
  #endif
-@@ -228,10 +326,12 @@ static void sys_lwmutex_lock(ppu_context* ctx)
+@@ -228,10 +329,12 @@ static void sys_lwmutex_lock(ppu_context* ctx)
           * Only the holder ever stamps owner=self, so this check is race-free. */
          if (vm_read32(lwm + LWM_OWNER) == self && vm_read32(lwm + LWM_RECUR) > 0) {
              vm_write32(lwm + LWM_RECUR, vm_read32(lwm + LWM_RECUR) + 1);
@@ -50323,7 +50369,7 @@ index d857f308..a6100aa9 100644
              /* Contended: log who we're stuck behind (owner stamped at acquire),
               * then block. Bounded diagnostics for park hunts; uncapped while the
               * probe window is open (g_nd_inpump). */
-@@ -246,7 +346,7 @@ static void sys_lwmutex_lock(ppu_context* ctx)
+@@ -246,7 +349,7 @@ static void sys_lwmutex_lock(ppu_context* ctx)
              long long _blk_start = lwm_trace() ? lwm_now_us() : 0;
              DWORD ms = INFINITE;
              if (timeout_us) { uint64_t m = (timeout_us + 999) / 1000; ms = m > 0xFFFFFFFEull ? 0xFFFFFFFEu : (DWORD)m; }
@@ -50332,7 +50378,7 @@ index d857f308..a6100aa9 100644
              if (wr == WAIT_TIMEOUT) {           /* honor the timeout: ETIMEDOUT, no acquire */
                  if (lwm_trace()) fprintf(stderr, "[LWM-CONVOY] tid=%llu TIMED-OUT on lwm=0x%08X after %lldus (ETIMEDOUT, retry)\n",
                      (unsigned long long)ctx->thread_id, lwm, lwm_now_us() - _blk_start);
-@@ -259,6 +359,8 @@ static void sys_lwmutex_lock(ppu_context* ctx)
+@@ -259,6 +362,8 @@ static void sys_lwmutex_lock(ppu_context* ctx)
          }
      }
      if (lwm_trace()) { struct LwmSlot* sl = lwm_find(lwm); if (sl) { sl->holder = (long)self; sl->acq_us = lwm_now_us(); sl->acq_fences = g_gcm_ref_pub_count; sl->acq_cpu_us = ppu_thread_cpu_us(self); } }
@@ -50341,7 +50387,7 @@ index d857f308..a6100aa9 100644
  #endif
      vm_write32(lwm + LWM_OWNER, self);
      vm_write32(lwm + LWM_RECUR, 1);
-@@ -276,9 +378,10 @@ static void sys_lwmutex_trylock(ppu_context* ctx)
+@@ -276,9 +381,10 @@ static void sys_lwmutex_trylock(ppu_context* ctx)
              ctx->gpr[3] = 0;
              return;
          }
@@ -50353,7 +50399,7 @@ index d857f308..a6100aa9 100644
  #endif
      vm_write32(lwm + LWM_OWNER, self);
      vm_write32(lwm + LWM_RECUR, 1);
-@@ -290,12 +393,15 @@ static void sys_lwmutex_unlock(ppu_context* ctx)
+@@ -290,12 +396,15 @@ static void sys_lwmutex_unlock(ppu_context* ctx)
      uint32_t rc = vm_read32(lwm + LWM_RECUR);
      if (rc > 1) {                       /* recursive hold: count down, keep the lock */
          vm_write32(lwm + LWM_RECUR, rc - 1);
@@ -50369,7 +50415,7 @@ index d857f308..a6100aa9 100644
      if (lwm_trace()) { struct LwmSlot* sl = lwm_find(lwm);
          if (sl && sl->holder) { long long held = lwm_now_us() - sl->acq_us;
              if (held > 100000) {
-@@ -327,7 +433,7 @@ static void sys_lwmutex_unlock(ppu_context* ctx)
+@@ -327,7 +436,7 @@ static void sys_lwmutex_unlock(ppu_context* ctx)
      /* Semaphore release works from ANY thread (unlike a CS) -- guest code
       * hands lwmutex ownership across threads. Over-release (unlock of a free
       * mutex) fails harmlessly at the max count of 1. */
@@ -50378,7 +50424,7 @@ index d857f308..a6100aa9 100644
  #endif
      ctx->gpr[3] = 0;
  }
-@@ -349,10 +455,92 @@ static void sys_lwcond_create(ppu_context* ctx)
+@@ -349,10 +458,92 @@ static void sys_lwcond_create(ppu_context* ctx)
      vm_write32(lwcond + 0x08, ++s_lwcond_id);
      ctx->gpr[3] = 0;
  }
@@ -50474,7 +50520,7 @@ index d857f308..a6100aa9 100644
  /* Now that the lwmutex is REAL, a no-op wait that keeps holding it deadlocks the
   * signaler. Release the paired lwmutex, wait briefly, reacquire (poll-style: the
   * guest's while(!predicate) loop re-checks; signalers stay no-ops). Handles the
-@@ -363,14 +551,75 @@ static void sys_lwcond_wait(ppu_context* ctx)
+@@ -363,14 +554,75 @@ static void sys_lwcond_wait(ppu_context* ctx)
      uint32_t lwmutex = (uint32_t)vm_read64(lwcond + 0x00);
  #ifdef _WIN32
      HANDLE s = lwm_sem(lwmutex);
@@ -50552,7 +50598,7 @@ index d857f308..a6100aa9 100644
          vm_write32(lwmutex + LWM_OWNER, own);
          vm_write32(lwmutex + LWM_RECUR, rc ? rc : 1);
      }
-@@ -378,6 +627,104 @@ static void sys_lwcond_wait(ppu_context* ctx)
+@@ -378,6 +630,104 @@ static void sys_lwcond_wait(ppu_context* ctx)
      ctx->gpr[3] = 0;
  }
  
@@ -50657,7 +50703,7 @@ index d857f308..a6100aa9 100644
  /* sys_ppu_thread_get_id(vm::ptr<u64> id) -> *id = calling thread's real id.
   * The old fixed "1" broke every am-I-the-designated-thread check in
   * multithreaded titles (LBP's job system routes work by thread identity, so
-@@ -397,26 +744,210 @@ static void sys_ppu_thread_get_id(ppu_context* ctx)
+@@ -397,26 +747,210 @@ static void sys_ppu_thread_get_id(ppu_context* ctx)
   * search_and_map just needs a non-zero id to track. */
  /* id -> size so sys_mmapper_search_and_map (lv2 337) can lay blocks out
   * without overlap. Ids are dense from 0x1000. */
@@ -50874,7 +50920,7 @@ index d857f308..a6100aa9 100644
      if (getenv("PS3_MEMTRACE"))
          fprintf(stderr, "[mmapper] allocate_memory(size=0x%X flags=0x%llX id_ptr=0x%X) -> id 0x%X\n",
                  size, (unsigned long long)ctx->gpr[4], mem_id_ptr, id);
-@@ -430,7 +961,7 @@ static void sys_mmapper_allocate_memory_from_container(ppu_context* ctx)
+@@ -430,7 +964,7 @@ static void sys_mmapper_allocate_memory_from_container(ppu_context* ctx)
  {
      uint32_t size = (uint32_t)ctx->gpr[3];
      uint32_t mem_id_ptr = (uint32_t)ctx->gpr[6];
@@ -50883,7 +50929,7 @@ index d857f308..a6100aa9 100644
      if (getenv("PS3_MEMTRACE"))
          fprintf(stderr, "[mmapper] alloc_from_container(size=0x%X cid=0x%X flags=0x%llX id_ptr=0x%X) -> id 0x%X\n",
                  size, (uint32_t)ctx->gpr[4], (unsigned long long)ctx->gpr[5], mem_id_ptr, id);
-@@ -584,6 +1115,38 @@ static void hle_net_socket(ppu_context* ctx) { static uint32_t s_fd = 3; ctx->gp
+@@ -584,6 +1118,38 @@ static void hle_net_socket(ppu_context* ctx) { static uint32_t s_fd = 3; ctx->gp
  /* sendto: report the full length as sent (packets vanish into the void, matching
   * the RPCS3-offline oracle where broadcasts go out and nothing answers). */
  static void hle_net_sendto(ppu_context* ctx) { ctx->gpr[3] = (uint32_t)ctx->gpr[5]; }
@@ -50922,7 +50968,7 @@ index d857f308..a6100aa9 100644
  
  /* _sys_spu_image_import (sysPrxForUser NID 0xEBE5F72F) -- the user-space wrapper
   * libsre calls during cellSpursInitialize to load the SPURS SPU kernel into the
-@@ -875,6 +1438,9 @@ extern "C" void ppu_sysprx_register(void)
+@@ -875,6 +1441,9 @@ extern "C" void ppu_sysprx_register(void)
      ps3_hle_register_ctx(0x3F09E20Au, "sys_net_bnet_select",    hle_net_select);
      ps3_hle_register_ctx(0x139A9E9Bu, "netInitializeNetworkEx", hle_net_zero);   /* lib init ok */
      ps3_hle_register_ctx(0x9C056962u, "netSocket",              hle_net_socket);
@@ -50932,7 +50978,7 @@ index d857f308..a6100aa9 100644
      ps3_hle_register_ctx(0xB0A59804u, "netBind",                hle_net_zero);
      ps3_hle_register_ctx(0x88F03575u, "netSetSockOpt",          hle_net_zero);
      ps3_hle_register_ctx(0x9647570Bu, "netSendTo",              hle_net_sendto);
-@@ -911,6 +1477,14 @@ extern "C" void ppu_sysprx_register(void)
+@@ -911,6 +1480,14 @@ extern "C" void ppu_sysprx_register(void)
      ps3_hle_register_ctx(ps3_compute_nid("sys_lwcond_signal_all"), "sys_lwcond_signal_all", sys_lwcond_signal_all);
      ps3_hle_register_ctx(ps3_compute_nid("sys_lwcond_signal_to"),  "sys_lwcond_signal_to",  sys_lwcond_signal_to);
      ps3_hle_register_ctx(ps3_compute_nid("sys_lwcond_wait"),       "sys_lwcond_wait",       sys_lwcond_wait);
@@ -50947,7 +50993,7 @@ index d857f308..a6100aa9 100644
  
      /* Thread id + memory manager (high-frequency boot imports). The flat VM
       * means map/unmap/free are no-ops: the memory already exists everywhere. */
-@@ -919,7 +1493,7 @@ extern "C" void ppu_sysprx_register(void)
+@@ -919,7 +1496,7 @@ extern "C" void ppu_sysprx_register(void)
      ps3_hle_register_ctx(ps3_compute_nid("sys_ppu_thread_exit"),        "sys_ppu_thread_exit",        hle_ppu_thread_exit);
      ps3_hle_register_ctx(ps3_compute_nid("sys_mmapper_allocate_memory"), "sys_mmapper_allocate_memory", sys_mmapper_allocate_memory);
      ps3_hle_register_ctx(ps3_compute_nid("sys_mmapper_allocate_memory_from_container"), "sys_mmapper_allocate_memory_from_container", sys_mmapper_allocate_memory_from_container);
