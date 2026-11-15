@@ -70,4 +70,12 @@ also offers a version choice. F1 > Game > Set up 2.11 opens setup when the
 2.11 engine is included; Game version and Restart switch installed versions.
 Each version keeps separate game data, saves and shaders. PC settings are
 shared. No save conversion is performed. Other updates, including 2.17, are
-refused. 2.11 remains experimental while race and feature parity are checked.
+refused.
+
+2.11 is EXPERIMENTAL and may have issues. It boots, reaches the menus and
+runs Arcade races, but it has had far less testing than 01.04. Some PC
+features are not available on it yet: F1 race pause, ultrawide, controller-
+style button prompts, Skip opening movie and the Options "PC settings" tag.
+Use 01.04 for the most reliable experience. 2.11 is the base for GT5 master
+mod support, which is planned for a later release; mods are not supported
+yet.

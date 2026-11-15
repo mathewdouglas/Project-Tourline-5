@@ -1,7 +1,8 @@
 # Optional GT5 2.11 setup
 
-GT5 2.11 is an experimental second engine. It reaches the menu; race and
-full feature parity are separate bring-up milestones. Setup accepts exactly
+GT5 2.11 is an experimental second engine (first shipped in 0.1.6). It
+reaches the menus and runs Arcade races; full feature parity with 01.04 and
+master mod support are later milestones. Setup accepts exactly
 BCUS98114 01.04 and 02.11, and refuses 02.17 and other regions.
 
 ## Player flow

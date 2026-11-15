@@ -3,9 +3,42 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
-## [0.1.6] - Unreleased
+## [0.1.6] - 2026-11-16
 
-In progress on `release/v0.1.6`.
+**Experimental GT5 2.11 support**, a much smaller first-boot install, and
+clearer handling of graphics failures. The player ZIP contains no game files;
+you need your own extracted BCUS98114 disc (the folder containing
+`PS3_GAME`).
+
+### Highlights
+- **GT5 2.11 (experimental, may have issues).** The ZIP now carries a second
+  engine for the 2.11 update next to 01.04. It is optional: 01.04 stays the
+  default and the recommended version. See "GT5 2.11" below.
+- **The first-boot install takes about 240 MB instead of 6.5 GB**, and is
+  faster. Existing installs are shrunk the same way, once.
+- **Graphics failures now stop cleanly** with a message, and the launcher
+  can save a problem report and restart the game.
+
+### GT5 2.11 (experimental)
+- **This is an early, experimental engine and may have issues.** It boots,
+  reaches the menus and runs Arcade races at 60 FPS at High Speed Ring, but
+  it has had far less testing than 01.04. Please report problems.
+- **Not on 2.11 yet:** F1 race pause, ultrawide, controller-style button
+  prompts, Skip opening movie and the Options "PC settings" tag. These need
+  measurements for the 2.11 executable and will follow.
+- **Master mod support is coming.** 2.11 is the base the GT5 master mod
+  builds on; mod support is planned for a later release and is not included
+  yet.
+- **Setup:** in RecompLauncher add a folder with all 21 official update
+  packages (01.05 through 02.11), or import an existing complete 2.11
+  installation. Nothing is downloaded. In game, F1 > Game > Set up 2.11
+  starts setup, and Game version + Restart switches between 01.04 and 2.11.
+  Each version keeps its own game data, saves and shaders; PC settings are
+  shared. Other updates (including 2.17) are refused. See
+  `docs/setup-v211.md`.
+- Fixed during bring-up: silent race audio (non-finite samples), a race
+  freeze after about 90 s (guest threads shared one TLS block), a menu
+  stall, and a slow Arcade car list (15 -> 32-35 FPS).
 
 ### Added
 - **The first-boot install takes about 240 MB instead of 6.5 GB.** Files the
@@ -20,13 +53,32 @@ In progress on `release/v0.1.6`.
   install's verified copies of `GT.VOL` into links, once. This applies to
   installs imported from RPCS3 and installs made by earlier versions.
   `PT5_VOLMAP=0` turns it off.
+- **Graphics failure handling.** A failed frame submission, failed Present
+  or lost graphics device now stops the game with a clear message instead of
+  a frozen picture, and logs what failed. From the launcher you can save a
+  problem report, open a pre-filled GitHub issue, or save the report and
+  restart. Nothing is sent automatically.
+- Modern control options connect to GT5's own button assignments.
+
+### Changed
+- Created guest threads get their own thread-local storage from the game's
+  template (`PS3_TLS_FROM_CRT=0` restores the shared block). This was the
+  2.11 race freeze; 01.04 uses the same runtime and was re-checked (High
+  Speed Ring, rainy Eiger, car list, boots).
+- SPU lanes can rejoin a running render pass (`SPURS_LANE_JOIN=0` off).
 
 ### Known issues
+- GT5 2.11: see above. A rare startup stall after the install check (the
+  boot movie never finishing) was seen 4 times in 76 early boots and not in
+  95 boots of this build; its cause is unknown.
+- Small white specks on some car edges, faint on 01.04 and stronger on 2.11.
 - The launcher's conversion of an existing install has not yet been run on
   real player storage. The same method, run by `scripts/volmap.py`, has
   been run on real data, and a race played on the converted data.
 - To undo the links, use `scripts/volmap.py restore`. The launcher has no
   option for this yet.
+- Course Maker at 21:9: the map is misplaced and right-hand labels are
+  clipped.
 
 ## [0.1.5] - 2026-11-14
 
