@@ -212,8 +212,52 @@ Rejected this pass:
 - Lanes in `Sleep(1)` retry loops (another freeze shape): seen at one stall
   and not pursued.
 
+**Freeze, fourth pass: the record list itself is malformed.** This pass
+used timestamped PPU hooks in the lifted code (private copies:
+`scratch/v211/*.lag`, `b015DCC00-listcheck3.c`), a ring watch
+(`ringwatch.diff`) and lane signal/wake counters. All have been removed.
+
+The third pass's "torn descriptor" reading is wrong:
+
+- On the PPU (thread 32), `func_00AAA084` (DMA entries), then
+  `func_00AAA514` (parameters), then the submit `func_00AA9510` all ran about
+  0.9 ms before any lane saw the job. The descriptor was complete when read.
+- The submit is `func_00AA9510`, called from the frame function
+  `func_002BB3E8` after `func_008CA580`.
+- The writers' guard (`func_00AA8528`, then `func_00B98828`) never took its
+  "3+ frames old, presume done" branch: ages were only 0 and -1. The row
+  protocol is conservative: a lane entering from idle takes the job and sets
+  its slot in one write (pc `0x3020`).
+- No lost lane wake-ups: signals sent equal wake-ups taken for every lane of
+  every workload, in two frozen runs.
+
+What the bad jobs do show:
+
+- **The list is broken, and the size matches.** The size parameter is
+  written each frame by `func_008F37E8` into `0x4FF86490` and copied into
+  the descriptor. In one hang the job's copy matched buffer `0x40166000`
+  exactly.
+- **Where it breaks.** At `+0xDC0` there's a type `0x0B` record header
+  (8 bytes: header plus a float). Where its float belongs, `+0xDC4`, the next
+  record's header `0x0E080000` already sits. The size parameter, `0xDC4`,
+  ends exactly at that break.
+- **Two writers, or a moved pointer.** A single appender advancing 8 bytes
+  per record can't produce this. Two appenders on one list, or a write
+  pointer reset under the builder, can.
+- **In other bad cases** neither buffer held a list as short as the size
+  parameter.
+
+**Separate bug: startup stall.** In 2 of about 25 runs today (`lag2`, `ev3`;
+logs in `scratch/release016-live/bootstall-*`) the game reached
+`installed00.dat` (about 17 s) and never reached `MusicDecode`. The window
+stayed at 60 FPS with 8 draws. This is the cold-boot logo stall from the
+first checks, not the race freeze.
+
 Next for the freeze:
 
+- find which threads append to the list. Watch the list object's write
+  pointer, and the record helpers at `0x00871xxx` and `func_00831DD8`, by
+  thread;
 - find the code that appends the `0x4FF863D0` entry to the job queue, and
   whether it can run before `func_00AAA514`. Candidates: a vector copy, or
   the render thread's job-list submit;
