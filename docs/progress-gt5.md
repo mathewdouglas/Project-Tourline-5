@@ -4,6 +4,27 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.1.7 published (2026-11-16): F1 DEBUG page crash
+
+Two crash reports (the user's, and issue #17) had the same chain: access
+violation reading host 0x0 after L1 in the F1 settings page. The reports' guest
+chain is stale; relinking the shipped 0.1.6 engine with `/MAP` (objects from
+`C:/pt5-release/0.1.6/final/src/build`, response file rebuilt from
+`build.ninja`, since ninja deletes it) put the host frames in
+`gt5p_settings_ui.cpp`: `rows()` <- `paint` <- `render_overlay` <- `ui_thread`.
+`rows()` (and `set_value`, `paint`) compared `Item::env` with
+`GT5P_GAME_VERSION` by `strcmp`, and "Debug export" has no variable. Pages wrap,
+so L1 on the first page shows DEBUG. Reproduced on the 0.1.6 engine (one Page
+Up posted to the page: 0xC0000005); fixed with a null-safe `env_is()` (6291e6a).
+
+Release: tag `v0.1.7` (2d6439c), clean builds as for 0.1.6, reusing the 0.1.6
+profile: the lift was identical to 0.1.6's (`--compare-generated`), 0 functions
+lost counts, 596 had no record. ZIP 126 files, SHA-256 `cbcd9e89...0b20`. Both
+packaged engines survived Page Up twice and Page Down twice on the page; packaged
+01.04 High Speed Ring frame test 56.6 FPS, p99 28.1 ms, 12.6% late (0.1.6: 58.7,
+23.2 ms, 5.1%; same lift and profile, so run-to-run spread), the same 8 known
+`spu-smc` lines, no faults. The packaged 2.11 engine was not raced this time.
+
 ## Release 0.1.6 published (2026-11-16)
 
 Tag `v0.1.6` (commit `48fbb76`), merged into main. First release with the

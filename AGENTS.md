@@ -180,6 +180,11 @@ coefficient constructor calls in round-toward-zero
 `spu_native_patch.py` after any SPU lift. Tests: `audio_extended.py`,
 `audio_coefficients.py`. See [docs/audio.md](docs/audio.md).
 
+**Release 0.1.7** (tag `v0.1.7`, commit `2d6439c`) is 0.1.6 plus the F1
+DEBUG page crash fix (issue #17), built the same way with the 0.1.6 profile.
+To find a crash in a release engine, relink its build's objects with `/MAP`
+(progress-gt5.md, 0.1.7).
+
 **Release 0.1.6** (tag `v0.1.6`, commit `48fbb76`) is the first ZIP with
 both engines: PGO 01.04 plus the experimental, non-PGO 2.11 engine
 (`clean_build.py --build-211 --elf-211`). Its 01.04 profile came from the
