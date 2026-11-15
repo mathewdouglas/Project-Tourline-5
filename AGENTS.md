@@ -85,8 +85,9 @@ created threads, `PS3_TLS_FROM_CRT=0` old; blocks packed, `PS3_TLS_PACK=0`
 old); this applies to 01.04 too. The car list (same car as 01.04, Zonda R)
 went 15 -> 32-35 FPS (01.04: 37): lanes rejoin a running pass
 (`SPURS_LANE_JOIN`, runtime, `=0` off) and GT5 sets `SPURS_LANE_RETRY=0`
-(`src/main.cpp`); see plan-gt5-v211.md. Open: white specks on car edges in
-2.11 only. The startup stall after `installed00.dat` (boot movie's video
+(`src/main.cpp`); see plan-gt5-v211.md. Open: white specks on car edges, stronger
+on 2.11; the user sees them faintly on 01.04 too (not a 2.11 regression).
+Renderer failures can be injected (`RSX_FAIL_TEST`, docs/renderer-errors.md). The startup stall after `installed00.dat` (boot movie's video
 sequence never ended) did not reproduce in 95 boots of the current build,
 cause unknown (gt5-v211-live-checks.md). Race/parity acceptance is outstanding. See
 [setup-v211.md](docs/setup-v211.md). Tests: `player_setup.py`,

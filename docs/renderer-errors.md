@@ -1,8 +1,8 @@
 # Fatal renderer errors
 
 Implemented following issue #7 (race-loading picture frozen while the guest/audio
-continued). **Built and smoke-tested only (2026-11-15); the failure paths are
-not validated yet.** This is error handling, not a fix for the invalid rendering
+continued). The failure paths were exercised with injected failures on
+2026-11-16 (below). This is error handling, not a fix for the invalid rendering
 operation in that report.
 
 ## Player behavior
@@ -51,7 +51,46 @@ Reports retain the existing privacy scrubber and exclude game files, saves,
 screenshots and shader code. A graphics error with reporting disabled is not
 silently converted into a successful normal exit.
 
-## Validation still required
+## Failure injection
+
+`RSX_FAIL_TEST=<op>[:<frame>]` (runtime backend) injects one failure at or
+after that frame (default 600); unset, it never fires:
+
+- `close`: the frame command list's Close returns `DXGI_ERROR_INVALID_CALL`;
+- `present`: Present returns `DXGI_ERROR_DEVICE_HUNG` without presenting;
+- `remove`: `ID3D12Device5::RemoveDevice` before the frame's submit, a real
+  device removal that every later device call then sees.
+
+`scripts/test/renderer_fatal.ps1 -Work <folder> -Mode silent|noreport|dialog|direct -Op <op>`
+drives it through the launcher or the engine alone, presses the dialog
+buttons through UI Automation and saves a shot of each dialog.
+
+## Validation
+
+**2026-11-16, 2.11 engine (`gt5_211.exe`) and launcher built from this
+branch, private launcher home, one game at a time.** Every run printed
+exactly one `[renderer-fatal] operation=` line, then `[renderer-report]`
+and the diagnostic snapshot, and the engine exited with `0x50543547`.
+
+| Run | Op | Result |
+|---|---|---|
+| launcher, silent (`PT5_SETUP_UI=0`) | close:300 | `hr=0x887A0001`; report ZIP saved, launcher exits, no restart |
+| launcher, silent | present:300 | `hr=0x887A0006`; report saved |
+| launcher, silent | remove:300 | `operation=frame ExecuteCommandLists hr=0x887A0005 removed=0x887A0005`; report saved |
+| launcher, silent, `RSX_DRED=1`, empty shader cache | remove:1500 | DRED lines (`every command list completed`, `no page fault`) in the log |
+| launcher, silent, `PT5_CRASH_REPORT=0` | close:300 | "Graphics rendering stopped. See logs\play.err."; no ZIP |
+| engine alone | present:300 | its message box (code `0x887A0006`); OK exits `0x50543547` |
+| engine alone, driven to the menu, empty cache, `RSX_DRED=1` | remove:4500 | at the menu (486 draws a frame, 289 pipelines built, helpers active); one fatal line, message box, exit |
+| launcher dialog | remove:300 | dialog with Report / Save only / Save report and restart / Close; "Save report and restart" saved a ZIP holding the first run's `play.err` (scrubbed; its host thread ids match the first run, not the restart), then started a fresh engine; that engine's failure showed the dialog again (no automatic restart loop); Close ended the launcher with no engine left |
+
+The ZIP holds `README.txt`, `summary.md`, `system.txt`, `play.err`,
+`play.out` and the settings file; the summary names the operation, HRESULT
+and build. Not exercised: a real driver fault (issue #7), the "Report this on
+GitHub" and "Save the report only" buttons (they share the save path with
+restart), minimized/occluded windows against the present watchdog, and a v104
+engine (same source; built for release).
+
+## Validation history
 
 Done on 2026-11-15: the 2.11 engine (`gt5_211.exe`) and launcher
 (`tourline5.exe`) build against the refreshed compatibility patch (the patch

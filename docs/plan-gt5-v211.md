@@ -708,7 +708,9 @@ Milestones:
   changed a ready count; needs `SPURS_SPU_KICK_WAKE=2` to watch the line).
 - **Open, separate: white specks on car edges.** On 2.11 the Zonda R shows
   bright white pixels along its silhouette (windscreen frame, fender, sill,
-  wheel arches); 01.04 at the same car and settings does not. Not
+  wheel arches). The first 01.04 shot at the same car did not show them,
+  but the user sees them faintly on 01.04 too (2026-11-16): an older
+  rendering fault that 2.11 makes more visible, not a 2.11 blocker. Not
   investigated yet.
 
 **SPU tuning keys (T11, 2026-11-15).** 01.04's render bodies were matched to
