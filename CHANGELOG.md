@@ -3,6 +3,18 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
+## [0.1.7] - 2026-11-16
+
+Fixes a crash in the F1 settings page. Otherwise the same as 0.1.6,
+including the experimental GT5 2.11 engine (may have issues; GT5 master mod
+support is still to come).
+
+### Fixed
+- **The game no longer crashes when you open the DEBUG page of the F1
+  settings** (issue #17). Pages wrap round, so pressing L1 (Q, Page Up) on
+  the first page, or R1 (W, Page Down) to the last one, reached DEBUG and
+  closed the game with an access violation. This was a 0.1.6 regression.
+
 ## [0.1.6] - 2026-11-16
 
 **Experimental GT5 2.11 support**, a much smaller first-boot install, and
