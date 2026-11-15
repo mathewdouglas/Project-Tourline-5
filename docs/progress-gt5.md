@@ -4,6 +4,46 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.8 preparation (2026-11-16): issue #12 queue teardown
+
+Branch `release/v0.1.8`, based on the recorded 0.1.7 release. Issue #12's
+0.1.5 report shows guest shutdown: main joins thread 27 (`gFKsE`), which
+joins thread 28 (`MEfYS`); the latter is blocked indefinitely receiving on
+event queue 8. The matching **v104** guest destructor `009AC8AC` clears the
+worker's run byte, force-destroys its queue, then joins it. The worker
+`009ADECC` checks that byte only between receives. The runtime's old destroy
+deleted the lock without waking the condition variable. This is a strong
+explanation for the terminal hang; the reason setup entered shutdown remains
+unknown. There was no recorded D3D12 failure, active SPURS workload or FIFO
+backlog. This is separate from issue #16.
+
+Runtime `sys_event.c` now honors normal/force destruction: normal returns
+`CELL_EBUSY` for blocked receivers, force wakes all receivers with
+`CELL_ECANCELED`, and invalid modes return `CELL_EINVAL`. Queue operations
+retain their slot through completion; destruction and slot reuse wait for
+the last user before disposing of synchronization primitives. Port connections
+are severed during destruction. Timer delivery (`sys_timer.c`) uses the same
+protected push API. Table-lock initialization is now thread-safe. No guest
+addresses or title-specific wakeups were added to the runtime.
+
+Validation so far: production queue/timer sources and synthetic worker harness
+**compile/link only** (`python scripts/test/event_queue_destroy.py --build-only`).
+No test executable or game was run, preserving the user's test hold while
+they reproduce #16. The harness covers multiple infinite/timed receivers,
+normal/force modes, retained dead slots, delivery after recreation and repeated
+destroy/recreate. Its execution and a full engine build/live check are still
+owed; this does not establish that issue #12 is resolved end to end.
+Only the three affected file sections in the saved compatibility patch were
+refreshed, preserving all other bytes. The complete patch applies to the
+pinned 5244db9 tree in a temporary Git index, and its three resulting files
+match the working runtime. Existing CRLF whitespace warnings in unrelated
+patch sections and the existing nested-comment warning in `sys_event.c`
+remain. CMake version is 0.1.8; no release package has been built or published.
+`setup_runtime.py --check` still fails on this machine's existing runtime:
+unrelated files differ from the branch patch and `volmap.c/.h` are absent.
+Those mismatches also occur with the saved pre-fix patch; they were not
+overwritten. Use the clean release-build runtime for full engine validation.
+
 ## Release 0.1.7 published (2026-11-16): F1 DEBUG page crash
 
 Two crash reports (the user's, and issue #17) had the same chain: access
