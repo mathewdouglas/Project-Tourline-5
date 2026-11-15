@@ -39,7 +39,7 @@ bool         g_enabled = false;
 const char* const kEnvNames[] = {
     "RSX_SHADER_COMPILER",
     "GT5P_RESOLUTION", "RSX_MSAA", "RSX_PRESENT_SYNC", "RSX_SHADER_CACHE", "GT5P_SHADER_INDICATOR", "GT5P_PRELOAD_INDICATOR",
-    "PAD_TRIGGER_DEADZONE", "PAD_TRIGGER_CURVE", "PAD_ADAPTIVE_TRIGGERS", "PAD_TRIGGER_RUMBLE", "PAD_SDL_RUMBLE",
+    "PAD_MODERN_CONTROLS", "PAD_TRIGGER_DEADZONE", "PAD_TRIGGER_CURVE", "PAD_ADAPTIVE_TRIGGERS", "PAD_TRIGGER_RUMBLE", "PAD_SDL_RUMBLE",
     "PAD_NO_SDL", "PAD_NO_KEYBOARD", "PS3_VERBOSE",
     "GT5P_VBLANK_HZ", "SPURS_LANE_PIN", "SPURS_JL_SPU3", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_STARTUP", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "PAD_SKIP_MOVIE", "RSX_SHADER_INTERP",
 };
@@ -194,6 +194,7 @@ bool known_key(std::string_view section, std::string_view key)
         {"video", "vsync"},          {"video", "shader_cache"},
         {"video", "shader_indicator"}, {"video", "preload_indicator"}, {"video", "shader_precompile"}, {"video", "shader_warmup"}, {"video", "shader_warmup_before_start"}, {"video", "pipeline_async"}, {"video", "race_preload"}, {"video", "shader_interp"},
         {"input", "sdl_controllers"}, {"input", "keyboard"}, {"input", "button_prompts"},
+        {"input", "modern_controls"},
         {"input", "trigger_deadzone"},
         {"input", "trigger_curve"},
         {"input", "adaptive_triggers"},
@@ -281,6 +282,7 @@ void parse_into(const toml::table& tbl, Gt5pSettings& s)
     read_bool(tbl["video"]["shader_precompile"], "video.shader_precompile", s.shader_precompile);
     read_bool(tbl["input"]["sdl_controllers"], "input.sdl_controllers", s.sdl_controllers);
     read_bool(tbl["input"]["keyboard"], "input.keyboard", s.keyboard);
+    read_bool(tbl["input"]["modern_controls"], "input.modern_controls", s.modern_controls);
     if (auto n = tbl["input"]["trigger_deadzone"]) {
         auto v = n.value_exact<int64_t>();
         if (v && *v >= 0 && *v <= 20) s.trigger_deadzone = (int)*v;
@@ -535,6 +537,9 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "# \"playstation\", \"xbox\", \"nintendo\", \"keyboard\". [GT5P_GLYPHS]\n"
          "button_prompts = \"" << kPromptNames[s.button_prompts >= 0 && s.button_prompts < 5 ? s.button_prompts : 0] << "\"\n"
          "\n"
+         "# Last F1 choice only; never overrides your game save at boot.\n"
+         "modern_controls = " << (s.modern_controls ? "true" : "false") << "\n"
+         "# Modern controls applies live through native assignments; use the game Save.\n"
          "# 0..20 percent; rescale remaining travel. [PAD_TRIGGER_DEADZONE] Restart to apply.\n"
          "trigger_deadzone = " << s.trigger_deadzone << "\n"
          "# 0 linear, 1 gentle, 2 quick. [PAD_TRIGGER_CURVE] Restart to apply.\n"

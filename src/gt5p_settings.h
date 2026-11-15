@@ -39,6 +39,7 @@ struct Gt5pSettings {
     /* [input] */
     bool sdl_controllers = true;    /* PlayStation / Switch / generic pads via SDL2.dll */
     bool keyboard        = true;    /* keyboard as pad 1 when no controller is connected */
+    bool modern_controls = false;  /* last requested mapping, not a boot override */
     int trigger_deadzone = 0;       /* 0..20 percent; rescale the remaining travel */
     int trigger_curve = 0;          /* 0 linear, 1 gentle, 2 quick */
     bool adaptive_triggers = false; /* fixed DualSense resistance, experimental hardware */

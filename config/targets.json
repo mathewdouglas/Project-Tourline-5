@@ -59,6 +59,12 @@
     "gt5p_allocwatch": false
   },
   "BCUS98114-v104": {
+    "controls_core": "0x019AFEC0",
+    "controls_vtable": "0x01867A28",
+    "controls_get": "0x0009AE80",
+    "controls_set": "0x0009AD50",
+    "controls_load": "0x0009AC38",
+    "controls_save": "0x00099F44",
     "description": "US disc, Gran Turismo 5, update 01.04 executable (disc INSDIR/DATA000.PKG; consoles run this one)",
     "title_id": "BCUS98114",
     "exe_name": "gt5",
@@ -98,6 +104,12 @@
     "scene_camera_aspect_16_9_float": "0x018EB70C"
   },
   "BCUS98114-v211": {
+    "controls_core": "0x017FDF70",
+    "controls_vtable": "0x016EB0B0",
+    "controls_get": "0x0009ADA0",
+    "controls_set": "0x0009A394",
+    "controls_load": "0x0009A29C",
+    "controls_save": "0x0009AC64",
     "description": "US disc, Gran Turismo 5, update 02.11 executable (the 01.05-02.11 update chain; base of the master mod). Bring-up: measured lift inputs only; 01.04's hooks and screen addresses are not carried over",
     "title_id": "BCUS98114",
     "exe_name": "gt5_211",

@@ -45,6 +45,7 @@
 #include <vector>
 
 #include "gt5p_settings.h"
+#include "gt5p_controls.h"
 #include "gt5p_debug_export.h"
 #include "gt5p_glyphs.h"
 #include "gt5p_keymap.h"
@@ -209,6 +210,12 @@ const std::vector<Item>& items()
           [](const UiSettings& s) { return s.button_prompts; },
           [](UiSettings& s, int v) { s.button_prompts = v; },
           [](int v) { gt5p_glyphs_set_style(v); } },
+        { L"CONTROLS", L"Modern controls",
+          L"Changes the game's player-one assignments: R2/RT accelerate, L2/LT brake, Cross/A gear up and Square/X gear down. No restores these four defaults. Other assignments stay. Applies live; use the game's normal Save to keep it.",
+          "PAD_MODERN_CONTROLS", { {0, L"No"}, {1, L"Yes"} },
+          [](const UiSettings& s) { int v=gt5p_modern_controls_state(); return v<0?(int)s.modern_controls:v; },
+          [](UiSettings& s, int v) { s.modern_controls = v != 0; },
+          [](int v) { gt5p_modern_controls_request(v); } },
         { L"CONTROLS", L"Trigger dead zone",
           L"Removes the start of both triggers and rescales the remaining travel. Default 0% preserves existing input. Restart to apply.",
           "PAD_TRIGGER_DEADZONE", { {0, L"0%"}, {2, L"2%"}, {5, L"5%"}, {10, L"10%"}, {15, L"15%"}, {20, L"20%"} },
@@ -497,13 +504,21 @@ void set_value(int id, int v)
         if (!pt5_restart::managed() || !ready || strcmp(ready,"1")) { s_status=L"Set up this game version in the launcher first.";return; }
         it.set(s_edit,v); s_status=L"Select Restart to change game version. Saves stay separate.";return;
     }
+    if (it.env && !strcmp(it.env,"PAD_MODERN_CONTROLS") && gt5p_modern_controls_state()<0) {
+        s_status=gt5p_modern_controls_state()==-2 ? L"Native controls link is unavailable for this build." : L"Wait for the game to load its controller profile.";
+        return;
+    }
     it.set(s_edit, v);
     const bool over = strcmp(it.env,"GT5P_GAME_VERSION") && gt5p_settings_overridden(it.env);
     if (!gt5p_settings_enabled()) s_status = L"GT5P_NO_SETTINGS is set: changes are not saved.";
     else if (!gt5p_settings_store(s_edit)) s_status = L"Could not write " + widen(gt5p_settings_path());
     else s_status = L"Saved.";
     if (over) s_status += L"  " + widen(it.env) + L" is set in the environment and wins over this.";
-    else if (it.apply) { it.apply(v); s_status += L"  Applied."; }
+    else if (it.apply) {
+        it.apply(v);
+        s_status += it.env && !strcmp(it.env,"PAD_MODERN_CONTROLS") ?
+            L"  Mapping requested. Use the game's normal Save to keep it." : L"  Applied.";
+    }
     else if (it.get(s_edit) != it.get(s_boot)) s_status += L"  Takes effect after a restart.";
 }
 
@@ -858,7 +873,8 @@ void paint(HDC dc)
         fill(dc, kFieldX, y, kFieldX + kFieldW, y + kFieldH, RGB(0, 4, 0));
         fill(dc, kFieldX, y + kFieldH - 1, kFieldX + kFieldW, y + kFieldH, RGB(99, 101, 107));
         text_in(dc, fRow, kFieldX + 14, y, kFieldX + kFieldW - 8, y + kFieldH - 2, over ? grey(100) : grey(204),
-                it.choices[choice_index(it)].label, DT_LEFT);
+                (it.env && !strcmp(it.env,"PAD_MODERN_CONTROLS") && gt5p_modern_controls_state()<0) ?
+                    (gt5p_modern_controls_state()==-2 ? L"Unavailable" : L"Waiting for game") : it.choices[choice_index(it)].label, DT_LEFT);
         /* Notes sit in the row's empty left side. */
         if (later)
             text_in(dc, fTag, kPx0 + 30, y, kFieldX, y + kFieldH - 2, RGB(237, 60, 60), L"after restart", DT_LEFT);
@@ -1563,7 +1579,7 @@ void drop_pick()
     s_drop = false;
     if (s_sel < 0 || s_sel >= (int)r.size() || r[s_sel] < 0) return;
     const Item& it = items()[r[s_sel]];
-    if (s_drop_sel >= 0 && s_drop_sel < (int)it.choices.size() && s_drop_sel != choice_index(it))
+    if (s_drop_sel >= 0 && s_drop_sel < (int)it.choices.size() && (s_drop_sel != choice_index(it) || (it.env && !strcmp(it.env,"PAD_MODERN_CONTROLS"))))
         set_value(r[s_sel], it.choices[s_drop_sel].value);
 }
 
@@ -1706,8 +1722,15 @@ DWORD WINAPI ui_thread(LPVOID)
         while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
         if (!IsWindow(s_game)) return 0;
 
-        /* Escape from the game window: the quit question (not over the page,
-         * which Escape closes). */
+        // Poll results arrive after the UI request; refresh the displayed game value.
+        static int modern_was=-2;
+        const int modern_now=gt5p_modern_controls_state();
+        if(modern_now!=modern_was && (modern_now<0 || !gt5p_modern_controls_pending())) {
+            modern_was=modern_now;
+            if(modern_now>=0)s_edit.modern_controls=modern_now!=0;
+            if(s_open)redraw();
+        }
+        /* Escape from the game window asks to quit; over the page it closes it. */
         if (InterlockedExchange(&s_quit_req, 0) && !s_open) set_quit(true);
 
         /* F1 over the game opens the page (inside the legacy window,

@@ -243,6 +243,7 @@ add_executable(gt5p
     src/gt5p_uifix.cpp
     src/gt5p_spu_native.c
     src/gt5p_settings.cpp
+    src/gt5p_controls.cpp
     src/gt5p_profview.cpp
     src/gt5p_debug_export.cpp
     src/gt5p_settings_ui.cpp
@@ -321,6 +322,18 @@ else()
 endif()
 list(APPEND GT5P_MAIN_DEFS "GT5P_SPU_SN_DEFER=${GT5P_SN_DEFER}")
 set_source_files_properties(src/main.cpp PROPERTIES COMPILE_DEFINITIONS "${GT5P_MAIN_DEFS}")
+# Native controller facts belong to this executable, never to another target.
+set(GT5P_CONTROLS_DEFS "")
+foreach(key IN ITEMS core vtable get set load save)
+    string(JSON value ERROR_VARIABLE missing GET "${GT5P_T}" "controls_${key}")
+    if(missing)
+        set(value 0)
+    endif()
+    string(TOUPPER "${key}" upper)
+    list(APPEND GT5P_CONTROLS_DEFS "GT5P_CONTROLS_${upper}=${value}u")
+endforeach()
+set_source_files_properties(src/gt5p_controls.cpp PROPERTIES COMPILE_DEFINITIONS "${GT5P_CONTROLS_DEFS}")
+
 if(GT5P_TITLE STREQUAL "BCUS98114")
     set_source_files_properties(src/gt5p_present.cpp PROPERTIES
         COMPILE_DEFINITIONS "GT5P_DEFAULT_WINDOW_TITLE=\"Gran Turismo 5 (ps3recomp)\"")
