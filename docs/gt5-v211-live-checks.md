@@ -145,6 +145,30 @@ race start (`input_nan` 128-768 per block). The round-to-zero scopes in
 target keeps its measured list. Next step: trace the invalid samples back
 stage by stage, as the v104 investigation did ([audio.md](audio.md)).
 
+**Freeze, second pass (same day).** A private runtime check logged every
+SPU GET of the job's record list (`scratch/v211/listchk.diff`):
+
+- `0x4FF8E300` in the job's descriptor is not where the list comes from.
+  The list arrives in 16 KB chunks from pool buffers such as `0x40152000`
+  and `0x40166000`.
+- For bad list #2 (size `0xE6F4`), the source buffer held a different,
+  shorter list (terminator at `+0x5000`) at the moment of the fetch. The
+  job fetched its input after the PPU had begun refilling that buffer for a
+  later frame.
+- Records are written by guest thread 32 through `func_00831DD8`. Only 35
+  PPU stores hit `0x40152000` in 100 s, so the buffers rotate through a
+  pool, not a fixed pair.
+
+Two A/B runs:
+
+- `SPURS_WKL_FLAG_KICK=0` stays on the GT logo, so the 2.11 kick is
+  required.
+- One pipeline-build helper instead of four still froze at about 115 s, with
+  two bad lists. Host contention from shader building is not the cause.
+
+Whether the PPU's reuse guard is too weak, or misled by job progress,
+remains open.
+
 Next for the freeze:
 
 - find the PPU's guard before it rebuilds `0x4FF8E300`;
