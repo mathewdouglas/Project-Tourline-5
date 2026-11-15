@@ -641,8 +641,8 @@ Read from the commits, AGENTS.md and the live-check report:
 - **done**: T1-T4, T6, T8, T9, T14, T14a, T17, T24.
 - **partly done**:
   - T10: spin waits only; aspect, listbox, top-menu word and glyphs remain.
-  - T11: audio images and extended range only; native hooks, regions, FMA
-    and regpromo remain.
+  - T11: audio, native hook, regpromo, regions and FMA ported (see below);
+    region speed at Eiger still to measure.
   - T13: 2.11 inputs live under `input/v211`.
   - T23: in game on 01.04; the launcher's own conversion has not been run.
 - **not started**: T5 (a private masked matcher was used for the spin
@@ -680,6 +680,45 @@ Milestones:
     difference.
 
 Next: what the frame waits on between passes.
+
+**SPU tuning keys (T11, 2026-11-15).** 01.04's render bodies were matched to
+2.11's by content:
+
+| 01.04 body | 2.11 body | Match |
+|---|---|---|
+| `0x0196FF40` (car list) | `0x017BD780` | byte-identical; same in-memory fingerprint `0x76FF30204F3B9A9E` |
+| `0x01697100` (Eiger) | `0x014FBC00` | 95.7% |
+| `0x016B5B00` | `0x0151A400` | 87.4% |
+| `0x016D2700` | `0x01538880` | 95.5% |
+
+Ported to `BCUS98114-v211`:
+
+- **`spu_native_hooks`**: the table clear in `b017BD780` at `0x4C14`.
+  `scripts/test/spu_clear.py` now reads the selected target and passes 1,200
+  parity cases on the 2.11 lift. Check mode in game reported no mismatch
+  over about 300,000 clears.
+- **`spu_regpromo`**: `b017BD780`, the same 14 functions. Still off by
+  default (`GT5P_SPU_REGPROMO`). Check mode: 750,000 comparisons, 0 differ.
+- **`spu_regions`**: `b014FBC00`. Every loop address is 0x50 lower than on
+  01.04. The lifted loop functions match 01.04's apart from data addresses,
+  which moved by 0x10-0x40. The merge finds the same shapes: 8 and 3
+  functions.
+  - An Eiger race with `GT5P_SPU_REGION=3` (merged and original alternating)
+    ran until the known freeze with no visible fault.
+  - Its speed is not measured: the freeze leaves too few race windows.
+- **`spu_fma_images`**: all four bodies, with fingerprints read from memory
+  at boot. `[spu-fma]` now prints the value found on a mismatch. FMA stays
+  opt-in, as on 01.04.
+
+Car list after these, same build:
+
+| Case | FPS | Frames / 5 s |
+|---|---|---|
+| defaults | ~15 | 80-86 |
+| `GT5P_SPU_FMA=1` | 16-19 | 87-96 |
+
+01.04 reaches 32-37 FPS on the same screen. The remaining gap is the extra
+workload-4 passes per frame (above), not the body code.
 
 ## 6. Ordered tasks
 

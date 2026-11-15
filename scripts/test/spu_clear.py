@@ -4,10 +4,13 @@ import os, re, subprocess, tempfile
 root=Path(__file__).resolve().parents[2]
 runtime=Path(os.environ.get('PS3RECOMP_DIR',root.parent/'ps3recomp-tourline5')).resolve()
 folder=Path(tempfile.mkdtemp(prefix='spu-clear-',dir=root/'scratch'))
-s=(root/'generated/spu_lifted/b0196FF40/spu_recomp.c').read_text()
-a=s.index('void gt5p_b0196FF40_spu_func_00004C14(')
+import sys; sys.path.insert(0,str(root/'scripts')); import target
+# The body that carries the clear hook in the selected target (b0196FF40 on 01.04, b017BD780 on 2.11).
+body=next(h[0] for h in target.TARGET['spu_native_hooks'] if h[2]=='gt5p_spu_clear_words')
+s=(root/'generated/spu_lifted'/body/'spu_recomp.c').read_text()
+a=s.index('void gt5p_%s_spu_func_00004C14(' % body)
 b=s.index('        ctx->gpr[17] = spu_il(148);',a)
-loop=s[a:b].replace('gt5p_b0196FF40_spu_func_00004C14','lifted_clear')
+loop=s[a:b].replace('gt5p_%s_spu_func_00004C14' % body,'lifted_clear')
 loop=re.sub(r'^.*spu_native_patch.*\n','',loop,flags=re.M)+'}\n'
 (folder/'clear.inc').write_text(loop)
 batch=folder/'build.cmd'

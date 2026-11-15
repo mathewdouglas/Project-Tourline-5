@@ -70,8 +70,10 @@ extern "C" void gt5p_audio_select_native(void)
         int actual = 0;
         if (image.ea) {
             if (!render_on || (!render_all && !strstr(render, image.name))) continue;
-            if (!vm_base || spu_workload_fingerprint(vm_base + image.ea, image.span) != image.fingerprint) {
-                fprintf(stderr, "[spu-fma] %s content mismatch; keeping portable body\n", image.name);
+            const uint64_t got = vm_base ? spu_workload_fingerprint(vm_base + image.ea, image.span) : 0;
+            if (!vm_base || got != image.fingerprint) {
+                fprintf(stderr, "[spu-fma] %s content mismatch (memory 0x%016llX, expected 0x%016llX); keeping portable body\n",
+                        image.name, (unsigned long long)got, (unsigned long long)image.fingerprint);
                 continue;
             }
             actual = image.image;
