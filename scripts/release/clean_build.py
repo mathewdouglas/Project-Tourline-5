@@ -38,6 +38,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 HERE = Path(__file__).resolve().parents[2]
 VC_REDIST = Path('C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Redist/MSVC')
@@ -94,6 +95,9 @@ def main():
     ap.add_argument('--build-211', type=Path, help='clean 2.11 build directory to include in the unified player ZIP')
     ap.add_argument('--elf-211', type=Path, help='matching private 2.11 ELF for unified packaging')
     ap.add_argument('--profile-211', type=Path, help='profile provenance for the separately built 2.11 engine')
+    ap.add_argument('--wait-211', type=int, default=0, metavar='MINUTES',
+                    help='with --build-211: before packaging, wait up to this long for that engine-only build '
+                         'to finish (its work folder\'s engine-done.txt), so both engines can build at once')
     args = ap.parse_args()
     if args.target == 'BCUS98114-v211' and not args.engine_only:
         raise ValueError('Build 2.11 with --engine-only, then pass its build and ELF to the 01.04 clean build for one unified ZIP')
@@ -211,7 +215,17 @@ def main():
                              'sources (docs/pgo.md), or pass --profile-max-missing')
     if args.engine_only:
         print(f'Clean engine build: {src / "build"} ({args.target})')
+        # Marks a finished engine for a packaging run waiting on it (--wait-211).
+        (work / 'engine-done.txt').write_text(f'{args.target} {commit}\n', encoding='ascii')
         return
+    if args.build_211 and args.wait_211:
+        done = args.build_211.resolve().parent.parent / 'engine-done.txt'   # <work>/src/build -> <work>
+        deadline = time.monotonic() + args.wait_211 * 60
+        while not done.is_file():
+            if time.monotonic() > deadline:
+                raise ValueError(f'The 2.11 engine build did not finish within {args.wait_211} minutes ({done})')
+            time.sleep(15)
+        print(f'2.11 engine ready: {done.read_text(encoding="ascii").strip()}', flush=True)
     if args.build_211:
         pgo_args += ['--build-211', args.build_211.resolve(), '--elf-211', args.elf_211.resolve()]
         if args.profile_211: pgo_args += ['--pgo-profile-211', args.profile_211.resolve()]

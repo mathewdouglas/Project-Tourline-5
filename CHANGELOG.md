@@ -17,6 +17,10 @@ versions follow [SemVer](https://semver.org/).
   the sound fell behind in races: about 17 dropouts a second and a third of
   the audio blocks silent. 01.04 builds without it again (0.1.5's audio
   speed); 2.11 keeps it (`audio_extended_range` in `config/targets.json`).
+- **A hang when the game shuts a worker down** (issues #12, #15). Destroying
+  an event queue now wakes the threads waiting on it, as on the console, so
+  the game's join of that worker returns. Why the game was shutting down at
+  that point in those reports is still unknown.
 
 ### Added
 - `RSX_CMD_CHECK=1` (diagnostic): logs graphics commands that an older
