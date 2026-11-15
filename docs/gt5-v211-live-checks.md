@@ -169,11 +169,57 @@ Two A/B runs:
 Whether the PPU's reuse guard is too weak, or misled by job progress,
 remains open.
 
+**Freeze, third pass: the job reads its descriptor while the PPU rewrites
+it.** Private diagnostics only. The runtime diffs are
+`scratch/v211/fetchlog-*.diff`, logging GETs into LS `0x5C00`, job-queue slot
+reads and descriptor reads. They have been removed from the runtime. Findings:
+
+- **The list buffers.** Every frame's record list goes to one of two 80 KB
+  buffers, `0x40152000` and `0x40166000`, alternating. A race list is about
+  `0xCC50` bytes and is fetched in 16 KB chunks.
+- **Not late, not a duplicate.** Each bad job takes the normal job's place
+  in the frame rhythm, so it isn't late; no earlier fetch had its size, so it
+  isn't a re-run. The size is simply wrong for that frame: for example
+  `0x560`, `0x8F0` or `0x228`, while that frame's list is about `0xCC50`.
+- **The descriptor block.** The job is described by one descriptor at
+  `0x4FF863D0` (inside a job object at `0x4FF863A0`), which the PPU rewrites
+  in place every frame.
+- **The PPU's write order** (guest thread 32):
+  - `func_00AA8888`, via `func_00AAA350`, lays out the descriptor;
+  - `func_00AAA084` writes the DMA entries (`+0x10`…`+0x44`, including
+    `0x40152000`/`0x40166000` and the list size);
+  - `func_00AAA514` copies the job's parameters to `+0x50` through
+    `func_00BCD4AC`. That includes the size the job reads at entry: `r6`,
+    `{size, 0x4FF8E300, 0x400, 0}`.
+  - Each of the three first waits for the previous job on this descriptor,
+    through `func_00AA85F0` and the handle at object `+0x2C`.
+- **The bad case.** A lane read the descriptor after `AAA084` had written
+  that frame's entries but before `+0x50` was updated: new DMA entries, old
+  parameters. The queue entry pointing at `0x4FF863D0` appeared in ring slot
+  `0x40027180` between those two writes.
+- **Not found yet: who appends that entry.** Neither `PPU_WVAL` nor
+  `SPU_PUTVAL` caught it; vector stores are invisible to both.
+- **Not yet consistent:** in one run `+0x50` was not written every frame. So
+  which descriptor field the job takes its fetch size from is still not
+  certain.
+
+Rejected this pass:
+
+- `SPURS_LANE_INFLIGHT=1`: no lane ever left with a job in flight, and it
+  still froze.
+- `GCM_PARK_TIMEOUT_MS=0` (wait for ever instead of resyncing): a bad list
+  still hangs the job in its record walk, so the wait never ends.
+- Lanes in `Sleep(1)` retry loops (another freeze shape): seen at one stall
+  and not pursued.
+
 Next for the freeze:
 
-- find the PPU's guard before it rebuilds `0x4FF8E300`;
-- log the take counter and slot writes together with that job's input DMA;
-- find who should fill the self-jump at `0x00A69080`.
+- find the code that appends the `0x4FF863D0` entry to the job queue, and
+  whether it can run before `func_00AAA514`. Candidates: a vector copy, or
+  the render thread's job-list submit;
+- find the job input's real size field;
+- find who should fill the self-jump at `0x00A69080` (the other freeze
+  shape).
 
 Do not shorten or extend the walker's 3 s resync, and do not skip unfilled
 blocks to hide the freeze.
