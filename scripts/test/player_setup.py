@@ -95,6 +95,11 @@ int main(int argc, char** argv) {
         std::ofstream(std::string(p)+".runs",std::ios::app)<<getenv("GT5P_GAME_VERSION")<<" "<<getenv("GT5P_ROOT")<<"\n";
         if(!std::filesystem::exists(p)) {std::ofstream(p)<<"switch";return pt5_restart::version_211;}
     }
+    if(const char* p=getenv("PT5_TEST_MOD")) {   // the mod environment of each start; asks once for choice PT5_TEST_MOD_PICK
+        auto v=[](const char* k){return std::string(getenv(k)?getenv(k):"<unset>");};
+        std::ofstream(std::string(p)+".runs",std::ios::app)<<v("GT5P_MOD_CHOICES")<<"\t"<<v("GT5P_MOD_ACTIVE")<<"\t"<<v("PS3_FS_OVERLAY")<<"\n";
+        if(!std::filesystem::exists(p)&&getenv("PT5_TEST_MOD_PICK")) {std::ofstream(p)<<"pick";return pt5_restart::mod_select|(unsigned long)atoi(getenv("PT5_TEST_MOD_PICK"));}
+    }
     if(const char* p=getenv("PT5_TEST_COUNT")) {std::ofstream(p,std::ios::app)<<"run\n";}
     // Crash-report fixtures: the lines the real game writes, then its exit.
     char profile[512]="", user[128]="";
@@ -651,6 +656,66 @@ assert len(kept)==1 and kept[0].read_bytes()==b'2.11 progress', kept
 nosave_home=WORK/'no 01.04 save'
 run('--copy-104-save',success=False,extra={'PT5_LAUNCHER_HOME':str(nosave_home)})
 print('PASS: 01.04 save copied to 2.11 once (PT5_SAVE_COPY=1), never when silent or =0, --copy-104-save keeps a backup')
+
+# Data mods (launcher/mods.h): install from a ZIP, refuse other bases, select, overlay, remove.
+import zipfile
+pdipfs211=both_home/'targets/BCUS98114-v211/gamedata/dev_hdd0/game/BCUS98114/USRDIR/PDIPFS'
+(pdipfs211/'K').mkdir(parents=True,exist_ok=True)
+(pdipfs211/'K/4D').write_bytes(b'original volume header')
+installed_before=snapshot(pdipfs211)
+def mod_zip(name,entries):
+    z=WORK/name
+    with zipfile.ZipFile(z,'w',zipfile.ZIP_DEFLATED) as f:
+        for n,d in entries.items(): f.writestr(n,d)
+    return z
+good=mod_zip('GT5_2.11_Synthetic_Mod_1.0_(US-BCUS98114).zip',{
+    'PDIPFS/K/4D':b'modded header','PDIPFS/9/AA/BB':b'mod file',
+    'Debug_Cam_Addon/PDIPFS/K/4D':b'addon header',
+    'PDIPFS_ORIGINAL/K/4D':b'original volume header','readme.txt':b'not kept'})
+other=mod_zip('Other_Region_Mod.zip',{'PDIPFS/K/4D':b'x','PDIPFS_ORIGINAL/K/4D':b'another region header'})
+nodata=mod_zip('Not_A_Mod.zip',{'readme.txt':b'no PDIPFS here'})
+escape=mod_zip('Escape_Mod.zip',{'PDIPFS/K/4D':b'x','../escaped.txt':b'outside'})
+mods_root=both_home/'targets/BCUS98114-v211/mods'
+run('--install-mod',other,'--target=02.11',success=False,extra=env_both)
+run('--install-mod',nodata,'--target=02.11',success=False,extra=env_both)
+run('--install-mod',escape,'--target=02.11',success=False,extra=env_both)
+assert not (WORK/'escaped.txt').exists() and not (mods_root.parent/'escaped.txt').exists()
+assert not [p for p in mods_root.iterdir() if p.is_dir()], 'refused mods leave nothing behind'
+run('--install-mod',good,'--target=02.11',extra=env_both)
+mod=mods_root/'synthetic-mod-1.0'
+assert (mod/'PDIPFS/K/4D').read_bytes()==b'modded header' and (mod/'PDIPFS/9/AA/BB').read_bytes()==b'mod file'
+assert (mod/'addons/Debug_Cam_Addon/PDIPFS/K/4D').read_bytes()==b'addon header'
+assert not (mod/'readme.txt').exists() and not (mod/'PDIPFS_ORIGINAL').exists()
+assert sorted(p.name for p in mods_root.iterdir())==['mods.ini','synthetic-mod-1.0'], list(mods_root.iterdir())
+assert snapshot(pdipfs211)==installed_before, 'installed data must not change'
+assert 'synthetic-mod-1.0' in (mods_root/'mods.ini').read_text(encoding='utf-16')
+backups=list((both_home/'backups').glob('save-before-mod-*/00000001/BCUS98114-GAME/GT5.0'))
+assert len(backups)==1, backups   # turned on from Off: the save was copied first
+run('--install-mod',good,'--target=02.11',success=False,extra=env_both)   # already installed
+# Each start gets the choices and overlay; F1's choice (exit code) is kept for the next start.
+pick=WORK/'mod-pick'
+run('--target=02.11',extra={**env_both,'PT5_TEST_MOD':str(pick),'PT5_TEST_MOD_PICK':'2'})
+starts=[l.split('\t') for l in Path(str(pick)+'.runs').read_text().splitlines()]
+assert starts[0]==['Off|Synthetic Mod 1.0|Synthetic Mod + Debug Cam','1',str(mod)], starts
+assert starts[1]==['Off|Synthetic Mod 1.0|Synthetic Mod + Debug Cam','2',str(mod/'addons/Debug_Cam_Addon')+';'+str(mod)], starts
+assert len(starts)==2
+assert len(list((both_home/'backups').glob('save-before-mod-*')))==1, 'switching between mods copies no save'
+# PT5_MODS=0 loads nothing and offers nothing; a developer's own overlay wins.
+for extra,want in (({'PT5_MODS':'0'},['<unset>','0','<unset>']),({'PS3_FS_OVERLAY':'C:\\dev overlay'},None)):
+    log=WORK/('mod-env-'+'-'.join(extra));Path(str(log)+'.runs').unlink(missing_ok=True)
+    run('--target=02.11',extra={**env_both,**extra,'PT5_TEST_MOD':str(log)})
+    got=Path(str(log)+'.runs').read_text().splitlines()[0].split('\t')
+    assert (got==want) if want else got[2]=='C:\\dev overlay', got
+run('--target=01.04',extra={**env_both,'PT5_TEST_MOD':str(WORK/'mod-104')})
+got=Path(str(WORK/'mod-104')+'.runs').read_text().splitlines()[0].split('\t')
+assert got==['Off','0','<unset>'], got   # mods belong to a version
+run('--remove-mod','no-such-mod','--target=02.11',success=False,extra=env_both)
+run('--remove-mod','synthetic-mod-1.0','--target=02.11',extra=env_both)
+assert not mod.exists() and snapshot(pdipfs211)==installed_before
+log=WORK/'mod-after-remove'
+run('--target=02.11',extra={**env_both,'PT5_TEST_MOD':str(log)})
+assert Path(str(log)+'.runs').read_text().splitlines()[0].split('\t')==['Off','0','<unset>']
+print('PASS: mods: ZIP install (PDIPFS only, add-on), other base/no data/path escape refused, save copied when turned on, F1 choice kept, PT5_MODS=0, overlay override, per version, remove')
 
 # Run the production package-chain installer with tiny synthetic package pins.
 # Every stage is handled by the fixture RPCS3, never by a real emulator.

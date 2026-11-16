@@ -306,8 +306,9 @@ It replaces one install file (`PDIPFS/K/4D`, the volume header) and adds 696;
 the new header points at a new table of contents (`9/57/QB`). The runtime
 overlay `PS3_FS_OVERLAY=<dir>[;<dir>]` (item 2 below, now in `cellFs.c`)
 loads it without touching the install: banner, debug menu (Select) and an
-Arcade race work. Four screen markers change with it. Launcher/F1 support is
-not built yet. See progress-gt5.md, 0.1.9.
+Arcade race work. Four screen markers change with it. The launcher installs
+and removes mods and F1 picks one (setup-v211.md, "Mods"). See
+progress-gt5.md, 0.1.9.
 
 **What it changes (from source, partly hypothesis).** Installation copies the
 mod's `PDIPFS` tree over the installed one, overwriting files; the original
@@ -786,7 +787,7 @@ warning to menu took Phases 7-12, mostly runtime fixes that 2.11 inherits.
 | T13 | Multi-target source layout (`input/<target>`, script paths, release `--target`) | M | T6 |
 | T14 | Launcher: version detection (01.04/02.11, others refused), per-target storage, 2.11 import route, version choice when both are set up | L | T2, T13 |
 | T14a | Release: `clean_build.py`/`package_player.py` build and package both engines into one ZIP; per-target PGO; "experimental" label until M8 | M | T12, T13, T14 |
-| T15 | Runtime `PS3_FS_OVERLAY` and launcher mod folder (runtime done 2026-11-16; launcher/F1 not started) | M | T8 |
+| T15 | Runtime `PS3_FS_OVERLAY` and launcher mod folder (done 2026-11-16: runtime, `launcher/mods.h`, F1 > Game > Mod/Mods; setup-v211.md "Mods") | M | T8 |
 | T16 | Master mod test: inspect the archive first (data only?), then menu, debug menu, race (done 2026-11-16: data only; banner, debug menu, Arcade race) | M | T15, user's archive |
 | T17 | Update-PKG install route in the launcher (pinned hashes, in order) | L | T14, T2 |
 | T18 | Optional: LAN mode over `sysNet` | L | T16 |

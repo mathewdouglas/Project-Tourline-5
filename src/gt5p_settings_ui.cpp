@@ -82,6 +82,7 @@ struct Choice { int value; const wchar_t* label; };
 // changes the runtime settings layout used by other translation units.
 struct UiSettings : Gt5pSettings {
     int launcher_version = 104;
+    int launcher_mod = 0;      /* index into GT5P_MOD_CHOICES, 0 = Off */
     UiSettings& operator=(const Gt5pSettings& value) { Gt5pSettings::operator=(value); return *this; }
 };
 struct Item {
@@ -100,6 +101,38 @@ struct Item {
  * variable (env is nullptr): never pass it to strcmp (issue #17, the DEBUG
  * page crashed on open in 0.1.6). */
 bool env_is(const Item& it, const char* name) { return it.env && !strcmp(it.env, name); }
+
+/* Items the launcher owns: the game version and the mod. Never in the TOML;
+ * a change restarts through the launcher (pt5_restart.h). */
+bool launcher_item(const Item& it) { return env_is(it, "GT5P_GAME_VERSION") || env_is(it, "GT5P_MOD"); }
+
+/* F1 > Game > Mod: the launcher's choices (GT5P_MOD_CHOICES, '|' between
+ * them, Off first; launcher/mods.h). Empty when not started by the launcher
+ * or with PT5_MODS=0. */
+const std::vector<Choice>& mod_choices()
+{
+    static std::vector<std::wstring> labels;
+    static std::vector<Choice> v;
+    static bool done = false;
+    if (!done) {
+        done = true;
+        const char* e = getenv("GT5P_MOD_CHOICES");
+        std::string all = e ? e : "";
+        for (size_t at = 0; !all.empty() && at <= all.size();) {
+            size_t bar = all.find('|', at);
+            if (bar == std::string::npos) bar = all.size();
+            const std::string one = all.substr(at, bar - at);
+            int n = MultiByteToWideChar(CP_ACP, 0, one.c_str(), (int)one.size(), nullptr, 0);
+            std::wstring w(n, L'\0');
+            if (n) MultiByteToWideChar(CP_ACP, 0, one.c_str(), (int)one.size(), &w[0], n);
+            labels.push_back(w);
+            at = bar + 1;
+        }
+        for (size_t i = 0; i < labels.size(); i++) v.push_back({ (int)i, labels[i].c_str() });
+    }
+    return v;
+}
+bool mods_available() { return pt5_restart::managed() && !mod_choices().empty(); }
 
 const std::vector<Choice> kOnOff = { {1, L"On"}, {0, L"Off"} };
 
@@ -255,6 +288,13 @@ const std::vector<Item>& items()
           "GT5P_GAME_VERSION", {{104,L"GT5 01.04"},{211,L"GT5 2.11 (experimental)"}},
           [](const UiSettings& s) { return s.launcher_version; },
           [](UiSettings& s,int v) { s.launcher_version=v; }, nullptr },
+        { L"GAME", L"Mod",
+          L"A data mod loaded over this version's game data, such as GT5 Master Mod on 2.11. "
+          L"Off is the unmodded game; your installed data is never changed. Mods installs or "
+          L"removes them. Turning one on keeps a copy of your save first. Restart to apply.",
+          "GT5P_MOD", mod_choices(),
+          [](const UiSettings& s) { return s.launcher_mod; },
+          [](UiSettings& s, int v) { s.launcher_mod = v; }, nullptr },
 
         { L"GAME", L"Skip opening movie",
           L"Press through the opening movie as soon as it starts. It only plays when the TV "
@@ -367,8 +407,8 @@ volatile LONG s_quit_req;       /* Escape pressed in the game window */
 int s_capture = -1;             /* a key item waiting for its new key */
 uint8_t s_cap_was[256];         /* keys held when the wait began */
 
-enum { kRowRestart = -1, kRowClose = -2, kRowHead = -3, kRowDefaults = -4, kRowSetup211 = -5 };
-bool is_button(int id) { return id == kRowRestart || id == kRowClose || id == kRowDefaults || id == kRowSetup211; }
+enum { kRowRestart = -1, kRowClose = -2, kRowHead = -3, kRowDefaults = -4, kRowSetup211 = -5, kRowMods = -6 };
+bool is_button(int id) { return id == kRowRestart || id == kRowClose || id == kRowDefaults || id == kRowSetup211 || id == kRowMods; }
 
 /* The Keyboard page: sixteen bindings in two columns of eight. */
 const int kKeyY = 180, kKeyH = 34, kKeyFieldW = 130;
@@ -384,7 +424,7 @@ bool legacy_ui_flag()
 bool restart_pending()
 {
     for (const Item& it : items())
-        if (!it.apply && (env_is(it,"GT5P_GAME_VERSION") || !gt5p_settings_overridden(it.env)) && it.get(s_edit) != it.get(s_boot))
+        if (!it.apply && (launcher_item(it) || !gt5p_settings_overridden(it.env)) && it.get(s_edit) != it.get(s_boot))
             return true;
     return false;
 }
@@ -408,10 +448,12 @@ std::vector<int> rows()
 {
     std::vector<int> r = { kRowHead };
     const wchar_t* sec = sections()[s_section];
-    for (int i = 0; i < (int)items().size(); i++) if (!wcscmp(items()[i].section, sec) && (!env_is(items()[i],"GT5P_GAME_VERSION") || pt5_restart::managed())) r.push_back(i);
+    for (int i = 0; i < (int)items().size(); i++) if (!wcscmp(items()[i].section, sec) && (!launcher_item(items()[i]) || pt5_restart::managed()) &&
+            (!env_is(items()[i], "GT5P_MOD") || mods_available())) r.push_back(i);
     const char* ready211=getenv("GT5P_VERSION_211_READY");
     const char* supported211=getenv("GT5P_VERSION_211_SUPPORTED");
     if (pt5_restart::managed() && !wcscmp(sec,L"GAME") && supported211 && !strcmp(supported211,"1") && (!ready211 || strcmp(ready211,"1"))) r.push_back(kRowSetup211);
+    if (!wcscmp(sec, L"GAME") && mods_available()) r.push_back(kRowMods);
     if (restart_pending()) r.push_back(kRowRestart);
     if (keyboard_page()) r.push_back(kRowDefaults);
     r.push_back(kRowClose);
@@ -467,7 +509,11 @@ void relaunch()
 {
     if (pt5_restart::managed()) {
         fflush(stdout); fflush(stderr);
-        ExitProcess(s_edit.launcher_version != s_boot.launcher_version ? (s_edit.launcher_version == 211 ? pt5_restart::version_211 : pt5_restart::version_104) : pt5_restart::exit_code); // Launcher waits, then restarts under its existing storage lease.
+        /* Launcher waits, then restarts under its existing storage lease. A
+         * version change wins over a mod change (mods belong to a version). */
+        ExitProcess(s_edit.launcher_version != s_boot.launcher_version ? (s_edit.launcher_version == 211 ? pt5_restart::version_211 : pt5_restart::version_104)
+                    : s_edit.launcher_mod != s_boot.launcher_mod ? pt5_restart::mod_select | (unsigned long)(s_edit.launcher_mod & 0xFF)
+                    : pt5_restart::exit_code);
     }
     /* The environment holds the variables loading the old file set; the new
      * process must read the new file instead. Clear the ones it set. */
@@ -499,6 +545,10 @@ void change(int id, int dir)
         if (MessageBoxW(nullptr,L"Close the game and open GT5 2.11 setup? Your 01.04 installation and saves will be kept. Finish or save your current session before continuing.",L"Set up GT5 2.11",MB_OKCANCEL|MB_ICONQUESTION)==IDOK) { fflush(stdout); fflush(stderr); ExitProcess(pt5_restart::setup_211); }
         return;
     }
+    if (id == kRowMods) {
+        if (MessageBoxW(nullptr,L"Close the game and open the mod manager? It installs a mod from a ZIP file or removes one, then starts the game again. Finish or save your current session before continuing.",L"Game mods",MB_OKCANCEL|MB_ICONQUESTION)==IDOK) { fflush(stdout); fflush(stderr); ExitProcess(pt5_restart::mods_manage); }
+        return;
+    }
     if (id == kRowDefaults) { reset_keys(); return; }
     const Item& it = items()[id];
     if (it.key >= 0) return;
@@ -515,12 +565,19 @@ void set_value(int id, int v)
         if (!pt5_restart::managed() || !ready || strcmp(ready,"1")) { s_status=L"Set up this game version in the launcher first.";return; }
         it.set(s_edit,v); s_status=L"Select Restart to change game version. Saves stay separate.";return;
     }
+    if (env_is(it,"GT5P_MOD")) {
+        if (!mods_available()) { s_status=L"Start the game from tourline5.exe to use mods.";return; }
+        it.set(s_edit,v);
+        s_status = v == s_boot.launcher_mod ? L"No change." : !v ? L"Select Restart to play without mods."
+                 : s_boot.launcher_mod ? L"Select Restart to load this mod." : L"Select Restart to load this mod. A copy of your save is kept first.";
+        return;
+    }
     if (it.env && !strcmp(it.env,"PAD_MODERN_CONTROLS") && gt5p_modern_controls_state()<0) {
         s_status=gt5p_modern_controls_state()==-2 ? L"Native controls link is unavailable for this build." : L"Wait for the game to load its controller profile.";
         return;
     }
     it.set(s_edit, v);
-    const bool over = !env_is(it,"GT5P_GAME_VERSION") && gt5p_settings_overridden(it.env);
+    const bool over = !launcher_item(it) && gt5p_settings_overridden(it.env);
     if (!gt5p_settings_enabled()) s_status = L"GT5P_NO_SETTINGS is set: changes are not saved.";
     else if (!gt5p_settings_store(s_edit)) s_status = L"Could not write " + widen(gt5p_settings_path());
     else s_status = L"Saved.";
@@ -903,12 +960,12 @@ void paint(HDC dc)
         const bool sel = (int)i == s_sel;
         if (id == kRowHead) { section_bar(dc, sl[i].x0, sl[i].x1, y, sel); continue; }
         if (id < 0) {
-            button(dc, sl[i].x0, y, id == kRowRestart ? L"Restart" : id == kRowDefaults ? L"Defaults" : id == kRowSetup211 ? L"Set up 2.11" : L"Close", sel);
+            button(dc, sl[i].x0, y, id == kRowRestart ? L"Restart" : id == kRowDefaults ? L"Defaults" : id == kRowSetup211 ? L"Set up 2.11" : id == kRowMods ? L"Mods" : L"Close", sel);
             if (sel) cursor(dc, sl[i].x0 + kBtnW / 2 + 2, y + 18);
             continue;
         }
         const Item& it = items()[id];
-        const bool over = !env_is(it,"GT5P_GAME_VERSION") && gt5p_settings_overridden(it.env);
+        const bool over = !launcher_item(it) && gt5p_settings_overridden(it.env);
         if (it.key >= 0) {
             /* A binding: the button's name, then its key in a box. */
             const int x0 = sl[i].x0, fx = x0 + 160;
@@ -932,7 +989,7 @@ void paint(HDC dc)
         fill(dc, kFieldX, y + kFieldH - 1, kFieldX + kFieldW, y + kFieldH, RGB(99, 101, 107));
         text_in(dc, fRow, kFieldX + 14, y, kFieldX + kFieldW - 8, y + kFieldH - 2, over ? grey(100) : grey(204),
                 (it.env && !strcmp(it.env,"PAD_MODERN_CONTROLS") && gt5p_modern_controls_state()<0) ?
-                    (gt5p_modern_controls_state()==-2 ? L"Unavailable" : L"Waiting for game") : it.choices[choice_index(it)].label, DT_LEFT);
+                    (gt5p_modern_controls_state()==-2 ? L"Unavailable" : L"Waiting for game") : it.choices[choice_index(it)].label, DT_LEFT | DT_END_ELLIPSIS);
         /* Notes sit in the row's empty left side. */
         if (later)
             text_in(dc, fTag, kPx0 + 30, y, kFieldX, y + kFieldH - 2, RGB(237, 60, 60), L"after restart", DT_LEFT);
@@ -1548,6 +1605,7 @@ void set_open(bool open)
     if (open) {
         s_edit = gt5p_settings_file();
         s_edit.launcher_version=s_boot.launcher_version;
+        s_edit.launcher_mod=s_boot.launcher_mod;
         s_sel = 1;          /* the page's first item */
         s_drop = false;
         s_status = gt5p_settings_enabled() ? L"" : L"GT5P_NO_SETTINGS is set: changes are not saved.";
@@ -1771,6 +1829,7 @@ DWORD WINAPI ui_thread(LPVOID)
             (void*)s_game, s_wnd ? "ok" : "CreateWindow failed");
     s_boot = gt5p_settings_file();
     s_boot.launcher_version=getenv("GT5P_GAME_VERSION") && !strcmp(getenv("GT5P_GAME_VERSION"),"02.11") ? 211 : 104;
+    { const char* m = getenv("GT5P_MOD_ACTIVE"); s_boot.launcher_mod = m ? atoi(m) : 0; }
     g_pad_screen_hook = screen_seen;
     rsx_d3d12_on_escape = esc_pressed;
     { const char* e = getenv("GT5P_SETTINGS_UI"); if (e && e[0] == '1') set_open(true); }

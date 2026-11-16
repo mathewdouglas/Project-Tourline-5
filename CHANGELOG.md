@@ -27,6 +27,16 @@ versions follow [SemVer](https://semver.org/).
   Skip opening movie works, and Options shows the "PC settings" tag (Select
   opens the page). Controller-style button prompts already worked on 2.11
   (the game's button art is unchanged); now checked.
+- **Mods, starting with GT5 Master Mod (2.11).** F1 > Game > Mods (or
+  `tourline5.exe --mods`) installs a mod from its ZIP file and removes
+  installed ones; F1 > Game > Mod picks which loads (Off, a mod, or a mod
+  with one of its add-ons, such as Master Mod's debug camera), then Restart.
+  Mods are read over your installed game data, which is never changed, so
+  Off is always the unmodded game. Only the mod's game data is kept from the
+  ZIP. A mod made for another version or region is refused. Turning a mod
+  on copies your save to the backups folder first. Each game version has its
+  own mods. Checked with Master Mod 2.0.0a (US): its menu banner, the Select
+  debug menu and an Arcade race. `PT5_MODS=0` turns mod support off.
 
 ### Changed
 - **F1 settings: every page is named on the bar under the title** (Video,

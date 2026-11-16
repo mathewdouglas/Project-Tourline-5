@@ -202,7 +202,13 @@ GT5 Master Mod 2.0.0a (US, data only) runs on 2.11 through the runtime
 overlay `PS3_FS_OVERLAY=<mod dir>[;<dir>]` (`cellFs.c`; read-only opens and
 stats of `USRDIR/...` prefer the overlay, writes go to the install; unset =
 off): banner, Select debug menu, Arcade race. It changes four screen markers;
-launcher/F1 support is not built (progress-gt5.md, plan-gt5-v211.md T15/T16).
+launcher/F1 support: `launcher/mods.h` installs a ZIP's `PDIPFS` trees
+into `<version storage>/mods/<id>` (checks `PDIPFS_ORIGINAL` against the
+install; add-ons as `addons/<folder>`), F1 > Game > Mod/Mods hand back by
+exit code (`pt5_restart::mod_select|N`, `mods_manage`), and the launcher sets
+`PS3_FS_OVERLAY` before each start (`PT5_MODS=0` off; `--mods`,
+`--install-mod`, `--remove-mod`). See setup-v211.md "Mods"; test in
+`player_setup.py`.
 2.11 was checked live to load an 01.04 save. Surround output (#21): GT5
 mixes discrete 5.1 into its 8-channel port; `AUDIO_OUTPUT_CHANNELS=2|6|8|auto`
 (runtime cellAudio/cellAvconfExt; `audio.output`, F1 AUDIO, RecompLauncher

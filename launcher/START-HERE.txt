@@ -82,6 +82,14 @@ the backups folder first). Do not copy a 2.11 save back to 01.04.
 2.11 is EXPERIMENTAL and may have issues. It boots, reaches the menus and
 runs Arcade races, but it has had far less testing than 01.04. F1 race
 pause, controller-style button prompts, Skip opening movie, the Options
-"PC settings" tag and 21:9 work on it as on 01.04. Use 01.04 for the most reliable experience. 2.11 is the base for GT5 master
-mod support, which is planned for a later release; mods are not supported
-yet.
+"PC settings" tag and 21:9 work on it as on 01.04. Use 01.04 for the most
+reliable experience.
+
+Mods (GT5 Master Mod and similar): start the game with tourline5.exe, open
+F1 > Game > Mods and choose "Install a mod from a ZIP file" (Master Mod
+needs GT5 2.11 and the matching region's ZIP; a mod for another version or
+region is refused). F1 > Game > Mod picks Off, the mod, or the mod with an
+add-on, then Restart. Your installed game data is never changed, so Off is
+the unmodded game. Turning a mod on copies your save to the backups folder
+in your storage first; progress made with a mod stays in that version's
+save.

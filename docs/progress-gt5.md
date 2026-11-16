@@ -38,6 +38,47 @@ This prevents the secondary native memory fault; the initiating black-screen
 startup exit remains unexplained. It is separate from Windows 10 cube-upload
 Close failures and does not invalidate the 0.1.8 event-queue wakeup fix.
 
+## 0.1.9 (2026-11-16): mods in the launcher and F1
+
+Players install, remove and pick data mods without touching their install
+(design and interfaces: setup-v211.md, "Mods"; code `launcher/mods.h`, the
+F1 GAME page's Mod row and Mods button, `pt5_restart::mods_manage` and
+`mod_select`).
+
+- **Synthetic (player_setup.py, new section, passes with the rest):**
+  - install keeps only `PDIPFS` trees (an add-on folder too, no readme, no
+    `PDIPFS_ORIGINAL`) and leaves the installed data unchanged;
+  - refused, leaving nothing behind: a mod whose `PDIPFS_ORIGINAL` differs,
+    a ZIP with no `PDIPFS`, a ZIP with a `../` entry (nothing written
+    outside), and a second install of the same ZIP;
+  - turning a mod on from Off copies the save, and switching between mods
+    copies nothing;
+  - the fixture engine sees the choices, the index and the overlay (the
+    add-on first); its exit code for choice 2 is kept for the next start;
+  - `PT5_MODS=0` gives no overlay and no choices, and a developer's
+    `PS3_FS_OVERLAY` wins;
+  - 01.04 sees only Off;
+  - `--remove-mod` deletes the mod and selects Off.
+- **Real, with the user's Master Mod 2.0.0a ZIP** and a throwaway launcher
+  storage whose 2.11 data was the worktree's test install:
+  - `--install-mod` took 2 s. The base check passed (the install's `K/4D` and
+    `9/EZ/E6` match), the 697 `PDIPFS` files are identical to the ZIP's, the
+    Debug Cam add-on went to `addons/Debug_Cam_Addon`, and the save was
+    copied.
+  - The launcher started the engine with the overlay, and the game read
+    `K/4D` from it.
+  - F1 > Game showed Mod "Master Mod 2.0.0" and a Mods button. Choosing
+    "Master Mod + Debug Cam", then Restart, saved the choice, and the
+    restarted engine read the add-on layer before the mod's.
+  - With both layers the game reached its modded menu (the add-on's own
+    `K/4D` and `9/UO/9D`, the rest from the mod).
+  - The mod manager shows the installed mods and the active choice.
+- Add-on labels drop the mod's version when the pair would not fit the value
+  box ("Master Mod + Debug Cam"); longer values end in an ellipsis.
+
+The test storage was removed (its junction to the test install as a link
+only) and the test save restored.
+
 ## 0.1.9 (2026-11-16): the settings-page features on 2.11
 
 Phase 38's four GT5 features had no 2.11 values. Each was measured on the

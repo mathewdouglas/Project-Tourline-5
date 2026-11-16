@@ -1021,13 +1021,15 @@ static void copy_104_save_command() {
     atomic_ini(data/L"targets"/targets[1].id/L"save-copy.ini", {{L"save_copy", L"copied"}});
     if (!silent_errors) MessageBoxW(nullptr, L"Your 01.04 save was copied to GT5 2.11.", L"Project Tourline 5", MB_OK | MB_ICONINFORMATION);
 }
+#include "mods.h"
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     struct Com { HRESULT result; ~Com() { if (SUCCEEDED(result)) CoUninitialize(); } } apartment{com};
     silent_errors = env(L"PT5_SETUP_UI") == L"0";
     try {
-        bool force = false, open = false, change_storage = false, configure_only = false, copy_save = false;
-        fs::path storage, disc, installed, elf;
+        bool force = false, open = false, change_storage = false, configure_only = false, copy_save = false, mods_ui = false;
+        fs::path storage, disc, installed, elf, mod_zip;
+        std::wstring mod_remove;
         bool explicit_target = false;
         int argc = 0; auto argv = CommandLineToArgvW(GetCommandLineW(), &argc);
         if (!argv) fail(L"Could not read launcher options.");
@@ -1045,6 +1047,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             else if (arg == L"--check") { quiet = true; silent_errors = true; }
             else if (arg == L"--open-data") open = true;
             else if (arg == L"--copy-104-save") copy_save = true;
+            else if (arg == L"--mods") mods_ui = true;
+            else if (arg == L"--install-mod" && i+1 < argc) mod_zip = fs::absolute(argv[++i]);
+            else if (arg == L"--remove-mod" && i+1 < argc) mod_remove = argv[++i];
             else if (arg == L"--choose-storage") change_storage = true;
             else if (arg.rfind(L"--executable=", 0) == 0) {
                 if (arg.size() == 13) fail(L"The Executable / RPCS3 input is empty.");
@@ -1060,12 +1065,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 else if (arg == L"--game") disc = value;
                 else if (arg == L"--game-data") installed = value;
                 else elf = value;
-            } else fail(L"Supported options: --setup, --check, --open-data, --copy-104-save, --choose-storage, --set-storage <empty folder>, --configure --game <dump> [--elf <ELF or rpcs3.exe>] [--game-data <installation> --elf <ELF or rpcs3.exe>], --recomplauncher-prepare --game <dump> [--game-data=<installation>] [--executable=<ELF or rpcs3.exe>].");
+            } else fail(L"Supported options: --setup, --check, --open-data, --copy-104-save, --mods, --install-mod <zip>, --remove-mod <id>, --choose-storage, --set-storage <empty folder>, --configure --game <dump> [--elf <ELF or rpcs3.exe>] [--game-data <installation> --elf <ELF or rpcs3.exe>], --recomplauncher-prepare --game <dump> [--game-data=<installation>] [--executable=<ELF or rpcs3.exe>].");
         }
         if (!package_folder.empty() && target != &targets[1]) fail(L"Update packages select GT5 2.11; remove the conflicting --target option.");
         if ((quiet && (force || open || change_storage || !storage.empty())) ||
             (open && (force || change_storage || !storage.empty())) ||
             (copy_save && (quiet || open || force || change_storage || !storage.empty() || explicit_target)) ||
+            ((mods_ui || !mod_zip.empty() || !mod_remove.empty()) &&
+             (quiet || open || force || copy_save || change_storage || !storage.empty() || (mods_ui + !mod_zip.empty() + !mod_remove.empty()) > 1)) ||
             (force && (change_storage || !storage.empty())) ||
             (change_storage && !storage.empty()) ||
             (configure_only && (disc.empty() || (!easy_setup && elf.empty() && !installed.empty()))) ||
@@ -1120,6 +1127,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             fail(L"Project Tourline 5 is already running, or this storage is not writable.");
         if (!override_data) link_storage(home);
         if (copy_save) { copy_104_save_command(); return 0; }
+        if (mods_ui || !mod_zip.empty() || !mod_remove.empty()) {
+            if (!mods::enabled()) fail(L"Mods are turned off (PT5_MODS=0).");
+            validate_setup();
+            if (!mod_zip.empty()) mods::install(mod_zip);
+            else if (!mod_remove.empty()) mods::remove(mod_remove);
+            else mods::manage();
+            return 0;
+        }
         const bool first = !fs::exists(data/L"setup.ini") && !fs::exists(data/L"selection.ini") && !override_data && !configure_only && env(L"PT5_STORAGE_PICKER") != L"0" && !silent_errors;
         if (!override_data && (change_storage || !storage.empty() || first)) {
             auto selected = storage.empty() ? storage_picker() : storage;
@@ -1157,6 +1172,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             return 0;
         }
         const auto cache_override = env(L"RSX_SHADER_CACHE");
+        const auto overlay_override = env(L"PS3_FS_OVERLAY");   // a developer's own overlay wins over the mod selection
         for (;;) { // A version change starts a fresh engine under the same storage lease.
         validate_setup(); const auto engine = validate_engine();
         atomic_ini(data/L"selection.ini", {{L"target", target->id}});
@@ -1188,8 +1204,18 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         if (env(L"PS3_VERBOSE").empty()) setenv(L"PS3_VERBOSE", L"0");
         bool version_change = false;
         for (;;) {
+            mods::apply_environment(overlay_override);
             const auto code = run(engine, quote(target_data()/L"input/EMAIN.ELF"), target_data(), L"play");
             if (code == pt5_restart::exit_code) continue;
+            if (code == pt5_restart::mods_manage || (code & pt5_restart::mod_select_mask) == pt5_restart::mod_select) {
+                try {
+                    if (code == pt5_restart::mods_manage) mods::manage();
+                    else mods::select(code & ~pt5_restart::mod_select_mask);
+                } catch (const Cancelled&) {}
+                  catch (const Failure& f) { report(f.message); }
+                  catch (const fs::filesystem_error&) { report(L"A mod file operation failed. Check free space and folder access. Your installed game data is unchanged."); }
+                continue;
+            }
             if (code == pt5_restart::version_104 || code == pt5_restart::version_211 || code == pt5_restart::setup_211) {
                 const Target* previous=target;
                 target = code == pt5_restart::version_104 ? &targets[0] : &targets[1];

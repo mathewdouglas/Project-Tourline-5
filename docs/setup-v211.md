@@ -1,8 +1,8 @@
 # Optional GT5 2.11 setup
 
 GT5 2.11 is an experimental second engine (first shipped in 0.1.6). It
-reaches the menus and runs Arcade races; full feature parity with 01.04 and
-master mod support are later milestones. Setup accepts exactly
+reaches the menus and runs Arcade races, with the 01.04 PC features and
+data mods such as GT5 Master Mod ("Mods" below). Setup accepts exactly
 BCUS98114 01.04 and 02.11, and refuses 02.17 and other regions.
 
 ## Player flow
@@ -92,6 +92,46 @@ The game's own first-boot install runs in the port after preparation.
 `PT5_RPCS3_ARCHIVE` supports the pinned tool archive locally. With
 `PT5_RPCS3_DOWNLOAD=0`, import an existing 2.11 installation instead of using
 package setup. `PT5_KEEP_RPCS3=1` retains staging for diagnosis.
+
+## Mods
+
+Data mods (GT5 Master Mod and similar) are installed per game version by the
+launcher (`launcher/mods.h`) and read by the runtime over the installed data
+(`PS3_FS_OVERLAY`, `cellFs.c`: read-only opens and stats of
+`/dev_hdd0/game/<id>/USRDIR/...` use the overlay's file when it exists; writes
+go to the install). The installed data is never changed.
+
+- **Player flow.** F1 > Game > Mods closes the game (exit code
+  `pt5_restart::mods_manage`) and opens the launcher's mod manager: install a
+  mod from a ZIP or remove one, then the game starts again. F1 > Game > Mod
+  lists Off, each mod and each mod with one of its add-ons
+  (`GT5P_MOD_CHOICES`, `GT5P_MOD_ACTIVE`); Restart hands the choice back
+  (`pt5_restart::mod_select | index`). Both appear only when the launcher
+  started the game.
+- **Install.** Windows' `tar.exe` unpacks the ZIP into a staging folder. Only
+  `PDIPFS` trees are kept: the top-level one (or one inside a single wrapping
+  folder) is the mod, any other `<folder>/PDIPFS` is an add-on.
+  `PDIPFS_ORIGINAL`, when present, must match the installation byte for byte
+  (volume-range records are skipped): a mod for another version or region is
+  refused. ZIPs with links or paths outside the folder are refused (tar
+  refuses `..`), as is a second install of the same ZIP (SHA-256).
+- **Layout.** `<version storage>/mods/<id>/PDIPFS`,
+  `mods/<id>/addons/<folder>/PDIPFS`, `mods/<id>/mod.ini` (name, source,
+  sha256, addons) and `mods/mods.ini` (`active`, `addon`). The version
+  storage is the storage root for 01.04 and `targets/BCUS98114-v211` for 2.11.
+- **Saves.** Turning a mod on from Off first copies the version's
+  `BCUS98114-GAME`/`-BKUP` to `backups/save-before-mod-<time>`.
+- **Command line.** `tourline5.exe --mods` (the manager),
+  `--install-mod <zip>` (installs and selects it), `--remove-mod <id>`; each
+  takes `--target=`.
+- **Switches.** `PT5_MODS=0` turns mod support off (nothing loaded, no F1
+  row). A `PS3_FS_OVERLAY` set before the launcher starts wins over the
+  selection.
+- **Known limit.** Master Mod replaces the files four of 2.11's screen markers
+  name (Arcade, car list, race load, grid); in one Arcade run with it those
+  never fired, while track list, transmission, race assets and race start
+  did. So a race load is recognised later (at race assets), and leaving a
+  race for the grid is not seen. Not measured further.
 
 ## Developer and release interfaces
 
