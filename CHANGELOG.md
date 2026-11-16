@@ -23,6 +23,10 @@ versions follow [SemVer](https://semver.org/).
   01.04: a wider view in races, menus centred. Checked at 1080p
   (2560x1080), 1440p (3440x1440) and 4K (5120x2160), and 1440p at 16:9, in
   the car list, a race and GT Life.
+- **GT5 2.11: the remaining 01.04 PC features.** F1 in a race pauses it,
+  Skip opening movie works, and Options shows the "PC settings" tag (Select
+  opens the page). Controller-style button prompts already worked on 2.11
+  (the game's button art is unchanged); now checked.
 
 ### Changed
 - **F1 settings: every page is named on the bar under the title** (Video,

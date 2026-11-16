@@ -4,6 +4,41 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.9 (2026-11-16): the settings-page features on 2.11
+
+Phase 38's four GT5 features had no 2.11 values. Each was measured on the
+2.11 engine (720p, test save) and is now in `config/targets.json`.
+
+- **F1 race pause: `menu_listbox_vtable` = `0x016F4198`.** GT5 ships Itanium
+  RTTI: 01.04's vtable `0x01870B78` is preceded by offset 0 and a typeinfo
+  whose name is `8mListBox`. In 2.11 that string is at `0x0146BD18`, its
+  typeinfo at `0x016F4418`, and two vtables point at it: `0x016F4198`
+  (offset 0, the primary) and `0x016F4400` (offset -0x2C), the same pair as
+  01.04. `menu_listbox_range` stays 0x40000000-0x50000000. Live: F1 15 s into
+  an HSR race logged "race menus: 0 shown, 1 hidden" and "Start pressed to
+  pause it"; after F1 closed the pause bar was up and the timer stopped.
+- **Options: `9/JW/EG`**, first read 11.2 s after the menu when Options
+  opens (`PAD_FILE_LOG=1`); not read in a full Arcade race route. With it the
+  "PC settings" tag shows on Options (role `Options:options`).
+- **`top_menu_word` = `0x017E3C88=16`.** Snapshots at the top menu and in
+  Options first gave `0x017E0D1C` (2 at the top menu, 1 in Options, as
+  01.04's word), but `GT5P_WATCH` showed it back at 2 from the race grid
+  on, so the page took a race for the top menu and F1 pressed nothing.
+  Snapshots at the top menu (two boots) against Options, the Arcade menu and
+  a race left one small-value word: `0x017E3C88`, which counts 2, 3, 4 ...
+  0x16 as the top menu loads and is 0 in Options and races (it reached 8, not
+  0x16, around the car list). Leaving Options (Circle, then OK on "Exit the
+  Options menu?") brought it back to 0x16 and the tag went away.
+- **Skip opening movie: `movie_screen` = `OpeningMovie`** (2.11 plays the
+  same file). With no presses, `PAD_SKIP_MOVIE=OpeningMovie` reached
+  `MusicDecode` 3.3 s after the movie started; without it, no menu within
+  50 s.
+- **Button prompts:** nothing to change. With `GT5P_GLYPHS=xbox` the car
+  list shows A/Y/B, and the keyboard art (Z) shows in Options.
+
+The rebuilt engine was checked on its built-in values (no overrides): F1 in
+the race paused it. Snapshots were deleted after use.
+
 ## 0.1.9 (2026-11-16): GT5 Master Mod 2.0.0a runs on 2.11
 
 The user's archive is `GT5_2.11_Master_Mod_2.0.0_(US-BCUS98114).zip`

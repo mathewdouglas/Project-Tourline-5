@@ -192,6 +192,12 @@ folder aside): Cross into GT Life shows the popup.
 of the UI and scene-camera ones, comma lists in `config/targets.json`); 2.11
 loads constants by `lis`+`lfs`, not `d(r2)`. Checked at 1080p/1440p/4K.
 Run a 2.11 engine with gt5boot.ps1 as docs/gt5-v211-live-checks.md says.
+2.11 now has every 01.04 settings-page feature (measured 2026-11-16, in
+`config/targets.json`): Options marker `9/JW/EG`, `top_menu_word`
+`0x017E3C88=16` (counts up to 0x16 as the top menu loads, 0 elsewhere;
+`0x017E0D1C` looked right but is 2 in races too), `mListBox` vtable
+`0x016F4198` (found by its RTTI name `8mListBox`), `movie_screen`. Button
+prompts needed nothing: 2.11's button textures match 01.04's hashes.
 GT5 Master Mod 2.0.0a (US, data only) runs on 2.11 through the runtime
 overlay `PS3_FS_OVERLAY=<mod dir>[;<dir>]` (`cellFs.c`; read-only opens and
 stats of `USRDIR/...` prefer the overlay, writes go to the install; unset =

@@ -648,7 +648,9 @@ Read from the commits, AGENTS.md and the live-check report:
 
 - **done**: T1-T4, T6, T8, T9, T14, T14a, T17, T24.
 - **partly done**:
-  - T10: spin waits only; aspect, listbox, top-menu word and glyphs remain.
+  - T10: done 2026-11-16 (spin waits, aspect, listbox, top-menu word,
+    Options marker, movie screen; glyphs needed nothing). See
+    progress-gt5.md, 0.1.9.
   - T11: audio, native hook, regpromo, regions and FMA ported (see below);
     region speed at Eiger still to measure.
   - T13: 2.11 inputs live under `input/v211`.
