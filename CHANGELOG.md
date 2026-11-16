@@ -3,7 +3,7 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
-## [0.1.9] - unreleased
+## [0.1.9] - 2026-11-16
 
 ### Added
 - **Carry your 01.04 progress into GT5 2.11.** The first time 2.11 starts
@@ -64,7 +64,7 @@ versions follow [SemVer](https://semver.org/).
   (the first My Home and Dealerships messages, and other text boxes that
   clip their text). GT5 placed the text's clip edge for a 16:9 screen, a
   quarter of the screen too far left. `GT5P_UI_MASK_FIX=0` restores it.
-  Applies to 01.04; 2.11 has the same fix ready for when it gets ultrawide.
+  Applies to both 01.04 and 2.11.
 
 ## [0.1.8] - 2026-11-16
 
