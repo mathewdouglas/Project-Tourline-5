@@ -190,7 +190,9 @@ compiled and interpreted shaders (`RSX_SHADER_WINDOW=0` old coordinates;
 and another affected car. Tests: `rt_self_read.py`, `shader_window.py`
 (WARP). See the headlamp entry in [docs/progress-gt5.md](docs/progress-gt5.md).
 
-**0.1.9 (in progress, `release/v0.1.9`).** The launcher offers, once, to copy
+**Release 0.1.9** (tag `v0.1.9`, commit `f5732a8`): 01.04 is profile-guided
+from a fresh High Speed Ring profile of this commit; 2.11 is not. See
+progress-gt5.md. The launcher offers, once, to copy
 the 01.04 save into 2.11 before 2.11's first start without its own save
 (`offer_104_save`, `PT5_SAVE_COPY=0|1`, `--copy-104-save`; setup-v211.md).
 21:9 popup text cut off (GT Life's first Information messages): GT5's text

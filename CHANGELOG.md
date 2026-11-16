@@ -66,6 +66,12 @@ versions follow [SemVer](https://semver.org/).
   quarter of the screen too far left. `GT5P_UI_MASK_FIX=0` restores it.
   Applies to both 01.04 and 2.11.
 
+### Known issues
+- GT5 2.11 may still have issues, including race audio stutter. A packaged
+  High Speed Ring sample had hundreds of audio underruns and silent
+  stretches; the 01.04 sample had 2 underruns and none silent. Use 01.04
+  for the most reliable experience.
+
 ## [0.1.8] - 2026-11-16
 
 Fixes for the Windows 10 graphics error, 01.04 race sound and a shutdown

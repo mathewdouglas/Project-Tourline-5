@@ -4,6 +4,23 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.1.9 published (2026-11-16)
+
+Tag `v0.1.9` = `f5732a8`. The 2.11 engine and an instrumented 01.04 engine
+were built from that commit, a fresh High Speed Ring profile was taken from
+the instrumented engine, and 01.04 was rebuilt with it. The profile check
+lost 0 function counts; 701 compiled functions had no record. 2.11 is not
+profile-guided. ZIP 127 files, SHA-256
+`d2c3be199d9009131b7b4c5253fc861966e95adcdc1584c792eee49bd9979475`.
+
+Packaged smoke used the engines inside the ZIP and isolated storage.
+01.04 High Speed Ring: 58.7 FPS, median 16.8 ms, p99 23.9 ms; audio 2
+underruns and 0% silent at the end; `RSX_CMD_CHECK=1` 0 reports over
+853,574 copies. 2.11 reached the same race. A cold shader cache averaged
+36.5 FPS (max interval 456 ms). The warm rerun averaged 46.1 FPS, median
+19.3 ms, p99 40.0 ms, with 478 audio underruns and 35% silent blocks: the
+same 2.11 stutter as 0.1.8. `RSX_CMD_CHECK=1` 0 reports over 550,137 copies.
+
 ## 0.1.9 (2026-11-16): black headlamp covers
 
 The user's 0.1.8 report and RenderDoc frame reproduce both black headlamp
