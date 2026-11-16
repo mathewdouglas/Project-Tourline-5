@@ -5097,7 +5097,7 @@ index 00000000..e8aa9f7a
 +
 +#endif
 diff --git a/libs/filesystem/cellFs.c b/libs/filesystem/cellFs.c
-index 5166a47d..a6c989c1 100644
+index 5166a47d..952a6aa3 100644
 --- a/libs/filesystem/cellFs.c
 +++ b/libs/filesystem/cellFs.c
 @@ -6,6 +6,7 @@
@@ -5358,7 +5358,7 @@ index 5166a47d..a6c989c1 100644
      if (access == CELL_FS_O_RDONLY) {
          return "rb";
      } else if (access == CELL_FS_O_WRONLY) {
-@@ -404,16 +570,337 @@ static void ensure_parent_dirs(const char* path)
+@@ -404,16 +570,399 @@ static void ensure_parent_dirs(const char* path)
   * File operations
   * -----------------------------------------------------------------------*/
  
@@ -5679,6 +5679,68 @@ index 5166a47d..a6c989c1 100644
 +    s->host_fp = NULL;
 +}
 +
++/* PS3_FS_OVERLAY=<dir>[;<dir>...]: data mods without touching the install.
++ * A read of /dev_hdd0/game/<id>/USRDIR/<rest> (read-only open, stat) uses
++ * <dir>/<rest> when that exists; the first listed directory wins. Writes,
++ * creates and truncates still go to the real install, so the game's own
++ * install never overwrites a mod file and removing the variable restores the
++ * unmodded game. Each directory is laid out like USRDIR (GT5 Master Mod's
++ * archive root, with its PDIPFS folder, is one). Unset or empty: off. */
++static int fs_overlay(const char* guest, char* host, size_t cap)
++{
++    static int init = 0;
++    static char dirs[8][CELL_FS_MAX_FS_PATH_LENGTH];
++    static int ndirs = 0;
++    static volatile long hits = 0;
++    if (!init) {
++        const char* e = getenv("PS3_FS_OVERLAY");
++        if (e && *e) {
++            const char* p = e;
++            while (*p && ndirs < 8) {
++                const char* q = strchr(p, ';');
++                size_t n = q ? (size_t)(q - p) : strlen(p);
++                if (n > 0 && n < sizeof dirs[0]) {
++                    memcpy(dirs[ndirs], p, n);
++                    dirs[ndirs][n] = '\0';
++                    while (n > 1 && (dirs[ndirs][n-1] == '/' || dirs[ndirs][n-1] == '\\'))
++                        dirs[ndirs][--n] = '\0';
++                    printf("[fs-overlay] layer %d: %s\n", ndirs, dirs[ndirs]);
++                    ndirs++;
++                }
++                if (!q) break;
++                p = q + 1;
++            }
++        }
++        init = 1;
++    }
++    if (!ndirs || !guest || strncmp(guest, "/dev_hdd0/game/", 15) != 0)
++        return 0;
++    const char* u = strstr(guest + 15, "/USRDIR/");
++    if (!u || memchr(guest + 15, '/', (size_t)(u - guest - 15)))
++        return 0;   /* only /dev_hdd0/game/<id>/USRDIR/... */
++    const char* rest = u + 8;
++    if (!*rest || strstr(rest, ".."))
++        return 0;
++    for (int i = 0; i < ndirs; i++) {
++        char tmp[CELL_FS_MAX_FS_PATH_LENGTH];
++        int w = snprintf(tmp, sizeof tmp, "%s/%s", dirs[i], rest);
++        if (w < 0 || (size_t)w >= sizeof tmp || (size_t)w >= cap)
++            continue;
++#ifdef _WIN32
++        for (char* c = tmp; *c; c++) if (*c == '/') *c = '\\';
++#endif
++        HOST_STAT_T st;
++        if (HOST_STAT(tmp, &st) == 0) {
++            long h = ++hits;
++            if (h <= 16 || (h & (h - 1)) == 0)
++                printf("[fs-overlay] %s -> layer %d (%ld reads)\n", guest, i, h);
++            memcpy(host, tmp, (size_t)w + 1);
++            return 1;
++        }
++    }
++    return 0;
++}
++
  /* NID: 0x718BF5F8 */
  s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 size)
  {
@@ -5696,10 +5758,14 @@ index 5166a47d..a6c989c1 100644
      if (translate_path(gpath(path), host_path, sizeof(host_path)) != 0) {
          /* gpath(), not the raw parameter: `path` is a GUEST address, and
           * printing it as a host string faults. The failure path was
-@@ -422,11 +909,38 @@ s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 s
+@@ -421,12 +970,42 @@ s32 cellFsOpen(const char* path, s32 flags, CellFsFd* fd, const void* arg, u64 s
+         printf("[cellFs] Open: no path mapping for '%s'\n", gpath(path));
          return (s32)CELL_ENOENT;
      }
- 
++    if ((flags & CELL_FS_O_ACCMODE) == CELL_FS_O_RDONLY &&
++        !(flags & (CELL_FS_O_CREAT | CELL_FS_O_TRUNC)))
++        fs_overlay(gpath(path), host_path, sizeof host_path);
++
 +    /* A volume-range record (volmap.h): read-only opens read the volume's
 +     * range; other opens that keep the contents turn it back into the real
 +     * file first. O_TRUNC replaces the contents, and O_CREAT|O_EXCL fails
@@ -5717,7 +5783,7 @@ index 5166a47d..a6c989c1 100644
 +                return (s32)CELL_EIO;
 +        }
 +    }
-+
+ 
      /* If creating, ensure parent directories exist */
      if (flags & CELL_FS_O_CREAT) {
          ensure_parent_dirs(host_path);
@@ -5735,7 +5801,7 @@ index 5166a47d..a6c989c1 100644
      const char* mode = flags_to_mode(flags);
      FILE* fp = fopen(host_path, mode);
  
-@@ -470,10 +984,8 @@ s32 cellFsClose(CellFsFd fd)
+@@ -470,10 +1049,8 @@ s32 cellFsClose(CellFsFd fd)
      if (fd < 0 || fd >= MAX_OPEN_FILES || !s_files[fd].in_use)
          return CELL_FS_ERROR_EBADF;
  
@@ -5748,7 +5814,7 @@ index 5166a47d..a6c989c1 100644
      s_files[fd].in_use = 0;
  
      return CELL_OK;
-@@ -491,12 +1003,39 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
+@@ -491,12 +1068,39 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
      u64 bytes_read = 0;
  
      if (s_files[fd].host_fp) {
@@ -5789,7 +5855,7 @@ index 5166a47d..a6c989c1 100644
      }
  
      { static int _n = 0;
-@@ -515,6 +1054,37 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
+@@ -515,6 +1119,37 @@ s32 cellFsRead(CellFsFd fd, void* buf, u64 nbytes, u64* nread)
              }
              printf("\n"); } }
  
@@ -5827,7 +5893,7 @@ index 5166a47d..a6c989c1 100644
      if (nread)
          *(u64*)gptr(nread) = ps3_bswap64(bytes_read);
  
-@@ -532,9 +1102,40 @@ s32 cellFsWrite(CellFsFd fd, const void* buf, u64 nbytes, u64* nwrite)
+@@ -532,9 +1167,40 @@ s32 cellFsWrite(CellFsFd fd, const void* buf, u64 nbytes, u64* nwrite)
  
      u64 bytes_written = 0;
  
@@ -5868,7 +5934,7 @@ index 5166a47d..a6c989c1 100644
      }
  
      if (nwrite)
-@@ -549,7 +1150,21 @@ s32 cellFsLseek(CellFsFd fd, s64 offset, s32 whence, u64* pos)
+@@ -549,7 +1215,21 @@ s32 cellFsLseek(CellFsFd fd, s64 offset, s32 whence, u64* pos)
      if (fd < 0 || fd >= MAX_OPEN_FILES || !s_files[fd].in_use)
          return CELL_FS_ERROR_EBADF;
  
@@ -5891,7 +5957,7 @@ index 5166a47d..a6c989c1 100644
          int host_whence = SEEK_SET;
          if (whence == CELL_FS_SEEK_CUR) host_whence = SEEK_CUR;
          if (whence == CELL_FS_SEEK_END) host_whence = SEEK_END;
-@@ -585,11 +1200,16 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
+@@ -585,11 +1265,16 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
      CellFsStat* sbh = (CellFsStat*)gptr(sb);
      if (!sbh) return CELL_EFAULT;
  
@@ -5908,7 +5974,7 @@ index 5166a47d..a6c989c1 100644
              fill_cellfs_stat(sbh, &hst);
              return CELL_OK;
          }
-@@ -597,6 +1217,8 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
+@@ -597,6 +1282,8 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
          int file_no = fileno(s_files[fd].host_fp);
          HOST_STAT_T hst;
          if (HOST_FSTAT(file_no, &hst) == 0) {
@@ -5917,7 +5983,7 @@ index 5166a47d..a6c989c1 100644
              fill_cellfs_stat(sbh, &hst);
              return CELL_OK;
          }
-@@ -615,6 +1237,7 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
+@@ -615,6 +1302,7 @@ s32 cellFsFstat(CellFsFd fd, CellFsStat* sb)
  s32 cellFsStat(const char* path, CellFsStat* sb)
  {
      printf("[cellFs] Stat(path='%s')\n", gpath(path) ? gpath(path) : "<null>");
@@ -5925,7 +5991,12 @@ index 5166a47d..a6c989c1 100644
  
      if (!path || !sb)
          return CELL_EFAULT;
-@@ -626,9 +1249,21 @@ s32 cellFsStat(const char* path, CellFsStat* sb)
+@@ -622,13 +1310,26 @@ s32 cellFsStat(const char* path, CellFsStat* sb)
+     char host_path[CELL_FS_MAX_FS_PATH_LENGTH];
+     if (translate_path(gpath(path), host_path, sizeof(host_path)) != 0)
+         return (s32)CELL_ENOENT;
++    fs_overlay(gpath(path), host_path, sizeof host_path);
+ 
      HOST_STAT_T hst;
      if (HOST_STAT(host_path, &hst) != 0) {
          printf("[cellFs] Stat: host stat('%s') failed: %s\n", host_path, strerror(errno));
@@ -5947,7 +6018,7 @@ index 5166a47d..a6c989c1 100644
      /* Fill a host-local struct, then copy into guest memory: `sb` is a guest
       * address, so fill_cellfs_stat writing through it directly faults. */
      {
-@@ -655,6 +1290,12 @@ s32 cellFsTruncate(const char* path, u64 size)
+@@ -655,6 +1356,12 @@ s32 cellFsTruncate(const char* path, u64 size)
      if (translate_path(gpath(path), host_path, sizeof(host_path)) != 0)
          return (s32)CELL_ENOENT;
  
@@ -5960,7 +6031,7 @@ index 5166a47d..a6c989c1 100644
  #ifdef _WIN32
      HANDLE hFile = CreateFileA(host_path, GENERIC_WRITE, 0, NULL,
                                 OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-@@ -682,7 +1323,11 @@ s32 cellFsFtruncate(CellFsFd fd, u64 size)
+@@ -682,7 +1389,11 @@ s32 cellFsFtruncate(CellFsFd fd, u64 size)
      if (fd < 0 || fd >= MAX_OPEN_FILES || !s_files[fd].in_use)
          return CELL_FS_ERROR_EBADF;
  
@@ -5972,7 +6043,7 @@ index 5166a47d..a6c989c1 100644
          fflush(s_files[fd].host_fp);
  #ifdef _WIN32
          int file_no = _fileno(s_files[fd].host_fp);
-@@ -696,6 +1341,41 @@ s32 cellFsFtruncate(CellFsFd fd, u64 size)
+@@ -696,6 +1407,41 @@ s32 cellFsFtruncate(CellFsFd fd, u64 size)
      return CELL_OK;
  }
  
@@ -6014,7 +6085,7 @@ index 5166a47d..a6c989c1 100644
  /* NID: 0xC1C507E7 */
  s32 cellFsGetBlockSize(const char* path, u64* sector_size, u64* block_size)
  {
-@@ -926,6 +1606,7 @@ s32 cellFsRename(const char* from, const char* to)
+@@ -926,6 +1672,7 @@ s32 cellFsRename(const char* from, const char* to)
      char host_from[CELL_FS_MAX_FS_PATH_LENGTH];
      char host_to[CELL_FS_MAX_FS_PATH_LENGTH];
  

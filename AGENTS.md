@@ -192,6 +192,11 @@ folder aside): Cross into GT Life shows the popup.
 of the UI and scene-camera ones, comma lists in `config/targets.json`); 2.11
 loads constants by `lis`+`lfs`, not `d(r2)`. Checked at 1080p/1440p/4K.
 Run a 2.11 engine with gt5boot.ps1 as docs/gt5-v211-live-checks.md says.
+GT5 Master Mod 2.0.0a (US, data only) runs on 2.11 through the runtime
+overlay `PS3_FS_OVERLAY=<mod dir>[;<dir>]` (`cellFs.c`; read-only opens and
+stats of `USRDIR/...` prefer the overlay, writes go to the install; unset =
+off): banner, Select debug menu, Arcade race. It changes four screen markers;
+launcher/F1 support is not built (progress-gt5.md, plan-gt5-v211.md T15/T16).
 2.11 was checked live to load an 01.04 save. Surround output (#21): GT5
 mixes discrete 5.1 into its 8-channel port; `AUDIO_OUTPUT_CHANNELS=2|6|8|auto`
 (runtime cellAudio/cellAvconfExt; `audio.output`, F1 AUDIO, RecompLauncher

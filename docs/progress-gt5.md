@@ -4,6 +4,55 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.9 (2026-11-16): GT5 Master Mod 2.0.0a runs on 2.11
+
+The user's archive is `GT5_2.11_Master_Mod_2.0.0_(US-BCUS98114).zip`
+(408,640,237 bytes, kept outside the repo). Inspected before any run:
+
+- **Data only.** 704 files: `PDIPFS/` (697: `K/4D`, the 160-byte volume
+  header, plus 696 under `PDIPFS/9`), `Debug_Cam_Addon/PDIPFS/` (3, optional),
+  `PDIPFS_ORIGINAL/` (the unmodded `K/4D` and `9/EZ/E6`, for uninstalling),
+  `readme_instructions_misc.txt` and `log.txt`. No EBOOT, SPRX or patch.
+- **How it changes the game.** Its packing log: the original TOC (entry
+  59283, `9/EZ/E6`) is extended with 695 files (new cars, tracks, scripts) and
+  saved as a new TOC (entry 60001, `9/57/QB`); the new `K/4D` points at it.
+- **Base check.** The 2.11 test install's `K/4D` and `9/EZ/E6` are
+  byte-identical to the archive's `PDIPFS_ORIGINAL` copies. Of the mod's 697
+  `PDIPFS` files only `K/4D` exists in the install; the rest are new names.
+
+**Runtime overlay (`PS3_FS_OVERLAY`, off unless set).** `cellFs.c`: a
+read-only open or a stat of `/dev_hdd0/game/<id>/USRDIR/<rest>` uses
+`<dir>/<rest>` when that file exists; `;` separates several directories, the
+first wins (so `Debug_Cam_Addon` can be listed before the mod). Writes,
+creates and truncates still go to the install. Logs `[fs-overlay]` (the
+layers, the first 16 reads, then powers of two). The install and volume-range
+records are untouched; unset, the game is unmodded.
+
+**In game** (2.11 engine, 720p, the mod's `PDIPFS` extracted to
+`scratch/mods/mm200`):
+
+- The game reads `K/4D` and `9/57/QB` from the overlay, then mod files
+  throughout (128+ reads by the menu).
+- Main menu: the mod's banner ("GT5 Master Mod by Nenkai and ddm - 2.0.0 ...
+  Press SELECT for the debug menu") and its news list.
+- Select opens the debug menu (Remove Save Data, Display Language, Debug
+  Game Text, DLC, Patch 2.11, Patch 2.10, ...). The frame rate stays at 60.
+- Arcade: `gt5boot.ps1 -Route race` reached a race. The mod's track list
+  is ordered differently, so the route's Rights picked Kart Space, not High
+  Speed Ring. The race ran with the HUD and timer advancing.
+- Screen markers: `Arcade`, `CarList`, `RaceLoad` and `RaceGrid` never
+  fired, because the mod replaces those screen files with new
+  `PDIPFS` names. `TrackList`, `Transmission`, `RaceAssets` and `RaceStart`
+  did fire. Race scope and the route timings need markers measured with the
+  mod (`PAD_FILE_LOG=2`) before the race pack and F1 race pause can be relied
+  on with it.
+- The run rewrote the test install's `BCUS98114-BKUP` as every 2.11 boot
+  does; it was restored from a copy. `BCUS98114-GAME` was unchanged.
+
+Not done: launcher/F1 support (an import of the ZIP into
+`<storage>\mods\<name>`, an on/off setting that sets `PS3_FS_OVERLAY`), LAN
+mode, a full GT Mode check, and the new cars and PS2 tracks in a race.
+
 ## 0.1.9 (2026-11-16): 21:9 and resolutions on 2.11
 
 2.11 had no aspect constants, so `video.aspect = "21:9"` did nothing there.

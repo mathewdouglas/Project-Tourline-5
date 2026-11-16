@@ -51,7 +51,7 @@ open questions:
 | RPCS3 `dev_hdd0/game/BCES00569` | same | **EU GT5, `APP_VER` 02.07**, `PS3_SYSTEM_VER` 04.1000. `EBOOT.BIN` 9,486,240 bytes (an SCE container; compressed, not decrypted). 11,784 `PDIPFS` files, 2.9 GB, no `installed00.dat` or `db/` |
 | RPCS3 `dev_hdd0/game/NPEA00502` | same | GT6 demo, `APP_VER` 01.05; unrelated |
 | GT5 update PKGs | user-supplied, 2026-11-15 | **02.11 only**: `UP9000-BCUS98114_00-0000000000000000-A0211-V0100-PE.pkg`, 46,668,464 bytes. Extracted with the runtime's `tools/pkg_extract.py` into `input/v211/pkg/` (ignored): 152 files. `PARAM.SFO`: `APP_VER` 02.11, `TARGET_APP_VER` **02.10**, `PS3_SYSTEM_VER` 04.1000. It holds `EBOOT.BIN`, `TROPHY.TRP`, `PDIPFS/K/4D` (160 bytes, differs from 01.04's) and 145 files under `PDIPFS/9/`. It installs only on top of 02.10. |
-| Master mod archive | same search | **none found** |
+| Master mod archive | user-supplied, 2026-11-16 | `GT5_2.11_Master_Mod_2.0.0_(US-BCUS98114).zip`, 408,640,237 bytes: data only (`PDIPFS`, an optional debug-camera add-on, the two original files it replaces or reads, readme, packing log). Measured in progress-gt5.md, 0.1.9 |
 | 2.11 decrypted executable | `input/v211/EMAIN.ELF` (ignored) | 24,926,384 bytes, from `rpcs3.exe --decrypt` on a temp copy of the package's `EBOOT.BIN` (9,509,920 bytes, compressed SELF). Entry `0x171E4C8` (01.04: `0x1899940`). Last executable section ends at **`0xFA63A0`** (01.04: `0x11752A4`). 722 imports across 43 modules (01.04: 702 across 41). New modules: `cellSync` and `cellSysutilAvconfExt`. New NIDs: `cellGcmSys` +4, `cellSpurs` +2, `cellSysutil` +1, `sceNp` +5/-1, `sys_net` +5. |
 
 Two things follow from the EU 02.07 install, though it is another region:
@@ -300,6 +300,14 @@ sequence and the new install steps.
 "incomplete install finishes in the game" path must be re-checked.
 
 ## 4. Master mod
+
+**Measured (2026-11-16), Master Mod 2.0.0a US:** data only, as hypothesised.
+It replaces one install file (`PDIPFS/K/4D`, the volume header) and adds 696;
+the new header points at a new table of contents (`9/57/QB`). The runtime
+overlay `PS3_FS_OVERLAY=<dir>[;<dir>]` (item 2 below, now in `cellFs.c`)
+loads it without touching the install: banner, debug menu (Select) and an
+Arcade race work. Four screen markers change with it. Launcher/F1 support is
+not built yet. See progress-gt5.md, 0.1.9.
 
 **What it changes (from source, partly hypothesis).** Installation copies the
 mod's `PDIPFS` tree over the installed one, overwriting files; the original
@@ -776,8 +784,8 @@ warning to menu took Phases 7-12, mostly runtime fixes that 2.11 inherits.
 | T13 | Multi-target source layout (`input/<target>`, script paths, release `--target`) | M | T6 |
 | T14 | Launcher: version detection (01.04/02.11, others refused), per-target storage, 2.11 import route, version choice when both are set up | L | T2, T13 |
 | T14a | Release: `clean_build.py`/`package_player.py` build and package both engines into one ZIP; per-target PGO; "experimental" label until M8 | M | T12, T13, T14 |
-| T15 | Runtime `PS3_FS_OVERLAY` and launcher mod folder | M | T8 |
-| T16 | Master mod test: inspect the archive first (data only?), then menu, debug menu, race | M | T15, user's archive |
+| T15 | Runtime `PS3_FS_OVERLAY` and launcher mod folder (runtime done 2026-11-16; launcher/F1 not started) | M | T8 |
+| T16 | Master mod test: inspect the archive first (data only?), then menu, debug menu, race (done 2026-11-16: data only; banner, debug menu, Arcade race) | M | T15, user's archive |
 | T17 | Update-PKG install route in the launcher (pinned hashes, in order) | L | T14, T2 |
 | T18 | Optional: LAN mode over `sysNet` | L | T16 |
 | T19 | DLC triage: static strings/imports in the 2.11 ELF; per-pack file lists and NPD headers from the player's RPCS3 install; RPCS3 log of DLC detection | M | T1, T3, player's DLC |
