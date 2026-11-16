@@ -4,6 +4,64 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.9 (2026-11-16): black headlamp covers
+
+The user's 0.1.8 report and RenderDoc frame reproduce both black headlamp
+covers on the Ferrari California '08 in the dealership, on 01.04 at
+2560x1080, DXC, 8x MSAA. The glass draw reads the scene through texture unit
+10 while writing that same scene. Its bound single-sample texture is black
+at the draw; the scene is still in its multisample twin. Pixel history shows
+the right lamp's inner material at 0.319 grey, then its cover replaces it
+with 0.022. This is a material input fault, not absent bulb geometry.
+
+Two runtime changes are needed:
+
+- Exact render-target aliases on upper texture units now use the existing
+  self-read snapshot path. `tex_self` is 16 bits. Snapshotting resolves
+  MSAA first; each subsequent draw marks the multisample twin dirty again.
+  Only texture units referenced by the fragment program trigger a snapshot:
+  stale bindings otherwise caused hundreds of unnecessary copies/resolves.
+  `RT_NO_SELFCOPY=1` retains the old copy behaviour.
+- Decode `NV4097_SET_SHADER_WINDOW` (0x1D88). GT5 requests `0x1438` in this
+  scene: height 1080, bottom origin, half-pixel centres. The port previously
+  supplied D3D's top-origin position. The glass multiplies Y by -1/1080 and
+  uses repeat addressing in V (`t10_address=0x60710103`); it needs the guest
+  position 1080-Y. Supplying the scene copy alone therefore exposed wrong
+  rows, seen as white covers or stretched background colours. Compiled and
+  interpreted fragments now apply the programmed origin and pixel centre
+  after host-to-guest resolution scaling. `RSX_SHADER_WINDOW=0` retains the
+  old coordinates. `RSX_SHADER_WINDOW_LOG=1` logs the window register and
+  unit 10 address state on scene aliases, once per program (up to 32).
+
+The 17-bit window register occupies the unused high bits of expansion mask
+0 in the existing fragment constant slot. The four expansion bits retain
+their meaning; the packed 21-bit integer is exactly representable as a
+float. No game address or per-car shader override is involved. The WPOS
+semantics were checked against RPCS3's
+[fragment context calculation](https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/RSX/Core/RSXDrawCommands.cpp)
+and [shader-window decoder](https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/RSX/rsx_decode.h).
+
+Validation: a private 01.04 test engine relinks the 0.1.8 objects with the
+changed renderer, command decoder and `cellGcmSys` (the latter owns the
+expanded state structure). It uses a copied install/save. The user confirmed
+the California bulbs are fixed and then confirmed headlights, windows and
+paint on another affected car. The final dealership run sustains the menu's
+30 FPS; this was not a controlled performance comparison. The final run's
+command checker reports zero violations. Two pipeline creation failures for
+another program (`0x06274A01`, `vs_idx=-1`, cull 1/5) appear later in the run;
+their cause and baseline behaviour have not been established. No shader
+compile error was logged. This check does not establish release-wide
+renderer acceptance. The installed release and
+original save were not replaced. 2.11 has not had this change checked live.
+
+`scripts/test/rt_self_read.py` runs extracted production binding code for
+all 16 units, primary/MRT aliases, mask passes, allocation failure and dirty
+state after a resolve, with the rollback too. `shader_window.py` checks the
+production command decoder and executes the compiled/interpreted coordinate
+code on WARP: both origins, both pixel centres, three heights, and expansion
+bits preserved. Both pass, as does `scissored_clear.py`. The complete pinned
+runtime patch applies cleanly and reproduces the changed runtime sources.
+
 ## 0.1.9 (2026-11-16): issue #23 crash after guest return
 
 The 0.1.8 report `crash-20261116-000603.zip` passes the #12/#15 queue teardown:

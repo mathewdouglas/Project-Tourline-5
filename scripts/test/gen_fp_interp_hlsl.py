@@ -509,6 +509,9 @@ float4 main(RSXInterpIn input) : SV_TARGET {
     if ((flags & 64u) != 0u)
         wpos *= float4(rsx_fogstate.w > 0.0 ? rsx_fogstate.w : 1.0,
                        rsx_alphatest.w > 0.0 ? rsx_alphatest.w : 1.0, 1, 1);
+    uint win = (uint)rsx_texexpand[0].x >> 4;
+    if ((win & 4096u) != 0u) wpos.y = (float)(win & 4095u) - wpos.y;
+    if ((win & 65536u) != 0u) wpos.xy -= 0.5;
 #if RSX_INTERP_LEGACY
     uint stk_else[8], stk_end[8], stk_kind[8], stk_i[8], stk_step[8], stk_endn[8], stk_body[8];
 #define SK_ELSE(i) stk_else[i]

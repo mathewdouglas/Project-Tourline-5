@@ -180,6 +180,16 @@ coefficient constructor calls in round-toward-zero
 `spu_native_patch.py` after any SPU lift. Tests: `audio_extended.py`,
 `audio_coefficients.py`. See [docs/audio.md](docs/audio.md).
 
+**Headlamp glass (2026-11-16).** The California's black lamps were a scene
+read on unit 10 without a snapshot, plus ignored `SET_SHADER_WINDOW` state.
+All 16 units now use the self-read path; only units read by the shader
+trigger a copy. MSAA becomes dirty after each draw, including after a
+mid-pass resolve. WPOS honours the guest origin and pixel centre in both
+compiled and interpreted shaders (`RSX_SHADER_WINDOW=0` old coordinates;
+`RT_NO_SELFCOPY=1` old copies). Confirmed by the user on 01.04, California
+and another affected car. Tests: `rt_self_read.py`, `shader_window.py`
+(WARP). See the headlamp entry in [docs/progress-gt5.md](docs/progress-gt5.md).
+
 **0.1.9 (in progress, `release/v0.1.9`).** The launcher offers, once, to copy
 the 01.04 save into 2.11 before 2.11's first start without its own save
 (`offer_104_save`, `PT5_SAVE_COPY=0|1`, `--copy-104-save`; setup-v211.md).

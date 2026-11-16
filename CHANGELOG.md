@@ -57,6 +57,9 @@ versions follow [SemVer](https://semver.org/).
   keeps guest memory mapped until process termination, so background rendering
   cannot read it after it has been released. This fixes the shutdown crash;
   the reason the affected startup exits early is still under investigation.
+- **Black headlights on the Ferrari California and other cars.** Glass
+  materials now read a current copy of the scene and use the game's pixel
+  coordinate origin, so the bulbs remain visible through their covers.
 - **21:9: GT Mode's "Information" messages are no longer cut off mid-line**
   (the first My Home and Dealerships messages, and other text boxes that
   clip their text). GT5 placed the text's clip edge for a 16:9 screen, a
