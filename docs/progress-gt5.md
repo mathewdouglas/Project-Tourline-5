@@ -4,6 +4,40 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.9 (2026-11-16): issue #23 crash after guest return
+
+The 0.1.8 report `crash-20261116-000603.zip` passes the #12/#15 queue teardown:
+`MEfYS` and `gFKsE` both exit and main joins the remaining guest workers.
+The guest then returns, before any menu/movie milestone. Native thread
+`present` faults reading host `0x20C03002000` with VM base `0x20C00000000`:
+guest `0x03002000`, the GCM control word. Relinking the release's original
+objects with `/MAP` names RVAs `3660BB6` (FIFO walker), `3660501` (present's
+walk lambda), `365F0CD` (present thread). Instruction windows at all three
+addresses match the original release binary. The old main path called
+`vm_shutdown()` while the presentation loop and other host workers remained
+live. The report's guest-PC chain does not name the native faulting code.
+
+**Fix:** after guest return, use the same process-exit path as closing the
+window: flush logs, finish the debug-log forwarding, then `ExitProcess`.
+Guest VM remains mapped until the OS terminates the process and its threads.
+Stopping/joining only the present thread would not cover vblank, UI, audio,
+SPURS and diagnostic readers, so no partial shutdown sequence was added.
+Pre-worker ELF/entry validation failures can still release VM explicitly.
+`[guest-exit]` records the final guest registers. Runtime `ppu_hle.cpp` also
+logs the caller and raw r3-r10 for `sys_prx_exitspawn_with_level` (A2C7BA64),
+without dereferencing guest pointers or changing the existing no-op handler.
+
+Validation: changed main and runtime HLE translation units compile using the
+configured 2.11 build commands, with output objects isolated in `scratch/`.
+The complete compatibility patch applies to pinned 5244db9 in a temporary
+index and reproduces the updated HLE source; unrelated patch sections retain
+their raw bytes. No full engine link, test execution or game run was performed
+under the user's test hold. Early guest-return, ordinary window close, debug
+export enabled/disabled and both engine targets still need live checks.
+This prevents the secondary native memory fault; the initiating black-screen
+startup exit remains unexplained. It is separate from Windows 10 cube-upload
+Close failures and does not invalidate the 0.1.8 event-queue wakeup fix.
+
 ## 0.1.9 (2026-11-16): the settings-page features on 2.11
 
 Phase 38's four GT5 features had no 2.11 values. Each was measured on the

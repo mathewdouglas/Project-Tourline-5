@@ -36,6 +36,10 @@ versions follow [SemVer](https://semver.org/).
   page's name, as before.
 
 ### Fixed
+- **Crash while finishing an early startup exit** (issue #23). The engine
+  keeps guest memory mapped until process termination, so background rendering
+  cannot read it after it has been released. This fixes the shutdown crash;
+  the reason the affected startup exits early is still under investigation.
 - **21:9: GT Mode's "Information" messages are no longer cut off mid-line**
   (the first My Home and Dealerships messages, and other text boxes that
   clip their text). GT5 placed the text's clip edge for a 16:9 screen, a

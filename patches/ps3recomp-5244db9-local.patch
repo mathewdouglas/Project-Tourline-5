@@ -42446,7 +42446,7 @@ index 9ea87dbd..51f986e3 100644
      if (!vm_base) return CELL_ENOMEM;
  
 diff --git a/runtime/ppu/ppu_hle.cpp b/runtime/ppu/ppu_hle.cpp
-index acbaf126..0c80b8d2 100644
+index acbaf126..2ae419cc 100644
 --- a/runtime/ppu/ppu_hle.cpp
 +++ b/runtime/ppu/ppu_hle.cpp
 @@ -19,10 +19,12 @@
@@ -42472,7 +42472,7 @@ index acbaf126..0c80b8d2 100644
  /* The SPURS SPU kernel spawn hook, whose real definition is per-port
   * (flow_spurs_kernel.c). This used to be a weak extern DECLARATION written at
   * block scope inside ps3_hle_call, guarded by a test of its own address -- so
-@@ -177,10 +182,49 @@ static void ps3_hle_unresolved(uint32_t nid, ppu_context* ctx)
+@@ -177,10 +182,62 @@ static void ps3_hle_unresolved(uint32_t nid, ppu_context* ctx)
      ctx->gpr[3] = s_fake ? 0u : (uint64_t)(uint32_t)CELL_ERROR_ERROR;
  }
  
@@ -42516,6 +42516,19 @@ index acbaf126..0c80b8d2 100644
 +
  extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
  {
++    /* An exit/relaunch request can precede a black-screen startup return.
++     * Keep raw guest arguments and caller evidence; do not guess this ABI or
++     * dereference a path pointer during shutdown. The handler stays unchanged. */
++    if (nid == 0xA2C7BA64u && ctx) {
++        fprintf(stderr, "[guest-exit] sys_prx_exitspawn_with_level tid=%llu lr=0x%08X sp=0x%08X "
++                        "r3=%016llX r4=%016llX r5=%016llX r6=%016llX "
++                        "r7=%016llX r8=%016llX r9=%016llX r10=%016llX\n",
++                (unsigned long long)ctx->thread_id, (unsigned)ctx->lr, (unsigned)ctx->gpr[1],
++                (unsigned long long)ctx->gpr[3], (unsigned long long)ctx->gpr[4],
++                (unsigned long long)ctx->gpr[5], (unsigned long long)ctx->gpr[6],
++                (unsigned long long)ctx->gpr[7], (unsigned long long)ctx->gpr[8],
++                (unsigned long long)ctx->gpr[9], (unsigned long long)ctx->gpr[10]);
++    }
 +    /* PS3_TIMELINE: an HLE call that blocked over 100 us (timeline.h). */
 +    struct _TlGuard { uint32_t nid; uint64_t t0;
 +        ~_TlGuard() { if (t0) { uint64_t d = ps3_tl_us() - t0; if (d > 100) ps3_tl_rec('H', nid, (uint32_t)d); } }
@@ -42523,7 +42536,7 @@ index acbaf126..0c80b8d2 100644
      /* HLE_BT_EVERY=<n>: dump the calling thread's guest stack every nth HLE
       * call it makes. WAITBT_EVERY only samples threads that are blocking on an
       * event queue, which misses a thread that stops looping while it is BUSY --
-@@ -206,6 +250,17 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+@@ -206,6 +263,17 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
                  ppu_dump_bctrl_ring((uint32_t)ctx->thread_id, tag); }
            }
        } }
@@ -42541,7 +42554,7 @@ index acbaf126..0c80b8d2 100644
  
      /* Preserve the caller TOC (r2) across the HLE call. ELFv1 makes r2 caller-saved
       * across a cross-module call: the glink stub does `std r2,40(r1)` before jumping and
-@@ -240,7 +295,7 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+@@ -240,7 +308,7 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
          return;
      }
      /* Guest-PC breadcrumb for the sampling profiler (see lv2_syscall). */
@@ -42550,7 +42563,7 @@ index acbaf126..0c80b8d2 100644
      g_last_hle_nid = nid;
      /* Stamp the NAME here too, not only where a handler is found below.
       *
-@@ -260,7 +315,26 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+@@ -260,7 +328,26 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
       * new-SDK bring-up (e.g. PSL1GHT) where the failure is "nothing happens". */
      static int s_trace = -2;
      if (s_trace == -2) { const char* e = getenv("PS3_HLE_TRACE"); s_trace = e ? atoi(e) : 0; }
@@ -42578,7 +42591,7 @@ index acbaf126..0c80b8d2 100644
          s_trace--;
          fprintf(stderr, "[HLETRACE] nid=0x%08X r3=0x%08X r4=0x%08X r5=0x%08X lr=0x%08X\n",
                  nid, (uint32_t)ctx->gpr[3], (uint32_t)ctx->gpr[4],
-@@ -329,7 +403,7 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+@@ -329,7 +416,7 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
       * taskset init => the movie decode task is never created. Forcing the HLE
       * (which succeeds) lets the caller proceed. */
      {
@@ -42587,7 +42600,7 @@ index acbaf126..0c80b8d2 100644
          if (opd) {
              static const char* s_force = (const char*)1;
              if (s_force == (const char*)1) s_force = getenv("YDKJ_FORCE_HLE");
-@@ -618,7 +692,8 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+@@ -618,7 +705,8 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
          }
      }
  
@@ -42597,7 +42610,7 @@ index acbaf126..0c80b8d2 100644
          if (g_ctx[i].nid == nid) {
              ps3_msf("hle:%s", g_ctx[i].name);
              /* Record the name here too. This loop dispatches every
-@@ -640,7 +715,7 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+@@ -640,7 +728,7 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
              return;
          }
  

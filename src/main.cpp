@@ -726,15 +726,29 @@ static void setup_argv(const char* argv0)
     printf(")\n");
 }
 
+/* Once host/guest workers exist, the VM belongs to the process. Presentation,
+ * vblank, UI, audio and diagnostic workers can still use it after the guest
+ * entry returns. Keep it mapped until process termination has stopped those
+ * threads; freeing it first raced the FIFO control-word read (issue #23).
+ * The pre-worker ELF/entry validation failures may still use vm_shutdown(). */
+[[noreturn]] static void finish_process(unsigned code)
+{
+    fflush(stdout); fflush(stderr);
+    gt5p_debug_shutdown();
+#ifdef _WIN32
+    ExitProcess(code);
+#else
+    std::_Exit((int)code);
+#endif
+}
+
 /* Closing the game window ends the game. Nothing else did: the title's
  * threads kept running with no window. The log is flushed first. */
 extern "C" void (*rsx_d3d12_on_close)(void);
 static void window_closed(void)
 {
     printf("[GT5P] window closed; exiting\n");
-    fflush(stdout); fflush(stderr);
-    gt5p_debug_shutdown();
-    ExitProcess(0);
+    finish_process(0);
 }
 
 /* Run from anywhere. The game is found by paths relative to the working
@@ -1287,7 +1301,9 @@ int main(int argc, char* argv[])
 
     printf("\n[GT5P] Guest returned. r3=0x%llX\n",
            (unsigned long long)g_main_ctx.gpr[3]);
-
-    vm_shutdown();
-    return EXIT_SUCCESS;
+    fprintf(stderr, "[guest-exit] entry returned: title=%s r3=0x%llX lr=0x%08X sp=0x%08X; "
+                    "ending process with guest memory still mapped\n",
+            GT5P_TITLE_ID, (unsigned long long)g_main_ctx.gpr[3],
+            (unsigned)g_main_ctx.lr, (unsigned)g_main_ctx.gpr[1]);
+    finish_process(EXIT_SUCCESS);
 }
