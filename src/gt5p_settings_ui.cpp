@@ -769,11 +769,20 @@ void panel(HDC dc, int x0, int y0, int x1, int y1)
                                                                           : grey(lerp(4, 28, (t - 0.3) / 0.7)); });
 }
 
+/* Where each page's name sits on the section bar (layout units), for clicks. */
+struct SectionTab { int x0, x1; };
+std::vector<SectionTab> s_tabs;
+
 /* A section bar like the Options screen's "General", with the L1 and R1
- * knobs that switch pages; red rules when it is the selected row. */
-void section_bar(HDC dc, int x0, int x1, int y, const wchar_t* title, bool sel)
+ * knobs that switch pages; red rules when it is the selected row. Every
+ * page is named on it, so the pages either side are visible: the current
+ * one bright with a red underline, the others dimmed. A click on a name
+ * opens that page. GT5P_SETTINGS_TABS=0: only the current page's name. */
+void section_bar(HDC dc, int x0, int x1, int y, bool sel)
 {
     static HFONT f = font(19, FW_SEMIBOLD), fk = font(9, FW_BOLD);
+    static int tabs_on = -1;
+    if (tabs_on < 0) { const char* e = getenv("GT5P_SETTINGS_TABS"); tabs_on = !(e && e[0] == '0'); }
     fill(dc, x0, y, x1, y + 1, sel ? RGB(168, 0, 0) : grey(70));
     vgrad(dc, x0, y + 1, x1, y + kBarH - 1, [](double t) { return grey(lerp(3, 34, t)); });
     fill(dc, x0, y + kBarH - 1, x1, y + kBarH, sel ? RGB(168, 0, 0) : grey(70));
@@ -783,9 +792,47 @@ void section_bar(HDC dc, int x0, int x1, int y, const wchar_t* title, bool sel)
         stadium(dc, cx - 8.5, cy - 8.5, cx + 8.5, cy + 8.5, [](double t) { return grey(lerp(14, 44, t)); });
         text_in(dc, fk, cx - 10, cy - 10, cx + 10, cy + 10, grey(170), k ? L"R1" : L"L1");
     }
-    std::wstring s = title;
-    for (size_t i = 1; i < s.size(); i++) s[i] = (wchar_t)towlower(s[i]);   /* VIDEO -> Video */
-    text_in(dc, f, x0, y, x1, y + kBarH - 1, grey(180), s.c_str());
+    const auto& secs = sections();
+    std::vector<std::wstring> names;
+    for (const wchar_t* t : secs) {
+        std::wstring s = t;
+        for (size_t i = 1; i < s.size(); i++) s[i] = (wchar_t)towlower(s[i]);   /* VIDEO -> Video */
+        names.push_back(s);
+    }
+    s_tabs.assign(secs.size(), SectionTab{ 0, 0 });
+    if (!tabs_on) {
+        text_in(dc, f, x0, y, x1, y + kBarH - 1, grey(180), names[s_section].c_str());
+        return;
+    }
+    /* The names share the room between the knobs, evenly spaced; the font
+     * steps down if they would not fit (it is 15 units for ten pages). */
+    const int a0 = x0 + 40, a1 = x1 - 40;
+    static HFONT fonts[4][2];
+    static const int sizes[4] = { 16, 15, 14, 12 };
+    int pick = 3, total = 0;
+    std::vector<int> widths(names.size());
+    for (int k = 0; k < 4; k++) {
+        if (!fonts[k][0]) { fonts[k][0] = font(sizes[k], FW_NORMAL); fonts[k][1] = font(sizes[k], FW_BOLD); }
+        HGDIOBJ o = SelectObject(dc, fonts[k][1]);
+        total = 0;
+        for (size_t i = 0; i < names.size(); i++) {
+            SIZE sz{}; GetTextExtentPoint32W(dc, names[i].c_str(), (int)names[i].size(), &sz);
+            widths[i] = sz.cx; total += sz.cx;
+        }
+        SelectObject(dc, o);
+        if (total + 10 * (int)names.size() <= a1 - a0) { pick = k; break; }
+    }
+    const double gap = names.empty() ? 0 : (double)(a1 - a0 - total) / (double)names.size();
+    double x = a0 + gap / 2;
+    for (size_t i = 0; i < names.size(); i++) {
+        const int tx0 = (int)x, tx1 = (int)(x + widths[i]);
+        const bool cur = (int)i == s_section;
+        text_in(dc, fonts[pick][cur ? 1 : 0], tx0 - 4, y, tx1 + 4, y + kBarH - 2,
+                cur ? grey(245) : grey(120), names[i].c_str());
+        if (cur) fill(dc, tx0, y + kBarH - 6, tx1, y + kBarH - 4, RGB(200, 16, 16));
+        s_tabs[i] = { (int)(x - gap / 2), (int)(x + widths[i] + gap / 2) };
+        x += widths[i] + gap;
+    }
 }
 
 /* The square drop-down button: black edge (red ring, selected), glass face,
@@ -854,7 +901,7 @@ void paint(HDC dc)
     for (size_t i = 0; i < r.size(); i++) {
         const int id = r[i], y = sl[i].y;
         const bool sel = (int)i == s_sel;
-        if (id == kRowHead) { section_bar(dc, sl[i].x0, sl[i].x1, y, sections()[s_section], sel); continue; }
+        if (id == kRowHead) { section_bar(dc, sl[i].x0, sl[i].x1, y, sel); continue; }
         if (id < 0) {
             button(dc, sl[i].x0, y, id == kRowRestart ? L"Restart" : id == kRowDefaults ? L"Defaults" : id == kRowSetup211 ? L"Set up 2.11" : L"Close", sel);
             if (sel) cursor(dc, sl[i].x0 + kBtnW / 2 + 2, y + 18);
@@ -966,8 +1013,13 @@ void click(int mx, int my)
         if (id == kRowHead) {
             if (my >= y && my < y + kBarH && mx >= sl[i].x0 && mx < sl[i].x1) {
                 s_sel = 0;
-                if (mx < sl[i].x0 + 60) switch_section(-1);
-                else if (mx >= sl[i].x1 - 60) switch_section(+1);
+                if (mx < sl[i].x0 + 40) switch_section(-1);
+                else if (mx >= sl[i].x1 - 40) switch_section(+1);
+                else for (size_t t = 0; t < s_tabs.size(); t++)
+                    if (mx >= s_tabs[t].x0 && mx < s_tabs[t].x1 && (int)t != s_section) {
+                        switch_section((int)t - s_section);   /* straight to that page */
+                        break;
+                    }
                 return;
             }
         } else if (id < 0) {

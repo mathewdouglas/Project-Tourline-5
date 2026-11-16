@@ -93,7 +93,7 @@ try {
     Start-Sleep -Milliseconds 300; cap "list_open"
     key 0x1B                      # Esc closes the list
     key 0x22 2                    # Input, Controls
-    key 0x28; key 0x27             # Trigger response: linear -> gentle
+    key 0x28 2; key 0x27           # past Modern controls and Trigger dead zone: Trigger response linear -> gentle
     if (-not (Select-String -LiteralPath $toml -Pattern '^trigger_curve = 1$' -Quiet)) { throw 'Trigger response not saved' }
     cap 'controls'; key 0x22       # Feedback
     key 0x27

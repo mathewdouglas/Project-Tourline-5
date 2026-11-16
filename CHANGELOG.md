@@ -20,6 +20,13 @@ versions follow [SemVer](https://semver.org/).
   writes none. A device that cannot play the layout falls back to stereo.
   Restart to apply. `AUDIO_OUTPUT_CHANNELS=2|6|8|auto`.
 
+### Changed
+- **F1 settings: every page is named on the bar under the title** (Video,
+  Shaders, Input, Controls, Feedback, Keyboard, Game, Audio, Performance,
+  Debug), the current one highlighted, so you can see where L1/R1 go. Click a
+  name to jump to that page. `GT5P_SETTINGS_TABS=0` shows only the current
+  page's name, as before.
+
 ## [0.1.8] - 2026-11-16
 
 Fixes for the Windows 10 graphics error, 01.04 race sound and a shutdown
