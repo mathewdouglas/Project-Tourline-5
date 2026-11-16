@@ -121,7 +121,24 @@ static void runtime_path(const fs::path& p) {
     if (!n || lossy || n >= 480)
         fail(L"The current game runtime cannot use this path. Choose a shorter folder with characters supported by your Windows language:\n\n" + p.wstring());
 }
+static std::wstring hash_file(const fs::path& file, bool sha1, uint64_t omit);
+// One start checks the same engines and executables several times (selected
+// and other version, before and after setup): about 1.4 GB of SHA-256. A file
+// is hashed once per launcher run while its size and write time are unchanged.
+// PT5_HASH_MEMO=0: every check reads the file again.
 static std::wstring hash(const fs::path& file, bool sha1 = false, uint64_t omit = 0) {
+    static std::vector<std::pair<std::wstring, std::wstring>> memo;
+    std::error_code ec;
+    const auto size = fs::file_size(file, ec);
+    const auto time = ec ? 0 : fs::last_write_time(file, ec).time_since_epoch().count();
+    const bool use = !sha1 && !omit && !ec && env(L"PT5_HASH_MEMO") != L"0";
+    const std::wstring key = fs::absolute(file).lexically_normal().wstring() + L"|" + std::to_wstring(size) + L"|" + std::to_wstring(time);
+    if (use) for (const auto& [k, v] : memo) if (k == key) return v;
+    const auto h = hash_file(file, sha1, omit);
+    if (use) memo.push_back({key, h});
+    return h;
+}
+static std::wstring hash_file(const fs::path& file, bool sha1, uint64_t omit) {
     std::ifstream in(file, std::ios::binary);
     if (!in) fail(L"Cannot read: " + file.wstring());
     BCRYPT_ALG_HANDLE alg = nullptr;
@@ -891,7 +908,12 @@ static void link_installed_data(const fs::path& disc) {
     const auto volume = disc/L"USRDIR/GT.VOL";
     if (!volmap::enabled() || !fs::is_directory(pdipfs) || !fs::is_regular_file(volume)) return;
     const auto ini = target_data()/L"volmap.ini";
-    if (profile(ini, L"game", L"signature") == volmap::signature(pdipfs)) return;
+    const auto stored = profile(ini, L"game", L"signature"), now = volmap::signature(pdipfs);
+    if (stored == now) return;
+    // Stored by an older launcher (every file opened): compare that way once,
+    // then keep the listing-only signature.
+    if (!stored.empty() && stored.rfind(L"v2:", 0) != 0 && now.rfind(L"v2:", 0) == 0 &&
+        stored == volmap::signature_v1(pdipfs)) { setting(ini, L"signature", now); return; }
     CopyState state; state.total = 1000;
     volmap::Result result;
     with_progress(L"Freeing disk space", L"Game data that is already on your disc is replaced by links to the disc. This runs once after the game installs its data.", state, [&] {

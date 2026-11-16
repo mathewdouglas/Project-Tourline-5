@@ -717,6 +717,34 @@ run('--target=02.11',extra={**env_both,'PT5_TEST_MOD':str(log)})
 assert Path(str(log)+'.runs').read_text().splitlines()[0].split('\t')==['Off','0','<unset>']
 print('PASS: mods: ZIP install (PDIPFS only, add-on), other base/no data/path escape refused, save copied when turned on, F1 choice kept, PT5_MODS=0, overlay override, per version, remove')
 
+# Before each start the launcher checks whether the installed data changed
+# (virtual install, launcher/volmap.h). It reads the directory listing only:
+# opening every file took 67 s on a cold cache. An older launcher's signature
+# is compared the old way once, then replaced.
+release_ini=(WORK/'pt5-release.ini').read_text()
+(WORK/'pt5-release.ini').write_text(release_ini.replace('[game]\n','[game]\nvolmap=1\n',1))
+sig_ini=both_home/'volmap.ini'
+pdipfs104=both_home/'gamedata/dev_hdd0/game/BCUS98114/USRDIR/PDIPFS'
+def stored_sig():
+    raw=sig_ini.read_bytes()
+    text=raw.decode('utf-16') if raw[:2]==b'\xff\xfe' else raw.decode()
+    return [l.split('=',1)[1] for l in text.splitlines() if l.startswith('signature=')][0]
+sig_ini.unlink(missing_ok=True)
+run('--target=01.04',extra=env_both)
+first=stored_sig(); assert first.startswith('v2:'), first
+def v1_sig():   # the old launcher's: real (non-record) files and bytes
+    files=[q for q in pdipfs104.rglob('*') if q.is_file() and q.read_bytes()[:8]!=b'PT5VMAP1']
+    return '%d:%d'%(len(files),sum(q.stat().st_size for q in files))
+sig_ini.write_text('[game]\nsignature='+v1_sig()+'\n')
+run('--target=01.04',extra=env_both)
+assert stored_sig()==first, (stored_sig(),first)   # old one matched: replaced, no new pass
+(pdipfs104/'00/NEW').write_bytes(b'written by the game')
+run('--target=01.04',extra=env_both)
+assert stored_sig()!=first and stored_sig().startswith('v2:')   # new data is noticed
+(pdipfs104/'00/NEW').unlink()
+(WORK/'pt5-release.ini').write_text(release_ini)
+print('PASS: installed-data check reads the listing only, replaces an old signature once, notices new data')
+
 # Run the production package-chain installer with tiny synthetic package pins.
 # Every stage is handled by the fixture RPCS3, never by a real emulator.
 (disc/'INSDIR').mkdir(exist_ok=True)

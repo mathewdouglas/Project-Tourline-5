@@ -184,7 +184,10 @@ inline Result convert(const fs::path& root, const fs::path& volume, const std::a
 
 // Count and bytes of the ordinary (non-record) files under root: unchanged
 // since the last conversion means there is nothing new to convert.
-inline std::wstring signature(const fs::path& root) {
+// The first signature: real (non-record) files and their bytes. It opens
+// every file to tell records apart, which took 67 s on a cold cache (16,666
+// files, each open scanned) and 1.3 s warm, before every start.
+inline std::wstring signature_v1(const fs::path& root) {
     uint64_t files = 0, bytes = 0;
     if (!fs::is_directory(root)) return L"none";
     for (const auto& entry : fs::recursive_directory_iterator(root)) {
@@ -192,6 +195,23 @@ inline std::wstring signature(const fs::path& root) {
         ++files; bytes += entry.file_size();
     }
     return std::to_wstring(files) + L":" + std::to_wstring(bytes);
+}
+// From the directory listing only (no file is opened): all files, their bytes
+// and the newest write time. Any file the game adds, grows or rewrites changes
+// it; a conversion's records change it too, so it is taken after converting.
+// PT5_VOLMAP_SIG=1: the first signature.
+inline std::wstring signature(const fs::path& root) {
+    if (env(L"PT5_VOLMAP_SIG") == L"1") return signature_v1(root);
+    if (!fs::is_directory(root)) return L"none";
+    uint64_t files = 0, bytes = 0;
+    long long newest = 0;
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(root, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (!it->is_regular_file(ec)) continue;
+        ++files; bytes += it->file_size(ec);
+        newest = std::max<long long>(newest, it->last_write_time(ec).time_since_epoch().count());
+    }
+    return L"v2:" + std::to_wstring(files) + L":" + std::to_wstring(bytes) + L":" + std::to_wstring(newest);
 }
 
 // Only with an engine that serves records (pt5-release.ini volmap=1): an older
