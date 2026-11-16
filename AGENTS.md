@@ -209,6 +209,9 @@ exit code (`pt5_restart::mod_select|N`, `mods_manage`), and the launcher sets
 `PS3_FS_OVERLAY` before each start (`PT5_MODS=0` off; `--mods`,
 `--install-mod`, `--remove-mod`). See setup-v211.md "Mods"; test in
 `player_setup.py`.
+Launcher starts: the installed-data check (`volmap::signature`) reads the
+listing only (opening all ~16,700 files took 67 s cold; `PT5_VOLMAP_SIG=1`
+old), and `hash()` hashes each file once per run (`PT5_HASH_MEMO=0` off).
 2.11 was checked live to load an 01.04 save. Surround output (#21): GT5
 mixes discrete 5.1 into its 8-channel port; `AUDIO_OUTPUT_CHANNELS=2|6|8|auto`
 (runtime cellAudio/cellAvconfExt; `audio.output`, F1 AUDIO, RecompLauncher

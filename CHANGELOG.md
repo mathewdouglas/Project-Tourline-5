@@ -46,6 +46,13 @@ versions follow [SemVer](https://semver.org/).
   page's name, as before.
 
 ### Fixed
+- **Starting the game sometimes showed nothing for 20 s or more.** Before
+  each start the launcher checks whether the game has installed new data (to
+  shrink it, as the virtual install does), and it opened all ~16,700 installed
+  files to do so: 67 s when Windows had not read them recently, 1.3 s when it
+  had. It now reads only the folder listing (0.05 s). It also checked the
+  same engine files several times per start (about 1.4 GB read); each is now
+  read once. `PT5_VOLMAP_SIG=1` and `PT5_HASH_MEMO=0` restore the old checks.
 - **Crash while finishing an early startup exit** (issue #23). The engine
   keeps guest memory mapped until process termination, so background rendering
   cannot read it after it has been released. This fixes the shutdown crash;

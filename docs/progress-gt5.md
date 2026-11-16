@@ -38,6 +38,39 @@ This prevents the secondary native memory fault; the initiating black-screen
 startup exit remains unexplained. It is separate from Windows 10 cube-upload
 Close failures and does not invalidate the 0.1.8 event-queue wakeup fix.
 
+## 0.1.9 (2026-11-16): slow starts from the launcher
+
+**Symptom (user).** Started from RecompLauncher, the game sometimes shows
+nothing for about 20 s before its window appears.
+
+**Measured** (the user's storage, NVMe, read-only):
+
+- `link_installed_data` runs before every start. Its `volmap::signature`
+  opened every installed `PDIPFS` file to tell records apart: 16,666 files
+  (12,414 records) took **66.8 s** on the first walk and 1.3 s right after
+  (Python walk doing the same opens). Cold opens of many small files are what
+  was slow (most likely Windows Defender scanning each open; not separated
+  from file-system caching).
+- `--check` (one engine and one executable hashed) takes 1.0 s. A start
+  hashes the selected engine about four times, the other engine twice and
+  executables three times: about 1.4 GB of SHA-256, roughly 3-4 s.
+
+**Change** (launcher).
+
+- The signature now comes from the directory listing only (all files,
+  their bytes, newest write time; `v2:` prefix). A listing walk of the same
+  data takes 0.05 s. A stored old-format signature is compared the old way
+  once, then replaced, so data written under an old launcher is still
+  converted. `PT5_VOLMAP_SIG=1` keeps the old walk.
+- `hash()` remembers each file's SHA-256 for the launcher run, keyed by path,
+  size and write time (`PT5_HASH_MEMO=0` off).
+
+**Tests.** `player_setup.py` passes, with a new section: the listing-only
+signature is written, an old one is replaced once without a new pass, and a
+file the game adds changes it. Not measured: a whole start from RecompLauncher
+on the user's machine after the change, and how long Windows takes to scan the
+engine itself the first time it starts (outside the launcher's control).
+
 ## 0.1.9 (2026-11-16): mods in the launcher and F1
 
 Players install, remove and pick data mods without touching their install
