@@ -4,6 +4,38 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.9 (2026-11-16): 21:9 popup text cut off
+
+User report: entering GT Mode's Dealerships for the first time at 2560x1080,
+the "Information" popup's text stops mid-line at about x=1380.
+
+- **Reproduction.** The popup shows once per save. A fresh save (the save
+  folder moved aside) shows GT Life's "This is your My Home" popup on the
+  first Cross into GT Life (`$GT5BootHold,@MusicDecode+7000-7200:CROSS`),
+  cut off the same way with the 0.1.8 engine at `GT5P_ULTRAWIDE=1`.
+- **Not the scissor.** An `RSX_CAP` frame has the popup's scissors
+  (`628,263,664x554`, text `637,313,645x382`) exactly on the drawn box once
+  scaled by 4/3. The text draws (fp `0x0581FD41`, VS slot 3) multiply alpha
+  by `saturate(tc2) * saturate(tc3)` ramps; tc2 is
+  `(ndc.xxyy - c[133]) * c[134]` in screen space (tc3 the same in layout
+  space, c[128]/c[129]; the label mask is c[131]).
+- **The code.** `func_00A5D384` (second entry `0x00A5D394`) builds them
+  from the box rectangle: x edges `x / (W/2) - 1` (stored at +0x190/+0x194,
+  c[133]) and the label mask origin (+0x170, c[131]), with W, H from
+  `[r30+8]`/`[r30+0xC]` halved into fpr[31]/fpr[29] and 1.0 in fpr[30].
+  That is Prologue's `func_00768340` bug: with the UI laid out 16:9 and
+  centred in a 2560-wide screen, the offset is 0.75, not 1, so the clip edge
+  sat 320 px left of the box's right edge. Found with
+  a shape search (two `rect/(W/2)` quotients minus one shared register, and a
+  `one - y/(H/2)`); the earlier offset-based searches missed it.
+  2.11 has the same function at `0x008F53B8`, same registers.
+- **Fix.** `ui_mask_patch.py` takes `ui_mask_sites` (function, x registers,
+  one/w/h registers) and now preserves CRLF lifts byte for byte; patch, check
+  and restore round-trip exactly on 01.04, 2.11 and Prologue lifts (Prologue
+  output unchanged). A 0.1.8 engine relinked with the two patched chunks
+  shows the whole message at 21:9.
+  `GT5P_UI_MASK_FIX=0` restores the cut.
+
 ## Release 0.1.8 published (2026-11-16)
 
 Tag `v0.1.8` = `1258f29`. Both engines built at once for the first time

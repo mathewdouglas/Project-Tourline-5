@@ -27,6 +27,13 @@ versions follow [SemVer](https://semver.org/).
   name to jump to that page. `GT5P_SETTINGS_TABS=0` shows only the current
   page's name, as before.
 
+### Fixed
+- **21:9: GT Mode's "Information" messages are no longer cut off mid-line**
+  (the first My Home and Dealerships messages, and other text boxes that
+  clip their text). GT5 placed the text's clip edge for a 16:9 screen, a
+  quarter of the screen too far left. `GT5P_UI_MASK_FIX=0` restores it.
+  Applies to 01.04; 2.11 has the same fix ready for when it gets ultrawide.
+
 ## [0.1.8] - 2026-11-16
 
 Fixes for the Windows 10 graphics error, 01.04 race sound and a shutdown

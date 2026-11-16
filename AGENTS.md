@@ -183,6 +183,11 @@ coefficient constructor calls in round-toward-zero
 **0.1.9 (in progress, `release/v0.1.9`).** The launcher offers, once, to copy
 the 01.04 save into 2.11 before 2.11's first start without its own save
 (`offer_104_save`, `PT5_SAVE_COPY=0|1`, `--copy-104-save`; setup-v211.md).
+21:9 popup text cut off (GT Life's first Information messages): GT5's text
+renderer (`func_00A5D384`/`94`, 2.11 `0x008F53B8`) puts its NDC clip edges
+(c[133]) and label mask (c[131]) at x/(W/2) - 1; `ui_mask_patch.py` now
+patches them too (`ui_mask_sites`). Reproduce on a fresh save (move the save
+folder aside): Cross into GT Life shows the popup.
 2.11 was checked live to load an 01.04 save. Surround output (#21): GT5
 mixes discrete 5.1 into its 8-channel port; `AUDIO_OUTPUT_CHANNELS=2|6|8|auto`
 (runtime cellAudio/cellAvconfExt; `audio.output`, F1 AUDIO, RecompLauncher
@@ -1891,7 +1896,7 @@ Run Python through the repo's virtual environment: `.venv\Scripts\python`.
 | `scripts/self_metainfo.py`, `scripts/decrypt_self.py` | SELF decryption helpers; need a `data/keys` file that is not in the repo |
 | `scripts/setjmp_patch.py` | Post-lift patch, required after every lift |
 | `scripts/spin_patch.py` | Post-lift patch, required after every lift: guest spin waits on SPU progress yield (`spin_waits` in `config/targets.json`) |
-| `scripts/ui_mask_patch.py` | Post-lift patch, required after every lift: menu label fade mask centred in ultrawide (`ui_label_mask_func`; `GT5P_UI_MASK_FIX=0` off) |
+| `scripts/ui_mask_patch.py` | Post-lift patch, required after every lift: text fade/clip masks centred in ultrawide (`ui_mask_sites`, Prologue's `ui_label_mask_func`; `GT5P_UI_MASK_FIX=0` off) |
 | `scripts/spu_native_patch.py` | Post-SPU-lift patch, required: hooks native replacements (`src/gt5p_spu_native.c`) into lifted SPU blocks (`spu_native_hooks`); `GT5P_SPU_NATIVE=0` off, `=2` check |
 | `scripts/spu_regpromo.py` | Post-SPU-lift patch, after `spu_native_patch.py`: copies of hot lifted SPU functions with registers in locals (`spu_regpromo`); `GT5P_SPU_REGPROMO=0` off (default), `1` on, `2` check, `3` A/B; measured slower (Phase 44) |
 | `scripts/spu_region.py` | Post-SPU-lift patch, required, after `spu_regpromo.py`: merges listed loops of lifted SPU functions into one with registers as `__m128i` locals (`spu_regions`); `GT5P_SPU_REGION=1` default, `0` off, `3` A/B; Eiger frames 7.5-8% shorter (Phase 45) |

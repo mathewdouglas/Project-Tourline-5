@@ -217,7 +217,7 @@ then confirmed by the method in the table.
 | --- | --- | --- |
 | `setjmp_patch.py` | runs from the new `setjmp`/`longjmp` | low |
 | `spin_patch.py`, `spin_waits` (5 ranges: `0x00D1B930`-`0x00D1B9B0`, `0x00D1DE20`-`0x00D1DE48`, three single sites at `0x00C34BDC`, `0x00C35254`, `0x00C357FC`) | `port_addresses.py`, then confirm each is still a pure wait loop (Phase 40 rule: no stores, no service calls in the waiting path); `spin_waits.py` test must be generalised | medium |
-| `ui_mask_patch.py`, `ui_label_mask_func` | Prologue only; GT5 has none. Reports "nothing" | none |
+| `ui_mask_patch.py`, `ui_mask_sites` (`0x008F53B8`, 01.04's `0x00A5D384`/`94`) | found by the 01.04 shape (W/2, H/2 from `[r30+8]`/`[+0xC]`, three `- fpr[30]` x edges); identical registers | low |
 | `spu_native_patch.py`: `spu_native_hooks` (`b0196FF40` `0x4C14` `gt5p_spu_clear_words`), `spu_audio_round_zero_calls` (`j9804ABA8` `0x4E8`) | bodies are named by load address: if the body bytes are identical, rename to its 2.11 address and keep the offset; if not, re-find the loop and re-run `spu_clear.py` and `audio_coefficients.py` | low if identical, high if not (wrong hook = silent corruption) |
 | `spu_regpromo.py`, `spu_regpromo` | off by default (measured slower); leave the key out | none |
 | `spu_region.py`, `spu_regions` (two loop sets in `b01697100`) | same as native hooks; exactness re-checked with `spu_loop_bench.py` on new captures | medium |
