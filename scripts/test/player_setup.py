@@ -616,6 +616,42 @@ assert before104==snapshot(both_home/'gamedata') and before211==snapshot(both_ho
 run('--check',extra=env_both)
 print('PASS: dual-version import, identity rejection, separate roots, managed version switch and 2.17 refusal')
 
+# Copying the 01.04 save to 2.11 (offer before 2.11 starts; --copy-104-save).
+save104=both_home/'gamedata/dev_hdd0/home/00000001/savedata'
+save211=both_home/'targets/BCUS98114-v211/gamedata/dev_hdd0/home/00000001/savedata'
+answer=both_home/'targets/BCUS98114-v211/save-copy.ini'
+for d,payload in (('BCUS98114-GAME',b'01.04 progress'),('BCUS98114-BKUP',b'01.04 backup')):
+    (save104/d).mkdir(parents=True,exist_ok=True)
+    sfo(save104/d/'PARAM.SFO',TITLE_ID='BCUS98114')
+    (save104/d/'GT5.0').write_bytes(payload)
+original104=snapshot(save104)
+run('--target=02.11',extra=env_both)                       # silent run: never asks, records nothing
+assert not save211.exists() and not answer.exists()
+run('--target=02.11',extra={**env_both,'PT5_SAVE_COPY':'0'})
+assert not save211.exists() and not answer.exists()
+run('--target=01.04',extra={**env_both,'PT5_SAVE_COPY':'1'})  # only before 2.11
+assert not save211.exists() and not answer.exists()
+run('--target=02.11',extra={**env_both,'PT5_SAVE_COPY':'1'})
+assert (save211/'BCUS98114-GAME/GT5.0').read_bytes()==b'01.04 progress'
+assert (save211/'BCUS98114-BKUP/GT5.0').read_bytes()==b'01.04 backup'
+assert 'copied' in answer.read_text(encoding='utf-16')
+assert snapshot(save104)==original104, '01.04 save must only be read'
+assert not [p for p in save211.iterdir() if '.copy-' in p.name], 'no staging left behind'
+# Answered once: a later launch does not copy again.
+(save104/'BCUS98114-GAME/GT5.0').write_bytes(b'01.04 later')
+(save211/'BCUS98114-GAME/GT5.0').write_bytes(b'2.11 progress')
+run('--target=02.11',extra={**env_both,'PT5_SAVE_COPY':'1'})
+assert (save211/'BCUS98114-GAME/GT5.0').read_bytes()==b'2.11 progress'
+# --copy-104-save replaces 2.11's save and keeps it under backups/.
+run('--copy-104-save','--target=02.11',success=False,extra=env_both)
+run('--copy-104-save',extra=env_both)
+assert (save211/'BCUS98114-GAME/GT5.0').read_bytes()==b'01.04 later'
+kept=list((both_home/'backups').glob('save-211-*/00000001/BCUS98114-GAME/GT5.0'))
+assert len(kept)==1 and kept[0].read_bytes()==b'2.11 progress', kept
+nosave_home=WORK/'no 01.04 save'
+run('--copy-104-save',success=False,extra={'PT5_LAUNCHER_HOME':str(nosave_home)})
+print('PASS: 01.04 save copied to 2.11 once (PT5_SAVE_COPY=1), never when silent or =0, --copy-104-save keeps a backup')
+
 # Run the production package-chain installer with tiny synthetic package pins.
 # Every stage is handled by the fixture RPCS3, never by a real emulator.
 (disc/'INSDIR').mkdir(exist_ok=True)

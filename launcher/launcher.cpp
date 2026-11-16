@@ -935,12 +935,98 @@ static void report(const std::wstring& message) {
     } catch (...) {}
     if (!quiet && !silent_errors) MessageBoxW(nullptr, message.c_str(), L"Project Tourline 5", MB_OK|MB_ICONERROR);
 }
+/* Copy 01.04's GT5 save into 2.11's own storage, so a player starting 2.11 can
+ * carry their progress over. Each version keeps its own saves; 2.11 reads an
+ * 01.04 save as the console's update does (checked: it loads it, writes its
+ * backup save, menus and Arcade work). The 01.04 save is only read. Whatever
+ * 2.11 already has in those folders moves to backups/ first.
+ * PT5_SAVE_COPY=0: never offer; =1: copy without asking (tests, silent runs). */
+static const wchar_t* const save_dirs[] = {L"BCUS98114-GAME", L"BCUS98114-BKUP"};
+static fs::path save_home(const Target& t) {
+    return (&t == &targets[0] ? data : data/L"targets"/t.id) / L"gamedata/dev_hdd0/home";
+}
+/* User folders (normally 00000001) holding a 01.04 GT5 save. */
+static std::vector<fs::path> users_with_104_save() {
+    std::vector<fs::path> users;
+    std::error_code ec;
+    if (!fs::is_directory(save_home(targets[0]), ec)) return users;
+    for (const auto& user : fs::directory_iterator(save_home(targets[0]), ec))
+        if (user.is_directory() && fs::is_regular_file(user.path()/L"savedata"/save_dirs[0]/L"PARAM.SFO"))
+            users.push_back(user.path().filename());
+    return users;
+}
+static bool has_211_save() {
+    std::error_code ec;
+    if (!fs::is_directory(save_home(targets[1]), ec)) return false;
+    for (const auto& user : fs::directory_iterator(save_home(targets[1]), ec))
+        if (fs::exists(user.path()/L"savedata"/save_dirs[0])) return true;
+    return false;
+}
+static void copy_104_save() {
+    const auto users = users_with_104_save();
+    if (users.empty()) fail(L"No GT5 01.04 save was found to copy.");
+    const auto backup = data / L"backups" / (L"save-211-" + unique_name());
+    for (const auto& user : users) {
+        const auto from = save_home(targets[0]) / user / L"savedata";
+        const auto to = save_home(targets[1]) / user / L"savedata";
+        fs::create_directories(to);
+        for (const auto* dir : save_dirs) {
+            if (!fs::is_directory(from/dir)) continue;
+            const auto staged = to / (std::wstring(dir) + L".copy-" + unique_name());
+            try { copy_verified(from/dir, staged, L"Copying your GT5 01.04 save"); }
+            catch (...) { std::error_code ec; fs::remove_all(staged, ec); throw; }   // launcher-owned staging only
+            if (fs::exists(to/dir)) { fs::create_directories(backup/user); fs::rename(to/dir, backup/user/dir); }
+            fs::rename(staged, to/dir);
+        }
+    }
+}
+/* Before 2.11 starts: once, if 2.11 has no save of its own and 01.04 has one. */
+static void offer_104_save() {
+    if (target != &targets[1]) return;
+    const auto mode = env(L"PT5_SAVE_COPY");
+    const auto answered = data/L"targets"/targets[1].id/L"save-copy.ini";
+    if (mode == L"0" || fs::exists(answered) || has_211_save() || users_with_104_save().empty()) return;
+    bool copy = mode == L"1";
+    if (!copy) {
+        if (silent_errors || quiet) return;   // ask on the next interactive launch
+        TASKDIALOG_BUTTON buttons[] = {
+            {100, L"Copy my 01.04 progress\nYour garage, credits and progress continue in 2.11. Your 01.04 save is not changed; from then on the two versions progress separately."},
+            {101, L"Start 2.11 with a new save\nYou can copy it later with tourline5.exe --copy-104-save."}};
+        TASKDIALOGCONFIG td{}; td.cbSize = sizeof td;
+        td.dwFlags = static_cast<TASKDIALOG_FLAGS>(TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION);
+        td.pszWindowTitle = L"Project Tourline 5 - GT5 2.11";
+        td.pszMainInstruction = L"Continue your 01.04 progress in 2.11?";
+        td.pszContent = L"GT5 2.11 has no save yet. It can start from a copy of your 01.04 save, as the console's update would. "
+                        L"Once 2.11 saves, do not copy that save back to 01.04.";
+        td.pButtons = buttons; td.cButtons = 2; td.dwCommonButtons = TDCBF_CANCEL_BUTTON; brand(td);
+        int choice = IDCANCEL;
+        if (FAILED(TaskDialogIndirect(&td, &choice, nullptr, nullptr)) || choice == IDCANCEL) return;   // ask again next time
+        copy = choice == 100;
+    }
+    if (copy) copy_104_save();
+    fs::create_directories(answered.parent_path());
+    atomic_ini(answered, {{L"save_copy", copy ? L"copied" : L"declined"}});
+}
+/* --copy-104-save: copy later, replacing 2.11's save (moved to backups/ first). */
+static void copy_104_save_command() {
+    if (users_with_104_save().empty()) fail(L"No GT5 01.04 save was found to copy.");
+    if (!fs::is_directory(data/L"targets"/targets[1].id/L"gamedata"))
+        fail(L"GT5 2.11 is not set up in this storage. Set it up first: F1 > Game > Set up 2.11, or tourline5.exe --setup.");
+    if (!silent_errors && has_211_save() &&
+        MessageBoxW(nullptr, L"Replace your GT5 2.11 save with a copy of your 01.04 save?\n\n"
+                             L"Your current 2.11 save is moved to the backups folder in your storage, and your 01.04 save is not changed.",
+                    L"Project Tourline 5 - copy 01.04 save", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+        throw Cancelled{};
+    copy_104_save();
+    atomic_ini(data/L"targets"/targets[1].id/L"save-copy.ini", {{L"save_copy", L"copied"}});
+    if (!silent_errors) MessageBoxW(nullptr, L"Your 01.04 save was copied to GT5 2.11.", L"Project Tourline 5", MB_OK | MB_ICONINFORMATION);
+}
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     struct Com { HRESULT result; ~Com() { if (SUCCEEDED(result)) CoUninitialize(); } } apartment{com};
     silent_errors = env(L"PT5_SETUP_UI") == L"0";
     try {
-        bool force = false, open = false, change_storage = false, configure_only = false;
+        bool force = false, open = false, change_storage = false, configure_only = false, copy_save = false;
         fs::path storage, disc, installed, elf;
         bool explicit_target = false;
         int argc = 0; auto argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -958,6 +1044,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             else if (arg == L"--configure") { force = true; configure_only = true; silent_errors = true; }
             else if (arg == L"--check") { quiet = true; silent_errors = true; }
             else if (arg == L"--open-data") open = true;
+            else if (arg == L"--copy-104-save") copy_save = true;
             else if (arg == L"--choose-storage") change_storage = true;
             else if (arg.rfind(L"--executable=", 0) == 0) {
                 if (arg.size() == 13) fail(L"The Executable / RPCS3 input is empty.");
@@ -973,11 +1060,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 else if (arg == L"--game") disc = value;
                 else if (arg == L"--game-data") installed = value;
                 else elf = value;
-            } else fail(L"Supported options: --setup, --check, --open-data, --choose-storage, --set-storage <empty folder>, --configure --game <dump> [--elf <ELF or rpcs3.exe>] [--game-data <installation> --elf <ELF or rpcs3.exe>], --recomplauncher-prepare --game <dump> [--game-data=<installation>] [--executable=<ELF or rpcs3.exe>].");
+            } else fail(L"Supported options: --setup, --check, --open-data, --copy-104-save, --choose-storage, --set-storage <empty folder>, --configure --game <dump> [--elf <ELF or rpcs3.exe>] [--game-data <installation> --elf <ELF or rpcs3.exe>], --recomplauncher-prepare --game <dump> [--game-data=<installation>] [--executable=<ELF or rpcs3.exe>].");
         }
         if (!package_folder.empty() && target != &targets[1]) fail(L"Update packages select GT5 2.11; remove the conflicting --target option.");
         if ((quiet && (force || open || change_storage || !storage.empty())) ||
             (open && (force || change_storage || !storage.empty())) ||
+            (copy_save && (quiet || open || force || change_storage || !storage.empty() || explicit_target)) ||
             (force && (change_storage || !storage.empty())) ||
             (change_storage && !storage.empty()) ||
             (configure_only && (disc.empty() || (!easy_setup && elf.empty() && !installed.empty()))) ||
@@ -1031,6 +1119,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         if (home_lock.h == INVALID_HANDLE_VALUE || data_lock.h == INVALID_HANDLE_VALUE)
             fail(L"Project Tourline 5 is already running, or this storage is not writable.");
         if (!override_data) link_storage(home);
+        if (copy_save) { copy_104_save_command(); return 0; }
         const bool first = !fs::exists(data/L"setup.ini") && !fs::exists(data/L"selection.ini") && !override_data && !configure_only && env(L"PT5_STORAGE_PICKER") != L"0" && !silent_errors;
         if (!override_data && (change_storage || !storage.empty() || first)) {
             auto selected = storage.empty() ? storage_picker() : storage;
@@ -1086,6 +1175,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         const auto selected_game = game_folder(profile(target_data()/L"setup.ini", L"game", L"directory"));
         setenv(L"GT5P_GAME_DIR", selected_game.wstring()+L"/");
         link_installed_data(selected_game);
+        try { offer_104_save(); }
+        catch (const Cancelled&) {}   // copy cancelled: nothing recorded, offered again next launch
+        catch (const Failure& f) { report(L"Your 01.04 save was not copied; 2.11 starts with its own save.\n\n" + f.message); }
+        catch (const fs::filesystem_error&) { report(L"Your 01.04 save could not be copied (check free space and folder access); 2.11 starts with its own save."); }
         setenv(L"RSX_SHADER_CACHE", cache_override.empty() ? (target_data()/L"shadercache").wstring() : cache_override);
         setenv(L"GT5P_GAME_VERSION", target->version);
         setenv(L"GT5P_VERSION_211_SUPPORTED", target_ready(targets[1], false) ? L"1" : L"0");

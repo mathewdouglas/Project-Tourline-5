@@ -146,7 +146,7 @@ def collect(args, version):
              'START-HERE.txt': text(ROOT / 'launcher/START-HERE.txt'),
              'CHANGELOG.md': text(ROOT / 'CHANGELOG.md')}
     files['recomplauncher.json'] = recomplauncher_manifest()
-    for name in ('Change storage.cmd', 'Change game files.cmd', 'Open storage.cmd'):
+    for name in ('Change storage.cmd', 'Change game files.cmd', 'Open storage.cmd', 'Copy 01.04 save to 2.11.cmd'):
         files[name] = text(ROOT / 'launcher' / name)
     for name in RUNTIME_DLLS:
         files[name] = pe_x64(build / name)

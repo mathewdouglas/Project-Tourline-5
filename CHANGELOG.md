@@ -3,6 +3,17 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
+## [0.1.9] - unreleased
+
+### Added
+- **Carry your 01.04 progress into GT5 2.11.** The first time 2.11 starts
+  without a save of its own, the launcher offers to copy your 01.04 save into
+  it. Your 01.04 save is only read, and from then on the two versions
+  progress separately. To copy it later, run "Copy 01.04 save to 2.11.cmd"
+  (or `tourline5.exe --copy-104-save`); 2.11's current save is moved to the
+  backups folder first. `PT5_SAVE_COPY=0` never offers it. Do not copy a
+  2.11 save back to 01.04.
+
 ## [0.1.8] - 2026-11-16
 
 Fixes for the Windows 10 graphics error, 01.04 race sound and a shutdown

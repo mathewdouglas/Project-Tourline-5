@@ -25,7 +25,21 @@ launches do not offer launcher-owned version controls.
 Once installed, **F1 > Game > Game version** selects 01.04 or 2.11; choose
 Restart to switch. An unavailable version cannot be selected. The launcher
 validates the selected setup and engine again before switching, and remembers
-the last successfully selected version. Existing saves are not migrated.
+the last successfully selected version.
+
+**Carrying 01.04 progress over (0.1.9).** Saves stay separate per version.
+Before 2.11 starts, if it has no `BCUS98114-GAME` save and 01.04 has one, the
+launcher asks once whether to copy the 01.04 save (`BCUS98114-GAME` and
+`BCUS98114-BKUP`, each user folder under `gamedata/dev_hdd0/home`) into 2.11's
+storage. The copy is staged and verified file by file; anything already in
+2.11's save folders moves to `backups/save-211-*` first; the 01.04 save is
+only read. The answer is kept in `targets/BCUS98114-v211/save-copy.ini`.
+Silent runs never ask (the question waits for the next interactive launch).
+`PT5_SAVE_COPY=0` never offers; `=1` copies without asking. Later copies:
+`tourline5.exe --copy-104-save` ("Copy 01.04 save to 2.11.cmd"), which asks
+before replacing an existing 2.11 save. Checked live: 2.11 loads an 01.04 save,
+writes its own backup save, and its menus and Arcade work. A 2.11 save is not
+copied back to 01.04: once 2.11 writes it, 01.04 may not read it.
 
 PC settings are shared between versions. Existing 01.04 data stays in its
 original storage layout; no migration is required:

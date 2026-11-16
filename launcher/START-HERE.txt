@@ -69,8 +69,13 @@ matching executable. No game updates are downloaded. Native Change game files
 also offers a version choice. F1 > Game > Set up 2.11 opens setup when the
 2.11 engine is included; Game version and Restart switch installed versions.
 Each version keeps separate game data, saves and shaders. PC settings are
-shared. No save conversion is performed. Other updates, including 2.17, are
-refused.
+shared. Other updates, including 2.17, are refused.
+
+Your 01.04 progress in 2.11: the first time 2.11 starts without a save of its
+own, tourline5.exe offers to copy your 01.04 save into 2.11. Your 01.04 save
+is only read; after that the two versions progress separately. To copy it
+later, run "Copy 01.04 save to 2.11.cmd" (it moves 2.11's current save to
+the backups folder first). Do not copy a 2.11 save back to 01.04.
 
 2.11 is EXPERIMENTAL and may have issues. It boots, reaches the menus and
 runs Arcade races, but it has had far less testing than 01.04. Some PC
