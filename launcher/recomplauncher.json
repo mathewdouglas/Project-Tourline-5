@@ -364,6 +364,41 @@
       }
     },
     {
+      "id": "sound_output",
+      "label": "Sound Output",
+      "group": "Audio",
+      "help": "GT5 mixes 5.1 surround. Stereo folds it down; 5.1 or 7.1 sends it to surround speakers; Auto follows the Windows speaker setup. Restart to apply.",
+      "choices": [
+        {
+          "label": "Stereo",
+          "set": {
+            "audio/output": "\"stereo\""
+          }
+        },
+        {
+          "label": "5.1 Surround",
+          "set": {
+            "audio/output": "\"5.1\""
+          }
+        },
+        {
+          "label": "7.1 Surround",
+          "set": {
+            "audio/output": "\"7.1\""
+          }
+        },
+        {
+          "label": "Auto",
+          "set": {
+            "audio/output": "\"auto\""
+          }
+        }
+      ],
+      "defaults": {
+        "audio/output": "\"stereo\""
+      }
+    },
+    {
       "id": "button_prompts",
       "label": "Button Prompts",
       "group": "Input",

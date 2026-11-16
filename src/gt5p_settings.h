@@ -58,6 +58,9 @@ struct Gt5pSettings {
     bool smooth_colour = true;  /* 16-bit targets, no dither noise (RSX_HIGH_PRECISION) */
     int anisotropy = 16;        /* 1 (trilinear), 4, 8 or 16: forced anisotropic filtering (RSX_ANISO) */
 
+    /* [audio] */
+    int audio_channels = 2;     /* sound output: 2 stereo, 6 (5.1), 8 (7.1), 0 auto (AUDIO_OUTPUT_CHANNELS) */
+
     /* [performance] */
     int vblank_hz100 = 5994;    /* the vblank clock, in 1/100 Hz: 5994 (console) or 6250 */
     int lane_cores   = 2;       /* SPU render lanes on cores of their own: 0 off, 1 hint, 2 strict */

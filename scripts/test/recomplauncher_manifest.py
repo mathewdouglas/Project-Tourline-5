@@ -30,6 +30,7 @@ ACCEPTED = {
     ('video', 'shader_compiler'): {'dxc', 'fxc'},
     ('input', 'trigger_deadzone'): set(range(21)),
     ('input', 'trigger_curve'): {0, 1, 2},
+    ('audio', 'output'): {'stereo', '5.1', '7.1', 'auto'},   # read_audio_output()
 }
 BOOLEAN = {True, False}
 
@@ -71,6 +72,9 @@ cross = "Z"
 skip_movie = false
 smooth_colour = true
 anisotropy = 16
+
+[audio]
+output = "stereo"
 
 [performance]
 vblank_hz = 59.94

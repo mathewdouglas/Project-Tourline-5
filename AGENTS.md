@@ -183,7 +183,11 @@ coefficient constructor calls in round-toward-zero
 **0.1.9 (in progress, `release/v0.1.9`).** The launcher offers, once, to copy
 the 01.04 save into 2.11 before 2.11's first start without its own save
 (`offer_104_save`, `PT5_SAVE_COPY=0|1`, `--copy-104-save`; setup-v211.md).
-2.11 was checked live to load an 01.04 save.
+2.11 was checked live to load an 01.04 save. Surround output (#21): GT5
+mixes discrete 5.1 into its 8-channel port; `AUDIO_OUTPUT_CHANNELS=2|6|8|auto`
+(runtime cellAudio/cellAvconfExt; `audio.output`, F1 AUDIO, RecompLauncher
+Sound Output) plays it, stereo default; `AUDIO_CHSTAT=1` logs per-channel
+levels (audio.md).
 
 **Release 0.1.8** (tag `v0.1.8`, commit `1258f29`): both engines built at
 once with `clean_build.py --wait-211` (21 min); see progress-gt5.md. Write

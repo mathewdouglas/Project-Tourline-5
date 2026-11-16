@@ -13,6 +13,12 @@ versions follow [SemVer](https://semver.org/).
   (or `tourline5.exe --copy-104-save`); 2.11's current save is moved to the
   backups folder first. `PT5_SAVE_COPY=0` never offers it. Do not copy a
   2.11 save back to 01.04.
+- **Surround sound** (issue #21). GT5 mixes 5.1, which the port used to fold
+  down to stereo. F1 > AUDIO > Sound output (or RecompLauncher's Sound
+  Output, `audio.output`) now offers Stereo (the default), 5.1, 7.1 and Auto
+  (follows the Windows speaker setup). 7.1 adds silent side speakers: GT5
+  writes none. A device that cannot play the layout falls back to stereo.
+  Restart to apply. `AUDIO_OUTPUT_CHANNELS=2|6|8|auto`.
 
 ## [0.1.8] - 2026-11-16
 

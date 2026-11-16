@@ -132,6 +132,32 @@ The DMA scan that found this (`SPU_NANSCAN`, with `SPU_NANSCAN_RANGE` and
 `SPU_NANSCAN_IMG`) is a private runtime diff, `scratch/v211/nanscan.diff`.
 It is not in the runtime patch.
 
+## Surround output (0.1.9, issue #21)
+
+GT5 opens its audio ports with 8 channels and fills them in the PS3 order
+L R C LFE RL RR SL SR. `AUDIO_CHSTAT=1` (runtime) logs each channel's RMS
+every 1000 blocks. High Speed Ring race, Zonda R, in-car view (0.1.8 engine):
+
+| | L | R | C | LFE | RL | RR | SL | SR |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| RMS | 0.04-0.28 | 0.04-0.11 | 0.05-0.10 | 0-0.15 | 0.19-0.30 | 0.18-0.31 | 0 | 0 |
+
+So GT5 mixes discrete 5.1 (the rear pair carries the mid engine) and never
+writes the side pair. Reporting 7.1 instead of stereo through
+`cellAudioOutGetConfiguration`/`GetState` changed nothing: it mixes 5.1
+regardless. The mixer used to fold everything to stereo.
+
+`AUDIO_OUTPUT_CHANNELS` (runtime; `audio.output` = `"stereo"`, `"5.1"`,
+`"7.1"`, `"auto"`; F1 AUDIO > Sound output) picks the device layout: 2
+(default, the old downmix), 6 (FL FR FC LFE BL BR; the side pair is folded
+into the rears at 0.707), 8 (all eight, channel mask 0x63F), or auto (the
+device mix format's channel count). Channels pass through unchanged; the PS3
+order is Windows' order. The same value is reported to the title. A layout
+the device refuses falls back to stereo with a log line; on this machine's
+stereo device Windows accepted 6 and 8 and folded them itself. Race
+underruns: stereo 1, 5.1 3, 7.1 12, auto (stereo) 6, all within normal
+startup. Speaker placement has not been checked on real surround hardware.
+
 ## 01.04 race stutter from the extended-range check (fixed 0.1.8)
 
 The "v104 race listen" owed above was not done before 0.1.6 shipped, and

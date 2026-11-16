@@ -42,6 +42,7 @@ const char* const kEnvNames[] = {
     "PAD_MODERN_CONTROLS", "PAD_TRIGGER_DEADZONE", "PAD_TRIGGER_CURVE", "PAD_ADAPTIVE_TRIGGERS", "PAD_TRIGGER_RUMBLE", "PAD_SDL_RUMBLE",
     "PAD_NO_SDL", "PAD_NO_KEYBOARD", "PS3_VERBOSE",
     "GT5P_VBLANK_HZ", "SPURS_LANE_PIN", "SPURS_JL_SPU3", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_STARTUP", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "PAD_SKIP_MOVIE", "RSX_SHADER_INTERP",
+    "AUDIO_OUTPUT_CHANNELS",
 };
 bool g_env_set[sizeof kEnvNames / sizeof kEnvNames[0]];
 
@@ -159,6 +160,18 @@ void read_vblank(toml::node_view<const toml::node> v, int& out)
     warn("performance.vblank_hz must be 59.94 or 62.5; keeping " + std::to_string(out / 100.0));
 }
 
+void read_audio_output(toml::node_view<const toml::node> v, int& out)
+{
+    if (!v) return;
+    if (auto s = v.value<std::string>()) {
+        if (*s == "stereo") { out = 2; return; }
+        if (*s == "5.1")    { out = 6; return; }
+        if (*s == "7.1")    { out = 8; return; }
+        if (*s == "auto")   { out = 0; return; }
+    }
+    warn("audio.output must be \"stereo\", \"5.1\", \"7.1\" or \"auto\"; keeping the default");
+}
+
 void read_lane_cores(toml::node_view<const toml::node> v, int& out)
 {
     if (!v) return;
@@ -201,6 +214,7 @@ bool known_key(std::string_view section, std::string_view key)
         {"input", "trigger_rumble"},
         {"input", "sdl_rumble"},
         {"game", "skip_movie"},       {"game", "smooth_colour"},    {"game", "anisotropy"},
+        {"audio", "output"},
         {"performance", "vblank_hz"}, {"performance", "lane_pinning"},
         {"performance", "fifth_spu_lane"},
         {"performance", "lane_cores"},   /* the old key (off by default then): read no more */
@@ -313,6 +327,7 @@ void parse_into(const toml::table& tbl, Gt5pSettings& s)
         if (v && (*v == 1 || *v == 4 || *v == 8 || *v == 16)) s.anisotropy = (int)*v;
         else warn("game.anisotropy must be 1, 4, 8 or 16; keeping the default");
     }
+    read_audio_output(tbl["audio"]["output"], s.audio_channels);
     read_vblank(tbl["performance"]["vblank_hz"], s.vblank_hz100);
     read_lane_cores(tbl["performance"]["lane_pinning"], s.lane_cores);
     read_bool(tbl["performance"]["fifth_spu_lane"], "performance.fifth_spu_lane", s.fifth_spu_lane);
@@ -364,6 +379,7 @@ void apply_env(const Gt5pSettings& s)
     snprintf(buf, sizeof buf, "%d", s.anisotropy);
     set_default_env("RSX_ANISO", buf);
     if (s.verbose_log >= 0) set_default_env("PS3_VERBOSE", s.verbose_log ? "1" : "0");
+    set_default_env("AUDIO_OUTPUT_CHANNELS", s.audio_channels == 6 ? "6" : s.audio_channels == 8 ? "8" : s.audio_channels == 0 ? "auto" : "2");
     set_default_env("GT5P_VBLANK_HZ", s.vblank_hz100 == 6250 ? "62.5" : "59.94");
     set_default_env("SPURS_LANE_PIN", s.lane_cores == 2 ? "2" : s.lane_cores == 1 ? "1" : "0");
     /* SPU 3 only gets jobs if its lane is sent every time. */
@@ -420,6 +436,8 @@ void reflect_env(Gt5pSettings& s)
     { const char* e = getenv("RSX_HIGH_PRECISION"); s.smooth_colour = !(e && e[0] == '0'); }
     if (const char* e = getenv("RSX_ANISO")) { const int a = atoi(e); s.anisotropy = a >= 16 ? 16 : a >= 8 ? 8 : a >= 4 ? 4 : 1; }
     if (const char* e = getenv("PS3_VERBOSE")) s.verbose_log = (e[0] && e[0] != '0') ? 1 : 0;
+    if (const char* e = getenv("AUDIO_OUTPUT_CHANNELS"))
+        s.audio_channels = (e[0] == 'a' || e[0] == 'A') ? 0 : atoi(e) == 6 ? 6 : atoi(e) == 8 ? 8 : 2;
     if (const char* e = getenv("GT5P_VBLANK_HZ")) s.vblank_hz100 = atof(e) > 62.0 ? 6250 : 5994;
     if (const char* e = getenv("SPURS_LANE_PIN")) s.lane_cores = atoi(e) >= 2 ? 2 : atoi(e) == 1 ? 1 : 0;
     s.fifth_spu_lane = getenv("SPURS_JL_SPU3") != nullptr;
@@ -569,6 +587,12 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "# Texture filtering: 1 (trilinear, the game's own), or 4, 8 or 16 for\n"
          "# anisotropic: surfaces at a slant stay sharp into the distance. [RSX_ANISO]\n"
          "anisotropy = " << s.anisotropy << "\n"
+         "\n"
+         "[audio]\n"
+         "# Sound output: \"stereo\" (the default), \"5.1\" or \"7.1\" for surround\n"
+         "# speakers, or \"auto\" to follow the Windows speaker setup. GT5 mixes 5.1;\n"
+         "# 7.1 adds silent side speakers. Restart to apply. [AUDIO_OUTPUT_CHANNELS]\n"
+         "output = \"" << (s.audio_channels == 6 ? "5.1" : s.audio_channels == 8 ? "7.1" : s.audio_channels == 0 ? "auto" : "stereo") << "\"\n"
          "\n"
          "[performance]\n"
          "# The game paces its frames to the vblank. 59.94 is the console's rate\n"

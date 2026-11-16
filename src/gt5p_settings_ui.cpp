@@ -276,6 +276,12 @@ const std::vector<Item>& items()
           "RSX_ANISO", { {1, L"Trilinear"}, {4, L"4x anisotropic"}, {8, L"8x anisotropic"}, {16, L"16x anisotropic"} },
           [](const UiSettings& s) { return s.anisotropy; },
           [](UiSettings& s, int v) { s.anisotropy = v; }, nullptr },
+        { L"AUDIO", L"Sound output",
+          L"GT5 mixes 5.1 surround. Stereo folds it down. 5.1 or 7.1 sends it to surround "
+          L"speakers (7.1's side pair stays silent); Auto follows the Windows speaker setup. Restart to apply.",
+          "AUDIO_OUTPUT_CHANNELS", { {2, L"Stereo"}, {6, L"5.1 surround"}, {8, L"7.1 surround"}, {0, L"Auto"} },
+          [](const UiSettings& s) { return s.audio_channels; },
+          [](UiSettings& s, int v) { s.audio_channels = v; }, nullptr },
         { L"GAME", L"Shader compile indicator",
           L"Show \"Compiling shaders\" in the corner while a draw is waiting on a shader or "
           L"pipeline. Background preloading is not counted here.",

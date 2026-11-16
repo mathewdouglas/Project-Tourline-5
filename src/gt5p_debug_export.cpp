@@ -205,9 +205,10 @@ std::string report(HWND game) {
             (mem.ullTotalPageFile - mem.ullAvailPageFile) >> 20, mem.ullTotalPageFile >> 20);
     const auto& s = gt5p_settings();
     fprintf(f, "Loaded settings: resolution=%d ultrawide=%d msaa=%d vsync=%d shader_cache=%d async=%d "
-        "sdl=%d keyboard=%d vblank=%d lane_cores=%d warmup=%d warmup_before_start=%d\nSettings file: %s\n",
+        "sdl=%d keyboard=%d vblank=%d lane_cores=%d warmup=%d warmup_before_start=%d audio_channels=%d\nSettings file: %s\n",
         s.resolution, s.ultrawide, s.msaa, s.vsync, s.shader_cache, s.shader_precompile,
-        s.sdl_controllers, s.keyboard, s.vblank_hz100, s.lane_cores, s.shader_warmup, s.shader_warmup_startup, gt5p_settings_path().c_str());
+        s.sdl_controllers, s.keyboard, s.vblank_hz100, s.lane_cores, s.shader_warmup, s.shader_warmup_startup,
+        s.audio_channels, gt5p_settings_path().c_str());
     fprintf(f, "Button prompts: setting %d, in effect %d (1 PlayStation, 2 Xbox, 3 Nintendo, 4 keyboard); "
         "port 0 device family %d\n", s.button_prompts, gt5p_glyphs_effective(), (int)g_pad_device_family);
     /* Explicit allowlist: never dump the process environment, keys or game files. */

@@ -35,7 +35,9 @@ SHA-256, and is deleted after a successful setup.
 Saves, settings, shaders, installed data and logs use the selected storage.
 Default: %LOCALAPPDATA%\ProjectTourline5
 Use Open storage.cmd to find them. Initial video settings are 720p/2x MSAA;
-DXC is the default shader compiler; FXC is available in F1. An incomplete GT5 install is finished
+DXC is the default shader compiler; FXC is available in F1. Sound is stereo
+by default; surround speakers: F1 > AUDIO > Sound output (5.1, 7.1 or Auto,
+restart to apply). An incomplete GT5 install is finished
 by the game itself on first boot and may take several minutes.
 
 To change drives, close the game and run Change storage.cmd. Choose an empty
