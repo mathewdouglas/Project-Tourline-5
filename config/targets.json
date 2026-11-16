@@ -144,6 +144,9 @@
     "screen_roles": "RaceStart:race,RaceGrid:screen,RaceLoad:screen,Arcade:screen,TrackList:screen,CarList:screen",
     "spu_audio_round_zero_calls": [["j9804ABA8", "0x4E8", 5]],
     "ui_mask_sites": [{"func": "0x008F53B8", "x": [12, 11, 13], "one": 30, "w": 31, "h": 29}],
+    "aspect_16_9_float": "0x0148EF40",
+    "ui_aspect_16_9_float": "0x014941CC,0x014941D0",
+    "scene_camera_aspect_16_9_float": "0x014196C8,0x014196F4",
     "gt5p_allocwatch": false
   }
 }

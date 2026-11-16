@@ -64,7 +64,16 @@ between two real engines or restarting after a fatal renderer error.
 
 ## Evidence and next work
 
-Private evidence is under `scratch/release016-live/`: `provenance.json`,
+**2026-11-16: `scratch/release016-live/` was deleted** (8.5 GB, at the user's
+request), with its runner scripts (`run-route-exe.ps1`, `run-fix.ps1`,
+`boot-loop.ps1`). To drive a 2.11 engine now, use GT5-work's
+`scripts/test/gt5boot.ps1 -Exe <gt5_211.exe>` with `GT5P_ROOT` and
+`PS3_VFS_ROOT` set to a 2.11 root (`input/v211/root`), `GT5P_GAME_DIR` set to
+the disc's `PS3_GAME/` folder (with the trailing slash) and
+`PAD_MILESTONE_FILES` set to 2.11's `screen_files` from `config/targets.json`.
+The paths below are historical.
+
+Private evidence was under `scratch/release016-live/`: `provenance.json`,
 `report-zero.*`, `report-two.*`, `race-default-repeat.*`, their runner logs,
 `default-race-90.png`, `default-race-125.png`, and `settings-smoke.log` plus
 `settings/*.png`. Managed restart evidence is `managed-restart2.log`,

@@ -4,6 +4,40 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.9 (2026-11-16): 21:9 and resolutions on 2.11
+
+2.11 had no aspect constants, so `video.aspect = "21:9"` did nothing there.
+
+- **Finding them.** 2.11 has seventeen 16/9 floats, all in the read-only
+  part of the text segment, and one TOC (`0x017727C8`); no `d(r2)` load
+  reaches any of them (Phase 41's recipe finds nothing). Its code builds the
+  address with `lis` and loads `lfs lo(rX)` (lifted as
+  `gpr[r] = (uint32_t)0x149 << 16` then `vm_read32(gpr[r] + lo)`). Searching
+  the 2.11 lift for that pair gave each constant's readers. Instruction
+  windows of the 01.04 readers do not match 2.11 at all (compiled differently).
+  - `aspect_16_9_float` = **`0x0148EF40`**: its reader `func_0085BE08` loads
+    16/9, 1.0 and 4/3 from `0x0148EF40/44/48` and calls two setters, as
+    01.04's `func_009AC638` does. The neighbouring data matches 01.04's table.
+  - `ui_aspect_16_9_float` = **`0x014941CC` and `0x014941D0`** (4/3 just
+    before, as in 01.04): two copies, read twice by `func_008B3350` and once
+    by `func_008B37D8`, 01.04's three reads in two functions.
+  - `scene_camera_aspect_16_9_float` = **`0x014196C8` and `0x014196F4`**: one
+    read each in `func_001E8C10`/`func_001EACD4`, 01.04's two sites in
+    `func_001F2FAC`.
+  `main.cpp` now takes a comma-separated list for each key.
+- **Checked live** (worktree build, `input/v211/root`, disc game dir):
+  1080p 21:9 car list (centred UI, backdrop to the edges, Zonda R not
+  stretched), High Speed Ring race at 1080p, 1440p and 4K 21:9 (wider view,
+  HUD centred 16:9) and 1440p 16:9; GT Life's first popup at 21:9 on a fresh
+  save, whole (the `ui_mask_sites` fix below). At 1440p a dark lower screen
+  at 0:05 looked like a fault; it is the start straight's grandstand shadow,
+  and the 0.1.8 release 2.11 engine shows the same. At 0:15 all runs draw
+  the road to the bottom. 01.04 at 1440p was rerun for comparison: fine.
+- The fresh-save run rewrote the 2.11 test root's `BCUS98114-BKUP`; it was
+  copied back from the restored `BCUS98114-GAME`.
+- Not checked on 2.11: the opening movie at 21:9, dealers, photo mode,
+  replays, pause menus, anamorphic mode.
+
 ## 0.1.9 (2026-11-16): 21:9 popup text cut off
 
 User report: entering GT Mode's Dealerships for the first time at 2560x1080,

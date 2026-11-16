@@ -188,6 +188,10 @@ renderer (`func_00A5D384`/`94`, 2.11 `0x008F53B8`) puts its NDC clip edges
 (c[133]) and label mask (c[131]) at x/(W/2) - 1; `ui_mask_patch.py` now
 patches them too (`ui_mask_sites`). Reproduce on a fresh save (move the save
 folder aside): Cross into GT Life shows the popup.
+2.11 now has 21:9 (aspect constants measured: `0x0148EF40`; two copies each
+of the UI and scene-camera ones, comma lists in `config/targets.json`); 2.11
+loads constants by `lis`+`lfs`, not `d(r2)`. Checked at 1080p/1440p/4K.
+Run a 2.11 engine with gt5boot.ps1 as docs/gt5-v211-live-checks.md says.
 2.11 was checked live to load an 01.04 save. Surround output (#21): GT5
 mixes discrete 5.1 into its 8-channel port; `AUDIO_OUTPUT_CHANNELS=2|6|8|auto`
 (runtime cellAudio/cellAvconfExt; `audio.output`, F1 AUDIO, RecompLauncher

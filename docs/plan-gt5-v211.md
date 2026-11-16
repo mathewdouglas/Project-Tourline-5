@@ -229,7 +229,7 @@ then confirmed by the method in the table.
 
 | Key (v104) | Feature | 2.11 method | Risk |
 | --- | --- | --- | --- |
-| `aspect_16_9_float` `0x019133B0`, `ui_aspect_16_9_float` `0x01914A48`, `scene_camera_aspect_16_9_float` `0x018EB70C` | 21:9 (Phase 41) | hand, by Phase 41's recipe: all `0x3FE38E39` floats, their `lfs d(r2)` readers via the OPD TOCs, then `GT5P_MEMSNAP` at the menu | medium; wrong value is visible, not silent |
+| `aspect_16_9_float` `0x019133B0`, `ui_aspect_16_9_float` `0x01914A48`, `scene_camera_aspect_16_9_float` `0x018EB70C` | 21:9 (Phase 41) | **done (0.1.9):** 2.11 `0x0148EF40`; `0x014941CC,0x014941D0`; `0x014196C8,0x014196F4` (2.11 reads constants by `lis`/`lfs`, not the TOC, and keeps two copies of the last two; see progress-gt5.md) | checked live |
 | `menu_listbox_vtable` `0x01870B78`, `menu_listbox_range` `0x40000000-0x50000000` | F1 race pause | `rtti.py`/`vtab.py` for `mListBox`; range by memory scan in a race | low |
 | `top_menu_word` `0x0199359C=2` | top-menu detection | measure: `GT5P_MEMSNAP` + `memsnap_diff.py` at top menu vs Options (Phase 38) | medium: data layout moves |
 | `screen_files` (`installed00.dat`, `OpeningMovie=MOVIE/tv_451_120285132.pam`, `Arcade=9/HV/GE`, ...) and `$GT5MilestoneFiles` in `scripts/test/milestone.ps1` (adds `GTLife=9/UC/F0`) | race scope, test routes, skip movie | measure: `PAD_FILE_LOG=2` along the Arcade route. Hypothesis: `PDIPFS` names are hashes of logical paths, so unchanged files keep their names, but updated screens may read a different first file | medium; every automated test depends on it |

@@ -19,6 +19,10 @@ versions follow [SemVer](https://semver.org/).
   (follows the Windows speaker setup). 7.1 adds silent side speakers: GT5
   writes none. A device that cannot play the layout falls back to stereo.
   Restart to apply. `AUDIO_OUTPUT_CHANNELS=2|6|8|auto`.
+- **GT5 2.11: 21:9 ultrawide.** Aspect ratio 21:9 now works on 2.11 as on
+  01.04: a wider view in races, menus centred. Checked at 1080p
+  (2560x1080), 1440p (3440x1440) and 4K (5120x2160), and 1440p at 16:9, in
+  the car list, a race and GT Life.
 
 ### Changed
 - **F1 settings: every page is named on the bar under the title** (Video,

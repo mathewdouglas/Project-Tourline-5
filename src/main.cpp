@@ -1130,9 +1130,14 @@ int main(int argc, char* argv[])
           const char* cam = getenv("GT5P_ULTRAWIDE_CAM");
           const char* addrs[3] = { GT5P_ASPECT_ADDR, (ui && ui[0] == '0') ? "" : GT5P_UI_ASPECT_ADDR,
                                    (cam && cam[0] == '0') ? "" : GT5P_CAM_ASPECT_ADDR };
+          /* Each may list several addresses ("0x...,0x..."): 2.11 keeps two
+           * copies of the menus' and the scene cameras' constants. */
           for (const char* as : addrs) {
-              if (!as[0]) continue;
-              const uint32_t a = (uint32_t)strtoul(as, nullptr, 16);
+            for (const char* p = as; p && *p;) {
+              char* q = nullptr;
+              const uint32_t a = (uint32_t)strtoul(p, &q, 16);
+              p = q ? strchr(q, ',') : nullptr; if (p) p++;
+              if (!a) continue;
               uint32_t cur; memcpy(&cur, vm_base + a, 4);
               if (_byteswap_ulong(cur) == 0x3FE38E39u) {          /* 16/9, as expected */
                   /* 64/27 (2560x1080, 5120x2160), or 43/18 for 3440x1440. */
@@ -1140,6 +1145,7 @@ int main(int argc, char* argv[])
                   memcpy(vm_base + a, &be, 4);
                   printf("[GT5P] ultrawide: 21:9 aspect at 0x%08X\n", a);
               } else fprintf(stderr, "[GT5P] ultrawide: 0x%08X is not 16/9 (%08X); not patched\n", a, _byteswap_ulong(cur));
+            }
           }
           /* Rendered natively 21:9 (RSX_ULTRAWIDE=2) unless GT5P_ULTRAWIDE=
            * anamorphic (=1: the swap chain stretches a 16:9 frame). */
