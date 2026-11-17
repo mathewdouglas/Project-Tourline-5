@@ -259,6 +259,15 @@ add_executable(gt5p
     ${GENERATED_SOURCES}
 )
 set_target_properties(gt5p PROPERTIES OUTPUT_NAME "${GT5P_EXE_NAME}")
+# Keep main.cpp's code at the start of .text in profile-guided builds: lld-link's
+# call-graph sort put hot renderer/lifted functions there instead, and
+# Bitdefender's Gen:Variant.Lazy scores the start of .text (every PGO release
+# 0.1.4-0.1.10 was flagged; docs/release-av.md). pgocc.py also compiles
+# main.cpp without the profile. Rollback: -DGT5P_PGO_CG_SORT=ON.
+option(GT5P_PGO_CG_SORT "lld-link call-graph profile sort (moves main.cpp off the start of .text)" OFF)
+if(NOT GT5P_PGO_CG_SORT AND CMAKE_LINKER MATCHES "lld-link")
+    target_link_options(gt5p PRIVATE /call-graph-profile-sort:no)
+endif()
 
 target_include_directories(gt5p PRIVATE
     ${CMAKE_SOURCE_DIR}/src

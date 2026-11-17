@@ -62,6 +62,12 @@ JonathanDC64/Soulbrandt). The scripts here are written for this build.
   Changed functions lose their counts (clang's "hash mismatch" warning), and
   everything else keeps its counts. Re-run `gen`, `play` and `merge` after a
   re-lift or larger source changes.
+- **Layout and antivirus**: `src/main.cpp` is compiled without the profile
+  and `gt5p` links with `/call-graph-profile-sort:no`, so `main.cpp`'s code
+  stays at the start of `.text`. With the profile, Bitdefender flagged every
+  PGO release 0.1.4-0.1.10; with both changes it is clean at the same FPS
+  ([release-av.md](release-av.md); `GT5P_PGO_PROFILE_MAIN=1`,
+  `-DGT5P_PGO_CG_SORT=ON` restore the old layout).
 
 ## Measured (2026-11-12)
 

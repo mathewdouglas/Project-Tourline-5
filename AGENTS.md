@@ -158,6 +158,16 @@ another build. Player builds become PGO with `clean_build.py --profile`
 the build fails if hot functions lost their counts). `pgo.py gen`/`use`
 refuse a `generated/` missing a post-lift step. See [docs/pgo.md](docs/pgo.md).
 
+**Antivirus (release check).** Bitdefender `Gen:Variant.Lazy` scores the
+first 16 KB of `.text`: every PGO `gt5.exe` 0.1.4-0.1.10 was flagged because
+lld's call-graph sort and a cold `main()` moved `main.cpp` off the start.
+`gt5p` links with `/call-graph-profile-sort:no` (`-DGT5P_PGO_CG_SORT=ON` old)
+and `pgocc.py` builds `main.cpp` unprofiled (`GT5P_PGO_PROFILE_MAIN=1` old);
+same FPS. Scan every release before publishing: `clean_build.py
+--vt-key-file` or `scripts/release/vt.py scan <zip>`; `vt.py variant` makes
+int3-filled copies for bisecting. Never upload anything but release files.
+See [docs/release-av.md](docs/release-av.md).
+
 **Crash reports (launcher).** After a crash, a freeze of 10 s or more, or an
 error exit, `tourline5.exe` offers a scrubbed ZIP under
 `<storage>/logs/reports` and a pre-filled GitHub issue

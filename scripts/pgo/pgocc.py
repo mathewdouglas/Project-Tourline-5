@@ -45,6 +45,12 @@ def main() -> int:
     mode, arg, cmd = sys.argv[1], sys.argv[2], sys.argv[3:]
     if any('CMakeScratch' in a or 'CMakeTmp' in a for a in cmd):
         return subprocess.call(cmd)
+    # main.cpp is compiled without the profile: with it, main() is cold and
+    # leaves the start of .text, and Bitdefender's Gen:Variant.Lazy flags what
+    # takes its place (docs/release-av.md). GT5P_PGO_PROFILE_MAIN=1 profiles it.
+    if mode == 'use' and os.environ.get('GT5P_PGO_PROFILE_MAIN') != '1' and any(
+            a.replace('\\', '/').endswith('/src/main.cpp') for a in cmd):
+        return subprocess.call(cmd)
     path = os.path.abspath(arg).replace('\\', '/')
     keep_names = ['-mllvm', '-static-func-full-module-prefix=false']
     if mode == 'gen':

@@ -98,6 +98,9 @@ def main():
     ap.add_argument('--wait-211', type=int, default=0, metavar='MINUTES',
                     help='with --build-211: before packaging, wait up to this long for that engine-only build '
                          'to finish (its work folder\'s engine-done.txt), so both engines can build at once')
+    ap.add_argument('--vt-key-file', type=Path,
+                    help='VirusTotal API key file (or VT_API_KEY): scan the ZIP and its programs after packaging '
+                         'and fail on any detection (scripts/release/vt.py, docs/release-av.md)')
     args = ap.parse_args()
     if args.target == 'BCUS98114-v211' and not args.engine_only:
         raise ValueError('Build 2.11 with --engine-only, then pass its build and ELF to the 01.04 clean build for one unified ZIP')
@@ -234,6 +237,12 @@ def main():
         '--runtime', work / 'ps3recomp', '--third-party', src / 'third_party', '--vc-runtime-dir', vc,
         '--output', out, *pgo_args, cwd=src, env=env)
     print(f'Player ZIP: {out}  (commit {commit}{", profile-guided" if profile else ""})')
+    if args.vt_key_file or os.environ.get('VT_API_KEY'):
+        key = ['--key-file', str(args.vt_key_file)] if args.vt_key_file else []
+        if subprocess.call([py, 'scripts/release/vt.py', 'scan', *key, str(out)], cwd=src):
+            raise SystemExit(f'VirusTotal flags {out}: do not publish it (docs/release-av.md)')
+    else:
+        print('NOT SCANNED: run scripts/release/vt.py scan on the ZIP before publishing (docs/release-av.md)')
 
 
 def build_log(args, cwd, env, log):

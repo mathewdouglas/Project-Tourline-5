@@ -19,6 +19,12 @@ versions follow [SemVer](https://semver.org/).
   cold disk). A new file that is not on the disc still makes it read
   GT.VOL once. `PT5_VOLMAP_ALL=1` restores the old behaviour.
 - Problem reports from GT5 2.11 included 01.04's setup.ini (#28).
+- Antivirus false positive: Bitdefender and engines that use it (ALYac,
+  Arcabit, Emsisoft, GData, VIPRE, eScan) flagged `gt5.exe` as
+  `Gen:Variant.Lazy` in every release since 0.1.4. The profile-guided build
+  had moved the start of the program's code; it now keeps the same layout as
+  0.1.3, which scanned clean. Same speed. Releases are now scanned on
+  VirusTotal before they are published.
 
 ## [0.1.10] - 2026-11-17
 

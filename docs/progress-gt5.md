@@ -4,6 +4,17 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Antivirus: PGO layout tripped Bitdefender again (2026-11-18)
+
+Every PGO 01.04 `gt5.exe` since 0.1.4 was `Gen:Variant.Lazy.746136`
+(Bitdefender and six OEM engines); non-PGO engines were clean. Bisected with
+int3-filled copies to the first 16 KB of `.text`, which lld's call-graph sort
+filled with hot functions while the cold `main()` moved away. Fixed by linking
+without the sort and compiling `main.cpp` unprofiled: 0/69, HSR frame test
+unchanged (58.2 vs 58.4 FPS back to back). Details, rollbacks and the new
+pre-publish scan (`scripts/release/vt.py`, `clean_build.py --vt-key-file`):
+[release-av.md](release-av.md).
+
 ## 0.1.11 work (2026-11-18): game speed, installed-data pass, loader-request bug
 
 **Game speed (#13).** `g_gt5p_game_speed` (1-3, `gt5p_present.cpp`) divides
