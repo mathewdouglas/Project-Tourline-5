@@ -4,6 +4,31 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.1.10 published (2026-11-17)
+
+Tag `v0.1.10` = `7b98f0c`. Built like 0.1.9: clean engine-only 01.04 and
+2.11 builds, `pgo.py gen` in the 01.04 tree, a High Speed Ring profile from
+it, then the profile-guided dual-engine package (0 functions lost counts,
+767 without a record). ZIP 128 files, SHA-256
+`56d614d3ed537aa3f705a1fb24732cb2e7aeb81d3c5125368194e7bca35062ce`.
+
+Play-tested on the isolated smoke storage. Plain release engines: 01.04
+High Speed Ring 56.6 FPS, 2.11 the same race at 42.4 FPS, both with 0
+`RSX_CMD_CHECK` reports and no silent audio; stderr 311 KB and 388 KB (the
+log caps hold). Packaged 01.04 engine: 58.6 FPS, median 16.8 ms, p99
+23.4 ms, 3 underruns. Launcher from the package on that storage: first
+start 39.7 s (disc check 12.9 s reading 18.44 GiB, verified; installed-data
+pass 25.6 s converting nothing), next start 0.9 s.
+
+That installed-data pass is the likely cause of the "nothing for a minute
+after an update" report: it reruns whenever the installed files' signature
+changes (here because test runs outside the launcher wrote to them), 0.1.8
+introduced it and 0.1.9 migrated its signature by opening every file once
+(67 s cold). 0.1.10's status window now covers it; making the pass skip
+unchanged files is the next improvement. #28 (dealership colour select)
+is the same 2.11 GPUSyncArray report wait as #36 and #38. Problem reports
+copy the top-level setup.ini even when 2.11 was running (fix pending).
+
 ## 0.1.10 (2026-11-17): issues #37 and #36, freezes on 2.11
 
 Both reports come from one player on 2.11, v0.1.9, 4K, Master Mod overlay
