@@ -4,6 +4,25 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.11 release candidate (2026-11-18)
+
+Commit `320cb04`, built like 0.1.10 under `C:\pt5-release\0.1.11` (engine-only
+01.04 and 2.11, `pgo.py gen`, High Speed Ring profile, profile-guided package):
+0 functions lost counts, 771 without a record. ZIP 128 files, SHA-256
+`6f08e4b8631b229c7cf31e9e5af3c6e228f918cdcdae27d2a5f64705272cb61d`. VirusTotal:
+ZIP 0/65, `gt5.exe` 0/69 (the PGO layout fix holds in a clean build),
+`gt5_211.exe` 0/69, `tourline5.exe` 1/71 (Trapmine `suspicious.low.ml.score`,
+as in 0.1.10). `tourline5.exe --check` passes from the extracted ZIP. The
+user tested the RC and reported it fine.
+
+Packaged engines on the smoke storage, High Speed Ring frame test: 01.04 58.2
+FPS, median 16.8 ms, p99 25.1 ms (0.1.10 packaged: 58.6); 2.11 43.4 FPS
+(0.1.10: 42.4). Both: no invalid audio, 0 `RSX_CMD_CHECK` reports, no null
+calls; lwmutex slots about 1024 live, 1765-1885 ever used. F2 pressed for
+real (game window focused, `keybd_event`) during the 01.04 race: `[game-speed]`
+2x, 3x, 1x. Not tested: a session long enough to have filled the old lwcond
+table (the unit test reproduces that).
+
 ## Issue #47: the 2.11 GPUSyncArray freeze, with the report ring (2026-11-18)
 
 Another player (2.11, no mod, Windows 10, 0.1.10) froze in the button
