@@ -359,7 +359,10 @@ inline std::string issue_url(const Analysis& a, const std::string& body) {
 struct Report { fs::path zip; std::string url, body; };
 
 // Write <data>/logs/reports/<kind>-<time>.zip. Throws std::exception on failure.
-inline Report write(const fs::path& data, const Analysis& a) {
+// game_root: the running version's own folder (2.11 keeps its setup.ini under
+// targets/); empty means data. Reports used to copy the top-level setup.ini,
+// which named 01.04 for a 2.11 run (issue #28).
+inline Report write(const fs::path& data, const Analysis& a, const fs::path& game_root = {}) {
     const Scrubber sc = scrubber();
     SYSTEMTIME st; GetLocalTime(&st);
     char stamp[64];
@@ -391,7 +394,7 @@ inline Report write(const fs::path& data, const Analysis& a) {
         if (fs::is_regular_file(p)) e.push_back({name, sc.apply(as_utf8(bounded(read_file(p))))});
     }
     for (const wchar_t* name : {L"gt5p_settings.toml", L"setup.ini"}) {
-        const fs::path p = data / name;
+        const fs::path p = (name == std::wstring(L"setup.ini") && !game_root.empty() ? game_root : data) / name;
         if (fs::is_regular_file(p)) e.push_back({narrow(name, CP_UTF8), sc.apply(as_utf8(read_file(p, 256 * 1024)))});
     }
     const fs::path tmp = r.zip.wstring() + L".part";

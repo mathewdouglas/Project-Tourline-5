@@ -340,7 +340,7 @@ static bool offer_report(DWORD code, bool* restart = nullptr) {
     }
     if (silent_errors) {
         try {
-            const auto r = crash_report::write(data, a);
+            const auto r = crash_report::write(data, a, target_data());
             fwprintf(stderr, L"The game %ls. Report saved: %ls\n", crash_report::widen(a.what).c_str(), r.zip.c_str());
             if (const auto url_file = env(L"PT5_CRASH_REPORT_URL_FILE"); !url_file.empty())
                 std::ofstream(fs::path(url_file), std::ios::binary) << r.url;
@@ -377,7 +377,7 @@ static bool offer_report(DWORD code, bool* restart = nullptr) {
     }
     if (choice != 100 && choice != 101 && !(graphics && choice == 102)) return true;
     crash_report::Report r;
-    try { r = crash_report::write(data, a); }
+    try { r = crash_report::write(data, a, target_data()); }
     catch (const std::exception&) { fail(L"The report could not be saved. The game's logs are in:\n\n" + (data/L"logs").wstring()); }
     if (choice == 102) { if (restart) *restart = true; return true; }
     const std::wstring select = L"/select," + quote(r.zip);
@@ -1000,11 +1000,21 @@ static void link_installed_data(const fs::path& disc) {
     if (!volmap::enabled() || !fs::is_directory(pdipfs) || !fs::is_regular_file(volume)) return;
     const auto ini = target_data()/L"volmap.ini";
     const auto stored = profile(ini, L"game", L"signature"), now = volmap::signature(pdipfs);
-    if (stored == now) return;
+    // pass: when the last completed pass started (file-time ticks). Only files
+    // written later are candidates next time. PT5_VOLMAP_ALL=1: every file.
+    const auto pass_now = std::to_wstring(fs::file_time_type::clock::now().time_since_epoch().count());
+    const auto stored_pass = profile(ini, L"game", L"pass");
+    if (stored == now) {
+        // Unchanged since a pass by a launcher that kept no pass time: every
+        // file present was considered then.
+        if (stored_pass.empty() && !stored.empty()) setting(ini, L"pass", pass_now);
+        return;
+    }
+    const long long since = env(L"PT5_VOLMAP_ALL") == L"1" || stored_pass.empty() ? 0 : _wtoi64(stored_pass.c_str());
     // Stored by an older launcher (every file opened): compare that way once,
     // then keep the listing-only signature.
     if (!stored.empty() && stored.rfind(L"v2:", 0) != 0 && now.rfind(L"v2:", 0) == 0 &&
-        stored == volmap::signature_v1(pdipfs)) { setting(ini, L"signature", now); return; }
+        stored == volmap::signature_v1(pdipfs)) { setting(ini, L"signature", now); setting(ini, L"pass", pass_now); return; }
     CopyState state; state.total = 1000;
     volmap::Result result;
     with_progress(L"Freeing disk space", L"Game data that is already on your disc is replaced by links to the disc. This runs once after the game installs its data.", state, [&] {
@@ -1013,10 +1023,12 @@ static void link_installed_data(const fs::path& disc) {
             state.current = L"Matching installed game data with your disc. Your disc files are only read.";
         }
         result = volmap::convert(pdipfs, volume, state.cancel,
-                                 [&](double f) { state.copied = static_cast<uint64_t>(1000 * f); });
+                                 [&](double f) { state.copied = static_cast<uint64_t>(1000 * f); }, since);
     });
     setting(ini, L"signature", volmap::signature(pdipfs));
-    fwprintf(stderr, L"[volmap] %llu installed files (%.2f GiB) now read from the disc%ls\n",
+    if (!result.cancelled) setting(ini, L"pass", pass_now);
+    fwprintf(stderr, L"[volmap] %llu candidate files, %llu installed files (%.2f GiB) now read from the disc%ls\n",
+             static_cast<unsigned long long>(result.candidates),
              static_cast<unsigned long long>(result.files), result.bytes / 1073741824.0,
              result.cancelled ? L"; cancelled" : L"");
 }

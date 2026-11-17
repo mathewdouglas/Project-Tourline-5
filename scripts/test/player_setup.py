@@ -769,12 +769,23 @@ def v1_sig():   # the old launcher's: real (non-record) files and bytes
 sig_ini.write_text('[game]\nsignature='+v1_sig()+'\n')
 run('--target=01.04',extra=env_both)
 assert stored_sig()==first, (stored_sig(),first)   # old one matched: replaced, no new pass
+def candidates(result):   # files the pass considered: written after the last completed pass
+    line=[l for l in result.stderr.decode(errors='replace').splitlines() if l.startswith('[volmap] ')]
+    return int(line[-1].split()[1]) if line else None
+def stored_pass():
+    raw=sig_ini.read_bytes(); text=raw.decode('utf-16') if raw[:2]==b'\xff\xfe' else raw.decode()
+    found=[l.split('=',1)[1] for l in text.splitlines() if l.startswith('pass=')]
+    return found[0] if found else None
+assert stored_pass() is not None   # an unchanged signature from an older launcher gets a pass time
 (pdipfs104/'00/NEW').write_bytes(b'written by the game')
-run('--target=01.04',extra=env_both)
+assert candidates(run('--target=01.04',extra=env_both))==1   # only the new file, not the whole install
 assert stored_sig()!=first and stored_sig().startswith('v2:')   # new data is noticed
-(pdipfs104/'00/NEW').unlink()
+(pdipfs104/'00/NEW2').write_bytes(b'written later')
+everything=len([q for q in pdipfs104.rglob('*') if q.is_file()])
+assert candidates(run('--target=01.04',extra={**env_both,'PT5_VOLMAP_ALL':'1'}))==everything>1   # old behaviour
+(pdipfs104/'00/NEW').unlink(); (pdipfs104/'00/NEW2').unlink()
 (WORK/'pt5-release.ini').write_text(release_ini)
-print('PASS: installed-data check reads the listing only, replaces an old signature once, notices new data')
+print('PASS: installed-data check reads the listing only, replaces an old signature once, notices new data, considers only files written since the last pass (PT5_VOLMAP_ALL=1: all)')
 
 # Run the production package-chain installer with tiny synthetic package pins.
 # Every stage is handled by the fixture RPCS3, never by a real emulator.

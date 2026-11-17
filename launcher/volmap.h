@@ -46,7 +46,7 @@ inline bool is_record(const fs::path& p) {
 // the volume whose first 64 bytes equal the file's. Verified later.
 struct Plan {
     fs::path volume;
-    uint64_t volume_size = 0, bytes = 0;
+    uint64_t volume_size = 0, bytes = 0, candidates = 0;   // candidates: files newer than the cutoff
     std::unordered_map<std::wstring, uint64_t> offset;   // by absolute file path
     uint64_t at(const fs::path& p) const {
         const auto it = offset.find(p.lexically_normal().wstring());
@@ -54,8 +54,13 @@ struct Plan {
     }
 };
 
+// newer_than (file-time ticks, 0 = all): only files written after it are
+// candidates. Older files were already converted or found not to be disc
+// copies by an earlier completed pass; without the cutoff every pass opened
+// them all again and, for the files that never match, read all of GT.VOL
+// (25 s with a warm cache on the 0.1.10 smoke storage, converting nothing).
 inline Plan plan(const fs::path& root, const fs::path& volume, const std::atomic<bool>& cancel,
-                 const std::function<void(double)>& progress) {
+                 const std::function<void(double)>& progress, long long newer_than = 0) {
     Plan result; result.volume = volume;
     result.volume_size = fs::file_size(volume);
     struct Candidate { std::wstring path; uint64_t size; std::string key; };
@@ -65,6 +70,12 @@ inline Plan plan(const fs::path& root, const fs::path& volume, const std::atomic
     for (const auto& entry : fs::recursive_directory_iterator(root)) {
         if (cancel) return result;
         if (!entry.is_regular_file()) continue;
+        if (newer_than) {
+            std::error_code ec;
+            const auto written = entry.last_write_time(ec);
+            if (!ec && written.time_since_epoch().count() <= newer_than) continue;
+        }
+        ++result.candidates;   // new since the last pass (or every file without one)
         const auto size = entry.file_size();
         if (size < std::max(min_size, key_size) || size > result.volume_size) continue;
         std::string key(key_size, '\0');
@@ -158,13 +169,14 @@ inline void replace_file(const fs::path& path, const std::string& data) {
     }
 }
 
-struct Result { uint64_t files = 0, bytes = 0; bool cancelled = false; };
+struct Result { uint64_t files = 0, bytes = 0, candidates = 0; bool cancelled = false; };
 
 // Replaces verified copies under root with records, in place.
 inline Result convert(const fs::path& root, const fs::path& volume, const std::atomic<bool>& cancel,
-                      const std::function<void(double)>& progress) {
+                      const std::function<void(double)>& progress, long long newer_than = 0) {
     Result r;
-    const auto p = plan(root, volume, cancel, [&](double f) { if (progress) progress(0.5 * f); });
+    const auto p = plan(root, volume, cancel, [&](double f) { if (progress) progress(0.5 * f); }, newer_than);
+    r.candidates = p.candidates;
     uint64_t checked = 0;
     for (const auto& [path, offset] : p.offset) {
         if (cancel) { r.cancelled = true; return r; }

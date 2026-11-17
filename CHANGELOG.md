@@ -3,6 +3,16 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Slow launcher starts after the game added files to its installed data:
+  the check that links installed files to your disc now considers only files
+  written since its last pass, instead of opening all ~16,700 again (67 s on a
+  cold disk). A new file that is not on the disc still makes it read
+  GT.VOL once. `PT5_VOLMAP_ALL=1` restores the old behaviour.
+- Problem reports from GT5 2.11 included 01.04's setup.ini (#28).
+
 ## [0.1.10] - 2026-11-17
 
 A game copy check, a startup status window, and fixes for a 2.11 main-menu
