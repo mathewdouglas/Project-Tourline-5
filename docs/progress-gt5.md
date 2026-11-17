@@ -4,6 +4,19 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.1.11 published (2026-11-18)
+
+Tag `v0.1.11` = `6d66309` (the RC's `320cb04` plus release notes, docs and
+the VirusTotal allowlist; no engine source changed). Packaged by
+`clean_build.py --ref v0.1.11` with the RC's profile and its 2.11 engine
+build, `--vt-key-file` on: 0 functions lost counts, ZIP 128 files, SHA-256
+`3c3718689df3eb8fa13f5cd7c239e2d961f04ef58eb72bb7d055f0b66579fb60`;
+VirusTotal ZIP 0/62, `gt5.exe` 0/69, `gt5_211.exe` 0/69, `tourline5.exe`
+Trapmine only (allowed). `--check` passes from the extracted ZIP. Published
+as a full release; uploaded digest matches. Closed as fixed, milestone 0.1.X:
+#13, #34, #41, #43, #44, #45 (#37 already closed). Open: #28/#36/#38/#47
+(GPUSyncArray freeze), #42/#47 (noisy car texture), #40.
+
 ## 0.1.11 release candidate (2026-11-18)
 
 Commit `320cb04`, built like 0.1.10 under `C:\pt5-release\0.1.11` (engine-only

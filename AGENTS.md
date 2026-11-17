@@ -233,6 +233,10 @@ for the open #36 garage freeze. The runtime patch has a second, appended
 section for these; see progress-gt5.md. Tests: `lwmutex_host_state.py`,
 `gcm_report_memory.py`.
 
+**Release 0.1.11** (tag `v0.1.11`, commit `6d66309`): the sync slot fix,
+F2 game speed and the PGO antivirus layout; packaged with the VirusTotal
+check on. See progress-gt5.md.
+
 **Release 0.1.9** (tag `v0.1.9`, commit `f5732a8`): 01.04 is profile-guided
 from a fresh High Speed Ring profile of this commit; 2.11 is not. See
 progress-gt5.md. The launcher offers, once, to copy
