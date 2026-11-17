@@ -3,7 +3,14 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.1.10] - 2026-11-17
+
+A game copy check, a startup status window, and fixes for a 2.11 main-menu
+hang and a long-session slowdown.
+
+**Your first start of 0.1.10 reads your game disc once** (about 20 GB) to
+check it: seconds on an SSD, a few minutes on a hard drive. A progress window
+shows it and can be cancelled; later starts skip it.
 
 ### Added
 - **Startup status window.** If the game window has not appeared 1.5 s after
@@ -39,6 +46,14 @@ versions follow [SemVer](https://semver.org/).
 - **Slowdown in long sessions** (issue #37). After about half an hour a debug
   log reopened and wrote every SPU transfer to the log (14.8 GB in one
   player's session). Log limits now stop counting at their cap.
+
+### Known issues
+- GT5 2.11: the picture can stop while the game keeps running, seen on the
+  garage reward screen and in a B-Spec race (issues #36 and #38). Not fixed
+  yet. The F8 debug export now records what the game was waiting for; if it
+  happens to you, please attach one.
+- GT5 2.11 may still have other issues, including race audio stutter. Use
+  01.04 for the most reliable experience.
 
 ## [0.1.9] - 2026-11-16
 
