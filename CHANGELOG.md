@@ -5,6 +5,12 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-11-18
+
+Fixes the crashes and hangs that came after playing for a while (buying a
+car, B-Spec races, loading), adds a game speed key for long races, and clears
+the antivirus false positive.
+
 ### Added
 - **Game speed: F2 cycles 1x, 2x and 3x** (issue #13), for long B-Spec
   races. It raises the vblank rate the game paces itself by, like RPCS3's
@@ -32,6 +38,14 @@ versions follow [SemVer](https://semver.org/).
   had moved the start of the program's code; it now keeps the same layout as
   0.1.3, which scanned clean. Same speed. Releases are now scanned on
   VirusTotal before they are published.
+
+### Known issues
+- 2.11: the picture can stop while the game keeps running (#28, #36, #38,
+  #47). The 0.1.10 debug data narrowed it down to a render job that is never
+  restarted; not fixed yet.
+- 2.11: some cars show a corrupted, noisy body texture in the car lists
+  (#42, #47).
+- 2.11 is still experimental. Use 01.04 for the most reliable experience.
 
 ## [0.1.10] - 2026-11-17
 

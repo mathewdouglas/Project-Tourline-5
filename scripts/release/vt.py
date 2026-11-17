@@ -39,6 +39,11 @@ import zipfile
 
 API = 'https://www.virustotal.com/api/v3'
 SCANNED = ('.exe', '.dll')
+# Detections that do not fail a scan: (engine, exact label). Trapmine's
+# low-confidence machine-learning label on tourline5.exe has been there since
+# 0.1.10 and nothing else agrees with it (accepted 2026-11-18). Anything else,
+# including another label from the same engine, still fails.
+ALLOWED = {('Trapmine', 'suspicious.low.ml.score')}
 
 
 def api_key(args):
@@ -84,10 +89,11 @@ def sha256(path):
 def report(name, attrs):
     stats = attrs.get('last_analysis_stats') or attrs.get('stats') or {}
     res = attrs.get('last_analysis_results') or attrs.get('results') or {}
-    bad = sorted((k, v.get('result')) for k, v in res.items() if v.get('category') == 'malicious')
+    hits = sorted((k, v.get('result')) for k, v in res.items() if v.get('category') == 'malicious')
+    bad = [h for h in hits if h not in ALLOWED]
     total = sum(stats.get(k, 0) for k in ('malicious', 'suspicious', 'undetected', 'harmless'))
-    print(f'{name}: {len(bad)}/{total} malicious' + ('' if not bad else ' ' + ', '.join(f'{k}={v}' for k, v in bad)),
-          flush=True)
+    print(f'{name}: {len(hits)}/{total} malicious' +
+          ''.join(f' {k}={v}' + (' (allowed)' if (k, v) in ALLOWED else '') for k, v in hits), flush=True)
     return bad
 
 

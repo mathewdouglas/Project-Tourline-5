@@ -110,3 +110,8 @@ upload can still be flagged later when an engine updates, so rescan
 (`vt.py scan --rescan`) when a report comes in. The model looks at the start
 of `.text` and the entry point: check `/MAP` that `main.cpp.obj` is first
 after any link-order or PGO change.
+
+Allowed detections (`ALLOWED` in `scripts/release/vt.py`, 2026-11-18): only
+Trapmine `suspicious.low.ml.score` on `tourline5.exe`, a low-confidence
+machine-learning label present since 0.1.10 that no other engine shares. Any
+other label, including another one from Trapmine, fails the scan.
