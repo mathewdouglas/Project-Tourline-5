@@ -4,6 +4,59 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.10 (2026-11-17): issues #37 and #36, freezes on 2.11
+
+Both reports come from one player on 2.11, v0.1.9, 4K, Master Mod overlay
+(seen in #36's log). Evidence is private under `scratch/issue36` and
+`scratch/issue37`. Not yet built into a game executable or checked in play.
+
+**#37, logo never leaves while loading the main menu: fixed in the runtime.**
+The logo keeps presenting; a loader worker (`ksF3`, tid 9) sat in
+`sys_lwmutex_lock(0xD0316B58)` with identical registers from the first hitch
+sample (1306 s) to the export (1913 s). That lwmutex is at +8 of a loader
+request on thread 42's stack (`D0313000+4000`), below thread 42's current
+stack pointer: the requester had already returned. The worker was finishing
+the request: `0x00A6FCA4` marks it done (`0x00A6FC0C` sets state +0xAC = 0),
+notifies under the request's lock (`0x00A6F4B4`), then locks it again to
+clear the busy byte +0xF0 (`0x00A6BDF4`, where it hung). No thread held the
+lock. The runtime's lock state lives in a host slot, but unlock took the
+recursion count from the guest word: with the dead frame reused, a count
+above 1 is only counted down, so the slot was never released. lv2 keeps no
+state outside those words, so there a stale lock fails or passes.
+Owner and count now live in the slot (`PS3_LWM_HOST_STATE=0` old); the guest
+words are written as copies. Reproduced and passed by
+`scripts/test/lwmutex_host_state.py` (real handlers; the old mode times out
+on the second lock). Which value the dead frame held is inferred, not read:
+the dump has no guest memory there.
+
+**#37, 14.8 GB of stderr in 32 minutes: fixed.** The policy-module DMA
+trace (`runtime/spu/spu_dma.h`, upstream code) counted every transfer in a
+signed int. After 2^31 transfers it wrapped negative, `< 96` held again, and
+every SPU transfer printed from then on. The counter now stops at its cap.
+The same `n++ < N` cap is used about 340 times; in the files the GT5 build
+compiles it is now `(n < N && ++n)`, and caps that also print every Nth time
+compare unsigned. `sys_event.c` keeps the old form: its patch block cannot
+be regenerated, and its caps are env-gated or far from 2^31.
+
+**#36, garage reward screen freeze: diagnosed further, not fixed.** The frame
+thread polls GPUSyncArray `0x01913300` (`0x00B95248`), the FIFO is drained,
+and workload 4's lane 0 last moved 16 bytes at `0x40101010`: MAIN report
+slot 0x101, the report family of the logo stall
+(docs/gt5-v211-menu-stall.md). Nothing shows whether that GET_REPORT was
+never processed or its completion word was set pending again afterwards.
+The stall dump and debug export now list the last 32 GET_REPORTs with each
+completion word as it is now (`GCM_REPORT_RING=0` off; covered by
+`scripts/test/gcm_report_memory.py`). The next report of this freeze should
+decide between the two. The noisy car photo on the same screen is unchanged:
+the earlier reading (a resized target filled from tiled memory without its
+pitch) was not confirmed and needs a capture of the photo's draw.
+
+Runtime patch: the 99 original file sections are unchanged; this work is a
+second section appended at the end, also in
+`patches/incremental/issue37-lwmutex-host-state-log-caps-report-ring.patch`.
+A fresh `setup_runtime.py` gives a tree identical to the edited runtime, and
+all 159 runtime sources of the build pass a syntax-only compile.
+
 ## Release 0.1.9 published (2026-11-16)
 
 Tag `v0.1.9` = `f5732a8`. The 2.11 engine and an instrumented 01.04 engine

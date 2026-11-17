@@ -190,6 +190,16 @@ compiled and interpreted shaders (`RSX_SHADER_WINDOW=0` old coordinates;
 and another affected car. Tests: `rt_self_read.py`, `shader_window.py`
 (WARP). See the headlamp entry in [docs/progress-gt5.md](docs/progress-gt5.md).
 
+**Issues #37/#36 (0.1.10, runtime).** lwmutex owner and recursion count
+now live in the runtime's lock slot, not read back from guest memory
+(`PS3_LWM_HOST_STATE=0` old): a loader request freed while its worker still
+locked it wedged the 2.11 main-menu load. Log caps `n++ < N` wrapped after
+2^31 calls and reopened (14.8 GB of `[spurs-pm] DMA` lines); they saturate
+now. The stall dump lists the last 32 GET_REPORTs (`GCM_REPORT_RING=0` off)
+for the open #36 garage freeze. The runtime patch has a second, appended
+section for these; see progress-gt5.md. Tests: `lwmutex_host_state.py`,
+`gcm_report_memory.py`.
+
 **Release 0.1.9** (tag `v0.1.9`, commit `f5732a8`): 01.04 is profile-guided
 from a fresh High Speed Ring profile of this commit; 2.11 is not. See
 progress-gt5.md. The launcher offers, once, to copy

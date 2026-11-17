@@ -8,7 +8,10 @@ root = Path(__file__).resolve().parents[2]
 runtime = Path(os.environ.get('PS3RECOMP_DIR', root.parent / 'ps3recomp-tourline5'))
 folder = Path(tempfile.mkdtemp(prefix='gcm-report-', dir=root / 'scratch'))
 source = (runtime / 'libs/video/cellGcmSys.c').read_text()
-start = source.index('void cellGcmProcessReportMethod(')
+# The GET_REPORT ring (GCM_REPORT_RING) sits just above the handler.
+start = source.find('/* GCM_REPORT_RING')
+if start < 0:
+    start = source.index('void cellGcmProcessReportMethod(')
 end = source.index('/* Whether IO offsets', start)
 harness = r'''
 #include <assert.h>
@@ -44,6 +47,7 @@ static void vm_write64(u32 ea, u64 value) {
 '''
 harness += source[start:end]
 harness += r'''
+unsigned long long ps3_ms_now(void) { return 0; }
 int main(void) {
     int rollback = getenv("GCM_REPORT_MEMORY") != NULL;
     memset(mem, 0xA5, sizeof mem);
@@ -66,6 +70,18 @@ int main(void) {
     cellGcmProcessReportMethod(0x1A8, 0xFEED0000); /* local remains host table */
     cellGcmProcessReportMethod(0x1800, 0x01101100);
     assert(writes == saved);
+#ifdef GCM_REPORT_RING_N
+    if (gcm_report_ring_on()) {
+        /* Every GET_REPORT is recorded, newest last; only the mapped MAIN
+         * one is marked written. */
+        assert(s_report_ring_n == 6);
+        assert(s_report_ring[1].data == 0x01101100 && s_report_ring[1].ea == (rollback ? 0u : 0x40101100u));
+        assert(s_report_ring[1].written == (rollback ? 0u : 1u));
+        assert(s_report_ring[0].written == 0 && s_report_ring[5].dma == 0xFEED0000u && s_report_ring[5].written == 0);
+    } else {
+        assert(s_report_ring_n == 0);
+    }
+#endif
     puts(rollback ? "PASS report memory rollback" : "PASS mapped report payload, big endian, completion last, bounds and legacy table");
 }
 '''
@@ -77,10 +93,9 @@ batch.write_text('@echo off\nset "PATH=C:\\Program Files (x86)\\Microsoft Visual
     '"C:\\Program Files\\LLVM\\bin\\clang-cl.exe" /nologo /O2 /MD /std:c17 /D_CRT_SECURE_NO_WARNINGS '
     f'/Fo"{folder}/test.obj" /Fe"{folder}/test.exe" "{folder}/test.c"\n')
 subprocess.run(['cmd', '/c', str(batch)], check=True)
-for mode in [None, '0']:
+for extra in [{}, {'GCM_REPORT_MEMORY': '0'}, {'GCM_REPORT_RING': '0'}]:
     env = os.environ.copy()
-    for key in ['GCM_REPORT_MEMORY', 'GCM_REPORT_FULL']:
+    for key in ['GCM_REPORT_MEMORY', 'GCM_REPORT_FULL', 'GCM_REPORT_RING']:
         env.pop(key, None)
-    if mode is not None:
-        env['GCM_REPORT_MEMORY'] = mode
+    env.update(extra)
     subprocess.run([str(folder / 'test.exe')], env=env, check=True)
