@@ -13,6 +13,13 @@ versions follow [SemVer](https://semver.org/).
   about 42 FPS ran 1.67x at 2x. `GT5P_GAME_SPEED=0` turns the key off.
 
 ### Fixed
+- Crashes and hangs after playing for a while, on 01.04 and 2.11: aborts and
+  stack overflows after buying a car (#41, #43), a menu that stopped
+  responding after a B-Spec race (#45), a B-Spec race that never finished
+  (#44), and the earlier loading hangs (#34, #37). After a few menu and race
+  loads, the runtime ran out of room to track the game's wait objects, and
+  waits began returning before the work they waited for was done. The tables
+  now free entries the game no longer uses.
 - Slow launcher starts after the game added files to its installed data:
   the check that links installed files to your disc now considers only files
   written since its last pass, instead of opening all ~16,700 again (67 s on a

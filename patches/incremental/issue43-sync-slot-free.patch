@@ -1,0 +1,213 @@
+diff --git a/runtime/ppu/ppu_sysprx.cpp b/runtime/ppu/ppu_sysprx.cpp
+index 44f4d2a..5ae414a 100644
+--- a/runtime/ppu/ppu_sysprx.cpp
++++ b/runtime/ppu/ppu_sysprx.cpp
+@@ -230,40 +230,84 @@ static long long lwm_now_us(void){
+     return 0;
+ #endif
+ }
++/* PS3_LWM_SLOT_FREE (on; =0 old): sys_lwmutex_destroy gives an unlocked
++ * mutex's slot back as a tombstone, which the next new address reuses
++ * (semaphore included). Slots used to be kept for every address ever
++ * created: GT5 creates an lwmutex per task object, over 2000 addresses in one
++ * boot and race, so a long session filled the 65536 slots, and from then on
++ * every new lwmutex was a no-op (lwm_sem returned nullptr). Threads keep slot
++ * pointers while they wait, so the table is never rehashed; a freed slot is
++ * only reused by an insert, under the table lock. */
++#define LWM_TOMB (-1L)
++static int lwm_slot_free(void){ static int v=-1; if(v<0){const char*e=getenv("PS3_LWM_SLOT_FREE"); v=!(e&&e[0]=='0');} return v; }
++static long g_lwm_live, g_lwm_used;   /* live slots; slots ever taken from empty */
+ /* Find an EXISTING slot (no create) for hold-tracking. */
+ static struct LwmSlot* lwm_find(uint32_t addr){
+     if(!addr) return nullptr;
+     uint32_t h=(addr*2654435761u)&(LWM_HASH-1);
+     for(uint32_t i=0;i<LWM_HASH;i++){ uint32_t idx=(h+i)&(LWM_HASH-1);
+         long cur=g_lwm[idx].addr;
+-        if((uint32_t)cur==addr) return &g_lwm[idx];
++        if((uint32_t)cur==addr && cur!=LWM_TOMB) return &g_lwm[idx];
+         if(cur==0) return nullptr; }
+     return nullptr;
+ }
+ static HANDLE lwm_sem(uint32_t addr)
+ {
+     if (!addr) return nullptr;
+-    uint32_t h = (addr * 2654435761u) & (LWM_HASH - 1);
+-    for (uint32_t i = 0; i < LWM_HASH; i++) {
+-        uint32_t idx = (h + i) & (LWM_HASH - 1);
+-        long cur = g_lwm[idx].addr;
+-        if ((uint32_t)cur == addr) return g_lwm[idx].sem;
+-        if (cur == 0) {
+-            while (_InterlockedExchange(&g_lwm_tab_lock, 1)) YieldProcessor();
+-            HANDLE r = nullptr;
+-            if (g_lwm[idx].addr == 0) {
+-                g_lwm[idx].sem = CreateSemaphoreA(NULL, 1, 1, NULL); /* free */
+-                g_lwm[idx].addr = (long)addr;   /* publish AFTER init (x86 TSO: readers see init) */
+-                r = g_lwm[idx].sem;
+-            } else if ((uint32_t)g_lwm[idx].addr == addr) {
+-                r = g_lwm[idx].sem;
++    { struct LwmSlot* sl = lwm_find(addr); if (sl) return sl->sem; }
++    /* Miss: claim under the table lock, after looking again (another thread
++     * may have inserted it, possibly into a tombstone this probe passed). */
++    while (_InterlockedExchange(&g_lwm_tab_lock, 1)) YieldProcessor();
++    HANDLE r = nullptr;
++    struct LwmSlot* sl = lwm_find(addr);
++    if (sl) r = sl->sem;
++    else {
++        uint32_t h = (addr * 2654435761u) & (LWM_HASH - 1);
++        struct LwmSlot* tomb = nullptr;
++        for (uint32_t i = 0; i < LWM_HASH; i++) {
++            struct LwmSlot* s = &g_lwm[(h + i) & (LWM_HASH - 1)];
++            if (s->addr == LWM_TOMB) { if (!tomb) tomb = s; continue; }
++            if (s->addr == 0) { if (!tomb) tomb = s; break; }
++        }
++        if (tomb) {
++            if (tomb->addr == 0) {
++                tomb->sem = CreateSemaphoreA(NULL, 1, 1, NULL); /* free */
++                g_lwm_used++;
++            }
++            tomb->st = 0; tomb->own = 0; tomb->rec = 0; tomb->chk = 0; tomb->holder = 0;
++            tomb->addr = (long)addr;   /* publish AFTER init (x86 TSO: readers see init) */
++            r = tomb->sem;
++            g_lwm_live++;
++            /* Say so before the table runs out (a full table makes every new
++             * lwmutex a no-op). LWM_COUNT: also every 1024 slots taken. */
++            static int every = -1;
++            static long warned = 0;
++            if (every < 0) every = getenv("LWM_COUNT") ? 1 : 0;
++            const long mark = g_lwm_used >= (long)(LWM_HASH / 10 * 9) ? 2 : g_lwm_used >= (long)(LWM_HASH / 2) ? 1 : 0;
++            if (mark > warned || (every && (g_lwm_live & 1023) == 0)) {
++                if (mark > warned) warned = mark;
++                fprintf(stderr, "[lwm] slots: %ld live, %ld of %u ever used%s\n", g_lwm_live,
++                        g_lwm_used, (unsigned)LWM_HASH, lwm_slot_free() ? "" : " (never freed)");
+             }
+-            _InterlockedExchange(&g_lwm_tab_lock, 0);
+-            if (r) return r;
+-            /* someone else claimed this slot for a different addr -> keep probing */
++        } else {
++            static long full = 0;
++            if (full++ == 0) fprintf(stderr, "[lwm] slot table full: lwmutex 0x%08X is a no-op\n", addr);
+         }
+     }
+-    return nullptr;   /* table full (raise LWM_HASH) */
++    _InterlockedExchange(&g_lwm_tab_lock, 0);
++    return r;
++}
++/* sys_lwmutex_destroy: free the slot if nobody holds or waits for it. */
++static int lwm_futex_on(void);
++static void lwm_release_slot(uint32_t addr)
++{
++    /* Only the futex state says reliably that nobody holds it. */
++    if (!lwm_slot_free() || !addr || !lwm_futex_on()) return;
++    while (_InterlockedExchange(&g_lwm_tab_lock, 1)) YieldProcessor();
++    struct LwmSlot* sl = lwm_find(addr);
++    if (sl && sl->st == 0 && InterlockedCompareExchange(&sl->addr, LWM_TOMB, (long)addr) == (long)addr)
++        g_lwm_live--;
++    _InterlockedExchange(&g_lwm_tab_lock, 0);
+ }
+ /* PS3_LWM_FUTEX (on; =0 the semaphore alone): the lock state is a word in
+  * the slot, taken with a compare-exchange; WaitOnAddress only when another
+@@ -522,16 +566,69 @@ static BOOL CALLBACK lwc_init(PINIT_ONCE, PVOID, PVOID*)
+     InitializeCriticalSection(&g_lwc_cs);
+     return TRUE;
+ }
+-/* Caller holds g_lwc_cs. */
+-static LwcSlot* lwc_slot(uint32_t addr)
++/* PS3_LWCOND_SLOT_FREE (on; =0 old): a slot is claimed only by a waiter and
++ * given back when its last waiter leaves; a signal never claims one (it has
++ * nobody to wake). The old table kept every lwcond address it had ever seen,
++ * waited on or signalled, for good. GT5 makes an lwcond per task object (on
++ * stacks and the heap): ~280 new addresses per menu load and ~220 per race
++ * load, so after a few loads the 1024 slots were gone, lwc_slot returned
++ * nullptr, and every wait on a new address returned at once. Its requester
++ * waits once (`if (state != 3) wait`, 01.04 0x00BF3D44), so it returned and
++ * reused its stack frame while the worker still used the task: null vtables,
++ * bctr to NULL, aborts and hangs (issues #34, #37, #43). */
++#define LWC_TOMB 0xFFFFFFFFu
++static int lwc_slot_free(void)
++{
++    static int v = -1;
++    if (v < 0) { const char* e = getenv("PS3_LWCOND_SLOT_FREE"); v = (e && e[0] == '0') ? 0 : 1; }
++    return v;
++}
++static long g_lwc_used, g_lwc_tomb, g_lwc_full;   /* live slots, freed slots, claims refused */
++/* Caller holds g_lwc_cs. create=0 finds an existing slot only. */
++static LwcSlot* lwc_find(uint32_t addr, int create)
+ {
+     uint32_t h = (addr * 2654435761u) & (LWC_HASH - 1);
++    LwcSlot* tomb = nullptr;
+     for (uint32_t i = 0; i < LWC_HASH; i++) {
+         LwcSlot* s = &g_lwc[(h + i) & (LWC_HASH - 1)];
+         if (s->addr == addr) return s;
+-        if (s->addr == 0) { s->addr = addr; s->head = nullptr; return s; }
++        if (s->addr == LWC_TOMB) { if (!tomb) tomb = s; continue; }
++        if (s->addr == 0) { if (!tomb) tomb = s; break; }
++    }
++    if (!create) return nullptr;
++    if (!tomb) {
++        if (g_lwc_full++ == 0)
++            fprintf(stderr, "[lwc] slot table full (%u): a wait on 0x%08X returns at once\n",
++                    (unsigned)LWC_HASH, addr);
++        return nullptr;
++    }
++    if (tomb->addr == LWC_TOMB) g_lwc_tomb--;
++    tomb->addr = addr; tomb->head = nullptr; g_lwc_used++;
++    return tomb;
++}
++/* Caller holds g_lwc_cs: give the slot back once nobody waits on it. Freed
++ * slots stay as tombstones (lookups probe past them); once they are a quarter
++ * of the table, the live slots are reinserted into a clean one. Waiters look
++ * their slot up again by address after waking, so moving them is safe. */
++static void lwc_release(LwcSlot* s)
++{
++    if (!s || s->head || !lwc_slot_free()) return;
++    s->addr = LWC_TOMB; g_lwc_used--; g_lwc_tomb++;
++    if (g_lwc_tomb < (long)(LWC_HASH / 4)) return;
++    static LwcSlot live[LWC_HASH];
++    uint32_t n = 0;
++    for (uint32_t i = 0; i < LWC_HASH; i++)
++        if (g_lwc[i].addr && g_lwc[i].addr != LWC_TOMB) live[n++] = g_lwc[i];
++    memset(g_lwc, 0, sizeof g_lwc);
++    g_lwc_used = 0; g_lwc_tomb = 0;
++    for (uint32_t i = 0; i < n; i++) {
++        LwcSlot* d = lwc_find(live[i].addr, 1);
++        if (d) d->head = live[i].head;
+     }
+-    return nullptr;
++}
++static LwcSlot* lwc_slot(uint32_t addr)   /* old: claim on any use, never freed */
++{
++    return lwc_find(addr, 1);
+ }
+ /* PS3_LWCOND_TRACE=1: one line per real wait, wake and signal. */
+ static int lwc_trace(void)
+@@ -544,7 +641,7 @@ static void lwc_signal(uint32_t lwcond, int all)
+ {
+     InitOnceExecuteOnce(&g_lwc_once, lwc_init, NULL, NULL);
+     EnterCriticalSection(&g_lwc_cs);
+-    LwcSlot* s = lwc_slot(lwcond);
++    LwcSlot* s = lwc_slot_free() ? lwc_find(lwcond, 0) : lwc_slot(lwcond);
+     int woke = 0;
+     for (LwcWaiter* w = s ? s->head : nullptr; w; w = w->next) {
+         if (w->signaled) continue;
+@@ -633,8 +730,10 @@ static void sys_lwcond_wait(ppu_context* ctx)
+                     EnterCriticalSection(&g_lwc_cs);
+                 }
+             }
+-            for (LwcWaiter** pp = &slot->head; *pp; pp = &(*pp)->next)
++            slot = lwc_find(lwcond, 0);   /* may have moved (lwc_release) */
++            for (LwcWaiter** pp = slot ? &slot->head : nullptr; pp && *pp; pp = &(*pp)->next)
+                 if (*pp == &me) { *pp = me.next; break; }
++            lwc_release(slot);
+             if (lwc_trace())
+                 fprintf(stderr, "[lwc] woke 0x%08X tid=%llu ret=%d\n", lwcond,
+                         (unsigned long long)ctx->thread_id, ret);
+@@ -1011,6 +1110,9 @@ static void sys_lwmutex_destroy_counted(ppu_context* ctx)
+       if (getenv("LWM_COUNT") && (_n<=24 || (_n%50000)==0))
+         fprintf(stderr, "[LWM] destroy #%lld lwm=0x%08X r4=0x%08X r5=0x%08X\n", _n,
+                 (uint32_t)ctx->gpr[3], (uint32_t)ctx->gpr[4], (uint32_t)ctx->gpr[5]); }
++#ifdef _WIN32
++    lwm_release_slot((uint32_t)ctx->gpr[3]);
++#endif
+     ctx->gpr[3] = 0;
+ }
+ 

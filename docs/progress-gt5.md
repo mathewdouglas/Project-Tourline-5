@@ -4,6 +4,58 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Loader-request crashes and hangs: sync slot tables ran out (2026-11-18)
+
+**Issues #41, #43, #44, #45 (and #34, #37) are one runtime bug.** All show a
+loader worker (`ksF3`) finishing a task that lives on a thread stack whose
+owner has already returned: #43 (01.04, no mod, abort while a bought car's
+delivery cutscene played) calls vfunc 0x20 of a task at `0xD00E9450` whose
+vtable reads 0 (`0x00BF77DC` <- `0x00BF819C`); #45 (2.11, menu stuck after a
+B-Spec race) and #41 (2.11, stack overflow after buying a car) do the same in
+2.11's `0x00A6F4B4`; #44 (2.11, B-Spec race never finished) has its workers
+marking NULL tasks done (writes to NULL+0xAC/+0xF0/+0xB0 from `0x00A6FD50`,
+`0x00A6BDF4`). #40 and #42 (blank HUD parts, garbage car texture) come from
+the same player's long sessions but show no null calls: not attributed.
+
+**Why the requester returns early.** 01.04's task wait `0x00BF3D44` is
+`lock(task+8); if (task->state(+0xAC) != 3) wait(cond); unlock` (wrapper
+`0x00C45350`, `sys_lwcond_wait` with no timeout): one wait, no loop, so it
+relies on lv2 never waking it without a signal. The runtime's real lwcond
+wait loops on its own `signaled` flag, but finds its waiter list in a
+1024-slot table keyed by lwcond address that never freed a slot, and signals
+claimed slots too. When the table was full, `lwc_slot` returned nullptr and
+the wait returned 0 at once. Measured with `PS3_LWCOND_TRACE=1` on the 0.1.10
+01.04 engine (boot, menu, High Speed Ring race): 65 addresses at 15 s, 279
+after the menu load, 510 after the race load, 531 total, none new while
+racing; half on thread stacks, half on the heap. A few menu/race loads fill
+the table; the reports' sessions ran 25-70 minutes of B-Spec and dealerships.
+
+The lwmutex table (65536 slots, each with a semaphore handle) also never
+freed: over 2048 addresses in the same boot and race. A full table makes
+every new lwmutex a no-op.
+
+**Fix (runtime, third section of the patch,
+`patches/incremental/issue43-sync-slot-free.patch`):**
+- lwcond: a slot is claimed only by a waiter and freed when its last waiter
+  leaves; a signal never claims one (`PS3_LWCOND_SLOT_FREE=0` old). Freed
+  slots are tombstones; at a quarter of the table they are cleared by
+  reinserting the live slots, and waiters look their slot up again after
+  waking. A full table now logs `[lwc] slot table full`.
+- lwmutex: `sys_lwmutex_destroy` frees the slot of an unlocked, unwaited
+  mutex (futex state only) as a tombstone that a new address reuses with its
+  semaphore; inserts recheck under the table lock (`PS3_LWM_SLOT_FREE=0`
+  old). `[lwm] slots: N live, M of 65536 ever used` at half and 90%
+  (`LWM_COUNT=1`: every 1024 live).
+
+`scripts/test/sync_slots.py` builds the real handlers: with both switches 0
+it reproduces both failures (after 1024 lwcond addresses a wait on a new one
+returns 0 in 0 ms; after 65536 mutexes a new one lets a second thread in);
+by default the wait times out after 313 ms and the mutex excludes.
+`lwmutex_host_state.py` still passes; a fresh `setup_runtime.py` tree equals
+the edited runtime. Relinked 0.1.10 01.04 engine with the fix, High Speed
+Ring frame test: 58.4 FPS (unchanged); lwmutex slots ever used 1872, with
+about 1024 live, against over 2048 and rising before.
+
 ## Antivirus: PGO layout tripped Bitdefender again (2026-11-18)
 
 Every PGO 01.04 `gt5.exe` since 0.1.4 was `Gen:Variant.Lazy.746136`

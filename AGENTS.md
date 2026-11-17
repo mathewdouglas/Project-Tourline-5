@@ -158,6 +158,15 @@ another build. Player builds become PGO with `clean_build.py --profile`
 the build fails if hot functions lost their counts). `pgo.py gen`/`use`
 refuse a `generated/` missing a post-lift step. See [docs/pgo.md](docs/pgo.md).
 
+**Loader-request crashes (0.1.11, runtime).** GT5's task wait (01.04
+`0x00BF3D44`) waits once, no loop. The runtime's lwcond table (1024 slots,
+never freed) filled after a few menu/race loads, then waits returned at once:
+dead tasks on stacks, null vtables, aborts and hangs (#34/#37/#41/#43/#44/#45).
+lwcond slots are now freed with their last waiter (`PS3_LWCOND_SLOT_FREE=0`
+old) and lwmutex slots on destroy (`PS3_LWM_SLOT_FREE=0` old). Test:
+`scripts/test/sync_slots.py`. Never key host state by guest address without
+freeing it.
+
 **Antivirus (release check).** Bitdefender `Gen:Variant.Lazy` scores the
 first 16 KB of `.text`: every PGO `gt5.exe` 0.1.4-0.1.10 was flagged because
 lld's call-graph sort and a cold `main()` moved `main.cpp` off the start.
