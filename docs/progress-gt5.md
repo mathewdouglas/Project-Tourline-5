@@ -4,6 +4,40 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.11 work (2026-11-18): game speed, installed-data pass, loader-request bug
+
+**Game speed (#13).** `g_gt5p_game_speed` (1-3, `gt5p_present.cpp`) divides
+the vblank period each tick; F2 in the game window cycles it
+(`gt5p_settings_ui.cpp`, `GT5P_GAME_SPEED=0` key off,
+`GT5P_GAME_SPEED_AT=<milestone>+<ms>:<n>` for scripted runs) and a top-right
+badge shows 2x/3x (`gt5p_shaderbusy.cpp`). Measured on the dev 2.11 engine,
+High Speed Ring route, switched at RaceStart+15 s: the HUD Total Time ran
+8.517 s per 5.10 s of real time (1.67x) at 2x, with the game at about 42 FPS.
+Menus speed up too: a 119.88 Hz boot sent the timed presses to GT Life.
+
+**#34 is #37's loader-request bug.** #34's abort: worker `ksF3` (tid 9) in
+`0x00A6F4B4` (task notify, vfunc 0x20) on a task at `0xD01061A0`, a
+thread-stack address whose vtable reads 0: bctr to NULL, then the stuck-call
+abort. #37 hung in `0x00A6BDF4` on the same kind of request. The worker's
+sequence for a finished task: `0x00A6FC0C` (state +0xAC = 0 under the manager
+and task locks), `0x00A6F4B4` (lock, vfunc 0x20, unlock), `0x00A6BDF4`
+(lock, busy +0xF0 = 0, unlock), then vfunc 0x24. The requester has already
+returned and reused its frame in both. Workers run at PS3 priority 2624 and
+requesters at 256-896 (#28's boot log), so a priority argument does not
+explain it; the game calls lwcond signal/signal_all (wrappers `0x00AB9FF8`,
+`0x00AB9F98`, `0x00ABA340`), not signal_to. Why the requester wakes before
+vfunc 0x24 is open; a trace of the requester's wait (`PS3_LWCOND_TRACE=1`
+around a loader burst) is the next step.
+
+**2.11 GPUSyncArray freeze (#28, #36, #38).** The poll `0x00B95248` ->
+`0x00B99444` waits until every lane's progress halfword (+0x42..+0x4E)
+reaches the other buffer's head (+0x40) plus its queued 8-byte commands;
+`0x00B96268` then closes the current buffer and kicks workload 4
+(`0x00B9513C`: dependency counter `0x00B99DC8`, then `0x00B98CE0`). In #38 the
+lanes last read report slot `0x40101200` and parked with the workload idle,
+so a report wait that needs a kick nobody sends is the leading hypothesis.
+The 0.1.10 report ring in a freeze dump should confirm it.
+
 ## Release 0.1.10 published (2026-11-17)
 
 Tag `v0.1.10` = `7b98f0c`. Built like 0.1.9: clean engine-only 01.04 and

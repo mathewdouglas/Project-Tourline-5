@@ -75,6 +75,9 @@ struct Badge {
 };
 
 HWND s_game;
+}  // namespace
+extern "C" volatile LONG g_gt5p_game_speed;   /* gt5p_present.cpp */
+namespace {
 volatile LONG s_enabled = 1;           /* "Compiling shaders" */
 volatile LONG s_preload_enabled = 0;   /* "Loading shaders" */
 
@@ -87,6 +90,12 @@ Badge s_pre  = { L"gt5p_shaderpreload", L"Loading shaders", "preload-badge", 196
 Badge s_boot = { L"gt5p_shaderprep", L"Preparing shaders", "prep-badge", 300, 38, -15, 2, 8,
                  RGB(20, 23, 30), RGB(52, 120, 220), RGB(230, 233, 240), RGB(52, 140, 255), 235, 0,
                  &s_enabled };
+
+/* Game speed above 1x (issue #13): top right, no spinner. */
+volatile LONG s_speed_enabled = 1;
+Badge s_speed = { L"gt5p_gamespeed", L"Speed 2x", "speed-badge", 112, 30, -13, 2, 7,
+                  RGB(20, 23, 30), RGB(220, 150, 40), RGB(240, 236, 228), RGB(220, 150, 40), 225, 0,
+                  &s_speed_enabled };
 
 BOOL CALLBACK find_game(HWND h, LPARAM)
 {
@@ -116,10 +125,10 @@ void paint(Badge& b, HDC dc)
     RoundRect(dc, 0, 0, b.w, b.h, b.h, b.h);
     SelectObject(dc, ob); SelectObject(dc, op); DeleteObject(pb); DeleteObject(pp);
 
-    /* Spinner: eight dots round a circle, the lit one moving. */
+    /* Spinner: eight dots round a circle, the lit one moving (not on the speed badge). */
     const int cx = b.h / 2 + 3, cy = b.h / 2, r = b.ring;
     const int hr = GetRValue(b.hue), hg = GetGValue(b.hue), hb = GetBValue(b.hue);
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < (&b == &s_speed ? 0 : 8); i++) {
         const double a = i * 3.14159265 / 4;
         const int x = cx + (int)lround(r * cos(a)), y = cy + (int)lround(r * sin(a));
         const int age = (b.phase - i + 8) % 8;
@@ -135,6 +144,11 @@ void paint(Badge& b, HDC dc)
     HGDIOBJ of = SelectObject(dc, b.hfont);
     SetTextColor(dc, b.text);
     std::wstring s = b.label;
+    if (&b == &s_speed) {
+        TextOutW(dc, 14, (b.h - (-b.font + 3)) / 2, s.c_str(), (int)s.size());
+        SelectObject(dc, of);
+        return;
+    }
     if (&b == &s_boot) {
         const LONG total = g_rsx_startup_prep_total, done = g_rsx_startup_prep_done;
         if (total > 0) s += L"  " + std::to_wstring(done < total ? done : total) + L" / " + std::to_wstring(total);
@@ -147,7 +161,8 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_PAINT) {
         const LONG_PTR which = GetWindowLongPtrW(h, GWLP_USERDATA);
-        Badge& b = which == (LONG_PTR)&s_pre ? s_pre : which == (LONG_PTR)&s_boot ? s_boot : s_main;
+        Badge& b = which == (LONG_PTR)&s_pre ? s_pre : which == (LONG_PTR)&s_boot ? s_boot :
+                   which == (LONG_PTR)&s_speed ? s_speed : s_main;
         PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps);
         HDC mem = CreateCompatibleDC(dc);
         HBITMAP bm = CreateCompatibleBitmap(dc, b.w, b.h);
@@ -168,7 +183,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 void place(Badge& b, UINT show_flag)
 {
     RECT rc; GetClientRect(s_game, &rc);
-    POINT p = { rc.right - b.w - kMargin, rc.bottom - b.h - kMargin };
+    POINT p = { rc.right - b.w - kMargin, &b == &s_speed ? kMargin : rc.bottom - b.h - kMargin };
     ClientToScreen(s_game, &p);
     if (!show_flag && p.x == b.last_pos.x && p.y == b.last_pos.y) return;
     b.last_pos = p;
@@ -228,6 +243,7 @@ DWORD WINAPI badge_thread(LPVOID)
     create(s_main, inst);
     create(s_pre, inst);
     create(s_boot, inst);
+    create(s_speed, inst);
 
     s_main.last_total = s_main.burst_base = g_rsx_shader_demand_total;
     s_pre.last_total = s_pre.burst_base = g_rsx_shader_preload_total;
@@ -245,6 +261,9 @@ DWORD WINAPI badge_thread(LPVOID)
         update(s_boot, want_boot, now);
         update(s_main, want_main && !want_boot, now);
         update(s_pre, want_pre && !want_boot, now);
+        const LONG speed = g_gt5p_game_speed;
+        s_speed.label = speed >= 3 ? L"Speed 3x" : L"Speed 2x";
+        update(s_speed, s_speed_enabled && speed > 1, now);
         Sleep(30);
     }
 }

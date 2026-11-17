@@ -5,6 +5,13 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Game speed: F2 cycles 1x, 2x and 3x** (issue #13), for long B-Spec
+  races. It raises the vblank rate the game paces itself by, like RPCS3's
+  vblank setting; a "Speed 2x"/"3x" badge shows at the top right while it is
+  above 1x. The real gain depends on how fast your PC renders: a 2.11 race at
+  about 42 FPS ran 1.67x at 2x. `GT5P_GAME_SPEED=0` turns the key off.
+
 ### Fixed
 - Slow launcher starts after the game added files to its installed data:
   the check that links installed files to your disc now considers only files

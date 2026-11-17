@@ -22,6 +22,8 @@ Without RecompLauncher, use the built-in setup:
    its Install button and closes it), or import an existing 01.04
    installation and decrypted ELF.
 5. Setup is remembered. Use tourline5.exe for every launch. F1 opens settings.
+   F2 cycles game speed 1x/2x/3x (for long B-Spec races; how much faster it
+   really runs depends on your PC's frame rate).
 
 Your original disc dump stays where it is. Disc preparation installs the
 bundled package into RPCS3, then imports a verified copy into your storage.

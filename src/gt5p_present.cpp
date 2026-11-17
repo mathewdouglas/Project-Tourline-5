@@ -828,6 +828,12 @@ static int vblank_thread_on(void)
     if (on < 0) { const char* e = getenv("GT5P_VBLANK_THREAD"); on = !(e && *e == '0'); }
     return on;
 }
+/* Game speed (issue #13): the vblank rate times this factor, 1 to 3. GT5
+ * advances its simulation per vblank, so 2 and 3 run it that much faster
+ * where the PC keeps up (B-Spec races are long). F2 cycles it in the game
+ * window (gt5p_settings_ui.cpp); the speed badge shows it above 1. */
+extern "C" volatile LONG g_gt5p_game_speed = 1;
+
 static DWORD WINAPI vblank_thread(LPVOID p)
 {
     fprintf(stderr, "[hostthread] vblank hosttid=%lu\n", (unsigned long)GetCurrentThreadId());
@@ -859,7 +865,8 @@ static DWORD WINAPI vblank_thread(LPVOID p)
         cellGcmTickFlip();
         InterlockedIncrement(&s_vbl_ticks);
         ps3_tl('V', 0, 0);
-        next += period;
+        const LONG speed = g_gt5p_game_speed;
+        next += speed > 1 && speed <= 3 ? period / speed : period;
         QueryPerformanceCounter(&c);
         if (c.QuadPart - next > 6 * period) next = c.QuadPart + period;   /* suspended: resync */
     }
@@ -1011,7 +1018,7 @@ static DWORD WINAPI present_thread(LPVOID)
             }
             if (drain)
                 walk_fifo();
-            next_tick += vbl_period;
+            next_tick += g_gt5p_game_speed > 1 && g_gt5p_game_speed <= 3 ? vbl_period / g_gt5p_game_speed : vbl_period;
             fired++; p_ticks++;
             if (GetTickCount64() - now >= 100) { fired = 240; break; }
         }

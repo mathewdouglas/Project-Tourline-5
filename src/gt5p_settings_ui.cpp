@@ -1417,6 +1417,43 @@ void toggle_poll()
         if (!done[k] && pad_milestone_age_ms(at[k].first.c_str()) >= at[k].second) { done[k] = true; set_open(!s_open); }
 }
 
+/* Game speed (issue #13, gt5p_present.cpp): F2 in the game window cycles
+ * 1x, 2x, 3x, the vblank rate times that. GT5P_GAME_SPEED=0 turns the key
+ * off. GT5P_GAME_SPEED_AT=<milestone>+<ms>:<factor>[,...] sets it at those
+ * times, for scripted runs (menus must stay at 1x for timed presses). */
+extern "C" volatile LONG g_gt5p_game_speed;
+static void set_game_speed(LONG speed)
+{
+    if (speed < 1 || speed > 3 || speed == g_gt5p_game_speed) return;
+    InterlockedExchange(&g_gt5p_game_speed, speed);
+    fprintf(stderr, "[game-speed] %ldx\n", (long)speed);
+}
+void game_speed_poll(bool game_fg)
+{
+    static int on = -1, f2_was = 0;
+    struct At { std::string ms; long long after; LONG speed; bool done; };
+    static std::vector<At> at;
+    if (on < 0) {
+        const char* e = getenv("GT5P_GAME_SPEED");
+        on = !(e && e[0] == '0');
+        const char* a = getenv("GT5P_GAME_SPEED_AT");
+        for (std::string sv = a ? a : ""; !sv.empty();) {
+            size_t j = sv.find(','); std::string tok = sv.substr(0, j);
+            size_t plus = tok.find('+'), colon = tok.find(':');
+            if (plus != std::string::npos && colon != std::string::npos && colon > plus)
+                at.push_back({ tok.substr(0, plus), atoll(tok.substr(plus + 1, colon - plus - 1).c_str()),
+                               (LONG)atoi(tok.c_str() + colon + 1), false });
+            sv = j == std::string::npos ? "" : sv.substr(j + 1);
+        }
+    }
+    for (auto& t : at)
+        if (!t.done && pad_milestone_age_ms(t.ms.c_str()) >= t.after) { t.done = true; set_game_speed(t.speed); }
+    if (!on) return;
+    const int f2 = (GetAsyncKeyState(VK_F2) & 0x8000) != 0;
+    if (f2 && !f2_was && game_fg && !s_open && !s_quit) set_game_speed(g_gt5p_game_speed % 3 + 1);
+    f2_was = f2;
+}
+
 /* GT5P_WATCH=addr[,addr...]: print each guest word there whenever it
  * changes (checked every UI tick, ~16 ms), to confirm a candidate found by
  * memsnap_diff.py. addr>off follows a pointer: the word at (word at addr)+off. */
@@ -1990,6 +2027,7 @@ DWORD WINAPI ui_thread(LPVOID)
         watch_poll();
         poke_poll();
         toggle_poll();
+        game_speed_poll(GetForegroundWindow() == s_game);
         top_menu_poll();
         if (s_open && !s_overlay) place();
         Sleep(16);
