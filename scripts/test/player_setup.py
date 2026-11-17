@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import struct
+import sys
 import subprocess
 import tempfile
 import time
@@ -188,14 +189,19 @@ def sfo(path, **fields):
 disc = WORK / 'my disc & files/PS3_GAME'
 sfo(disc / 'PARAM.SFO', TITLE_ID='BCUS98114', VERSION='02.00', APP_VER='01.00')
 (disc / 'USRDIR').mkdir(); (disc / 'USRDIR/GT.VOL').write_bytes(b'synthetic volume')
-(disc / 'USRDIR/MOVIE').mkdir(); (disc / 'USRDIR/MOVIE/tv_1.pam').write_bytes(b'synthetic movie')
+# Over 8 x 64 KiB, so the game copy check samples it in pieces.
+(disc / 'USRDIR/MOVIE').mkdir(); (disc / 'USRDIR/MOVIE/tv_1.pam').write_bytes(bytes(range(256)) * 4096 + b'synthetic movie')
 # The game copy check (launcher/disc_check.h) compares the fixture disc with
 # its own reference list instead of the retail one.
 disc_manifest = WORK / 'disc manifest.txt'
+sys.path.insert(0, str(ROOT / 'scripts'))
+from disc_manifest import sample_sha256  # noqa: E402  (the reference's own sample definition)
+sys.path.pop(0)
 
 
 def write_disc_manifest(extra=()):
-    lines = [f'{(disc/p).stat().st_size} {hashlib.sha256((disc/p).read_bytes()).hexdigest()} {p}'
+    lines = [f'{(disc/p).stat().st_size} {hashlib.sha256((disc/p).read_bytes()).hexdigest()} '
+             f'{sample_sha256(disc/p, (disc/p).stat().st_size)} {p}'
              for p in ('USRDIR/GT.VOL', 'USRDIR/MOVIE/tv_1.pam')]
     disc_manifest.write_text('\n'.join(lines + list(extra)) + '\n')
 
@@ -860,9 +866,11 @@ print('PASS: game copy: verified at setup, stored per file, reused at play, --ve
 # A damaged file of the right size: play warns (no dialog without UI) and still starts.
 vol = check_disc/'USRDIR/GT.VOL'; good_vol = vol.read_bytes()
 vol.write_bytes(bytes(len(good_vol)))
-disc_run()
+damaged = disc_run()
 assert play_status() == 'problems: USRDIR/GT.VOL damaged', play_status()
-assert 'GT.VOL is damaged' in (check_home/'logs/disc-check.txt').read_text(encoding='utf-8')
+disc_log = (check_home/'logs/disc-check.txt').read_text(encoding='utf-8')
+assert 'GT.VOL is damaged' in disc_log and 'encrypted' in disc_log, disc_log   # same size, other bytes (#15)
+assert b'[disc-check] read' not in damaged.stderr, 'the sample alone must find it'
 assert disc_run('--verify-disc', success=False).returncode == 3
 manifest_doc = json.loads((ROOT/'launcher/recomplauncher.json').read_text())
 assert 'disc-check.txt' in manifest_doc['exit_codes']['3']
@@ -878,8 +886,21 @@ disc_run()
 assert play_status() == 'verified' and not (check_home/'logs/disc-check.txt').exists()
 print('PASS: game copy: damaged file warned at play, refused by setup and --verify-disc (exit 3), switch off, repaired copy passes')
 
+# Two layers: a byte inside a sampled piece is found without a full read; one
+# between the pieces only by the full read (a new write time drops the stored result).
+movie = check_disc/'USRDIR/MOVIE/tv_1.pam'; good_movie = movie.read_bytes()
+for offset, sampled in [(10, True), (100000, False)]:
+    changed = bytearray(good_movie); changed[offset] ^= 0xFF; movie.write_bytes(bytes(changed))
+    found = disc_run()
+    assert play_status() == 'problems: USRDIR/MOVIE/tv_1.pam damaged', (offset, play_status())
+    assert (b'[disc-check] read' in found.stderr) != sampled, (offset, found.stderr)
+movie.write_bytes(good_movie)
+disc_run()
+assert play_status() == 'verified', play_status()
+print('PASS: game copy: sampled pieces catch a changed byte without a full read; the full read catches one between them')
+
 # Missing and wrong-sized files, through RecompLauncher's prepare.
-write_disc_manifest(['123 ' + '0'*64 + ' USRDIR/MOVIE/tv_missing.pam'])
+write_disc_manifest(['123 ' + '0'*64 + ' - USRDIR/MOVIE/tv_missing.pam'])
 (check_disc/'USRDIR/MOVIE/tv_1.pam').write_bytes(b'short')
 prepared = prepare(source=check_disc.parent, optional=executable, success=False,
                    extra={'PT5_LAUNCHER_HOME': str(WORK/'disc check prepare')})

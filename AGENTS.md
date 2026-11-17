@@ -193,7 +193,7 @@ and another affected car. Tests: `rt_self_read.py`, `shader_window.py`
 **Game copy check (0.1.10, launcher).** Setup, RecompLauncher preparation
 and the first start of an older install SHA-256 the disc files the engine
 reads (GT.VOL, MOVIE; `launcher/disc_files.h` from `scripts/disc_manifest.py`),
-stored per file in `<storage>/disc-check.ini`; play warns (Play anyway/Quit,
+stored per file in `<storage>/disc-check.ini`, after a fast sampled pass (catches encrypted-ISO extractions, #15/#35); play warns (Play anyway/Quit,
 exit 3), setup refuses. `PT5_DISC_CHECK=0` off, `PT5_DISC_MANIFEST` for tests,
 `--verify-disc` / Verify game files.cmd. Reports carry `GT5P_DISC_CHECK`, the
 version and mods. See setup.md "Game copy check"; test in `player_setup.py`.

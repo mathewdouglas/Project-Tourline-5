@@ -785,7 +785,11 @@ static std::wstring check_disc(const fs::path& game, DiscCheck mode) {
             }
         });
     };
-    if (!disc_check::pending(game, cache, refresh)) body();   // all stored: no window
+    // A fast pass first (sizes, stored results, a sample of each unread file):
+    // a wrong copy is reported without reading 18 GiB. Then the full read.
+    if (!refresh) result = disc_check::screen(game, cache);
+    if (!result.problems.empty()) result.complete = true;   // the verdict needs no full read
+    else if (!disc_check::pending(game, cache, refresh)) body();   // all stored: no window
     else with_progress(L"Checking your game disc", L"Comparing your disc with the retail Gran Turismo 5 disc.", state, body);
     const auto status = disc_check::status(result);
     if (result.read_bytes) fwprintf(stderr, L"[disc-check] read %.2f GiB: %ls\n", result.read_bytes / 1073741824.0, status.c_str());
@@ -798,8 +802,13 @@ static std::wstring check_disc(const fs::path& game, DiscCheck mode) {
     }
     const std::wstring text = L"Your copy of the Gran Turismo 5 disc does not match the retail disc (BCUS98114, disc version 02.00):\n\n" +
         disc_check::describe(result) +
-        L"\nA damaged or incomplete copy causes freezes, crashes and missing videos. Extract or dump the disc again, "
-        L"then select it with \"Change game files\". Your saves are not affected.";
+        (disc_check::same_size_different_bytes(result)
+            ? L"\nThe files have the right size but different contents. This is what files extracted from an encrypted "
+              L"PS3 disc image (ISO) look like: the game cannot start from them, in this port or in RPCS3. Extract the "
+              L"files from a decrypted disc image, or dump the disc again, then select the new folder with \"Change game files\"."
+            : L"\nA damaged or incomplete copy causes freezes, crashes and missing videos. Extract or dump the disc again, "
+              L"then select it with \"Change game files\".") +
+        L" Your saves are not affected.";
     try {
         fs::create_directories(data/L"logs");
         const std::wstring all = text + L"\n\nFolder: " + game.wstring() + L"\n";

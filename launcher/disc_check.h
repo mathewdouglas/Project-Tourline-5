@@ -13,7 +13,7 @@
 #include "disc_files.h"
 
 namespace disc_check {
-struct Entry { std::wstring path; uint64_t bytes; std::wstring sha256; };
+struct Entry { std::wstring path; uint64_t bytes; std::wstring sha256, sample; };
 enum class Problem { missing, size, content, unreadable };
 struct Finding { std::wstring path; Problem problem; uint64_t expected = 0, actual = 0; };
 struct Result {
@@ -33,18 +33,21 @@ inline std::vector<Entry> reference() {
     std::vector<wchar_t> b(32768);
     const DWORD n = GetEnvironmentVariableW(L"PT5_DISC_MANIFEST", b.data(), static_cast<DWORD>(b.size()));
     if (!n || n >= b.size()) {
-        for (const auto& d : disc_files) out.push_back({d.path, d.bytes, d.sha256});
+        for (const auto& d : disc_files) out.push_back({d.path, d.bytes, d.sha256, d.sample});
         return out;
     }
+    // "<bytes> <sha256> <sample sha256 or -> <path>" per line.
     std::ifstream f{fs::path(b.data())};
     std::string line;
+    auto wide = [](const std::string& s) { return std::wstring(s.begin(), s.end()); };
     while (std::getline(f, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        const auto a = line.find(' '), c = a == std::string::npos ? a : line.find(' ', a + 1);
-        if (c == std::string::npos) continue;
-        const std::string sha = line.substr(a + 1, c - a - 1), path = line.substr(c + 1);
-        out.push_back({std::wstring(path.begin(), path.end()), std::stoull(line.substr(0, a)),
-                       std::wstring(sha.begin(), sha.end())});
+        const auto a = line.find(' '), c = a == std::string::npos ? a : line.find(' ', a + 1),
+                   d = c == std::string::npos ? c : line.find(' ', c + 1);
+        if (d == std::string::npos) continue;
+        const std::string sample = line.substr(c + 1, d - c - 1);
+        out.push_back({wide(line.substr(d + 1)), std::stoull(line.substr(0, a)), wide(line.substr(a + 1, c - a - 1)),
+                       sample == "-" ? std::wstring{} : wide(sample)});
     }
     return out;
 }
@@ -115,6 +118,63 @@ inline uint64_t pending(const fs::path& game, const fs::path& cache, bool refres
     return total;
 }
 
+// SHA-256 of 8 x 64 KiB spread evenly over the file (the whole file when it
+// is smaller): scripts/disc_manifest.py's sample_sha256. Empty if unreadable.
+inline std::wstring sample_sha256(const fs::path& p, uint64_t size) {
+    constexpr uint64_t samples = 8, chunk = 65536;
+    HANDLE h = CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return {};
+    BCRYPT_ALG_HANDLE alg = nullptr; BCRYPT_HASH_HANDLE ctx = nullptr;
+    DWORD object = 0, got = 0;
+    NTSTATUS rc = BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+    if (rc >= 0) rc = BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&object, sizeof object, &got, 0);
+    std::vector<unsigned char> state(object), block(static_cast<size_t>(std::min(size, samples * chunk)));
+    if (rc >= 0) rc = BCryptCreateHash(alg, &ctx, state.data(), object, nullptr, 0, 0);
+    bool ok = rc >= 0;
+    const uint64_t n = size <= samples * chunk ? 1 : samples, length = size <= samples * chunk ? size : chunk;
+    for (uint64_t i = 0; ok && i < n; ++i) {
+        LARGE_INTEGER at; at.QuadPart = static_cast<LONGLONG>(n == 1 ? 0 : i * (size - chunk) / (samples - 1));
+        DWORD read = 0;
+        ok = SetFilePointerEx(h, at, nullptr, FILE_BEGIN) && ReadFile(h, block.data(), static_cast<DWORD>(length), &read, nullptr) &&
+             read == length && BCryptHashData(ctx, block.data(), read, 0) >= 0;
+    }
+    std::array<unsigned char, 32> digest{};
+    if (ok) ok = BCryptFinishHash(ctx, digest.data(), static_cast<ULONG>(digest.size()), 0) >= 0;
+    if (ctx) BCryptDestroyHash(ctx);
+    if (alg) BCryptCloseAlgorithmProvider(alg, 0);
+    CloseHandle(h);
+    if (!ok) return {};
+    std::wstring out;
+    for (auto byte : digest) { out += L"0123456789abcdef"[byte >> 4]; out += L"0123456789abcdef"[byte & 15]; }
+    return out;
+}
+
+// The fast pass, run before full(): missing files, sizes, stored results, and
+// a sample of each file without one (about 512 KiB per file). It finds a copy
+// extracted from an encrypted disc image without reading 18 GiB.
+inline Result screen(const fs::path& game, const fs::path& cache) {
+    Result r;
+    for (const auto& e : reference()) {
+        const auto p = game / e.path;
+        std::error_code ec;
+        const auto size = fs::file_size(p, ec);
+        if (ec) { r.problems.push_back({e.path, Problem::missing, e.bytes}); continue; }
+        if (size != e.bytes) { r.problems.push_back({e.path, Problem::size, e.bytes, size}); continue; }
+        const auto hash = stored(cache, e, identity(p));
+        if (!hash.empty()) {
+            if (_wcsicmp(hash.c_str(), e.sha256.c_str()) != 0) r.problems.push_back({e.path, Problem::content, e.bytes});
+            continue;
+        }
+        r.complete = false;   // full() still has to read it
+        if (e.sample.empty()) continue;
+        const auto sample = sample_sha256(p, size);
+        if (sample.empty()) r.problems.push_back({e.path, Problem::unreadable, e.bytes});
+        else if (_wcsicmp(sample.c_str(), e.sample.c_str()) != 0) r.problems.push_back({e.path, Problem::content, e.bytes});
+    }
+    return r;
+}
+
 inline Result full(const fs::path& game, const fs::path& cache, bool refresh,
                    const std::atomic<bool>& cancel, const Progress& progress) {
     Result r;
@@ -163,6 +223,14 @@ inline std::wstring describe(const Result& r, size_t max_lines = 8) {
         s += L"\n";
     }
     return s;
+}
+
+// Files of the right size with different bytes: what files extracted from an
+// encrypted PS3 disc image look like (issues #15 and #35: GT.VOL at its exact
+// size, a different hash, and RPCS3 refusing the folder too).
+inline bool same_size_different_bytes(const Result& r) {
+    for (const auto& f : r.problems) if (f.problem == Problem::content) return true;
+    return false;
 }
 
 // For crash reports and the debug export: "verified", "not fully checked"

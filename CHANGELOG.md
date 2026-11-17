@@ -12,6 +12,9 @@ versions follow [SemVer](https://semver.org/).
   byte-identical. Each file is read once (about 20 GB, measured at about 20 s
   here; a hard drive takes a few minutes) and only checked again if it
   changes. A damaged or incomplete copy stops setup with the list of bad files.
+  Files extracted from an encrypted disc image (the right sizes, the wrong
+  contents: issues #15 and #35, a black screen then exit) are found within a
+  second from samples of each file, with advice to use a decrypted image.
   Existing installs are checked once at the next start; a copy with problems
   shows a warning with Play anyway or Quit. "Verify game files.cmd" (or
   `tourline5.exe --verify-disc`) reads every file again. RecompLauncher's

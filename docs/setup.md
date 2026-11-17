@@ -87,8 +87,16 @@ dump). Other disc files are not checked: the engine does not use them, setup
 verifies `DATA000.PKG` itself, and folder-dump tools may change `EBOOT.BIN`
 or `PARAM.SFO`. Each file's hash is stored in `disc-check.ini` with its path,
 size and write time, so later checks cost a directory listing. Measured on
-this machine: 19 s for the first check (possibly from the file cache),
+this machine: 13-19 s for the first check (possibly from the file cache),
 0 s after.
+
+Before any full read, a fast pass hashes 8 x 64 KiB spread over each file not
+yet checked (a "sample" hash per file in the list; 32 ms here). Files
+extracted from an encrypted PS3 disc image keep their sizes but not their
+bytes: issues #15 and #35 had GT.VOL at its exact size with a different hash,
+and RPCS3 refused those folders too. The sample finds that at once, and the
+message names the likely cause (extract from a decrypted image or dump again)
+instead of a generic "damaged" file.
 
 - Setup with a damaged, missing or wrong-sized file stops and lists the files.
   Interactive setup offers Continue setup anyway; `--configure` and
