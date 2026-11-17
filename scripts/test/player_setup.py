@@ -42,6 +42,7 @@ for key, value in {'PROJECT_VERSION': '0.1.0', 'PROJECT_VERSION_MAJOR': '0',
 (WORK/'launcher.rc').write_text(resource)
 (WORK / 'engine.cpp').write_text(r'''
 #include <windows.h>
+#pragma comment(lib, "user32.lib")
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -89,6 +90,12 @@ int main(int argc, char** argv) {
     for (const char* key : {"GT5P_GAME_DIR","GT5P_SETTINGS","GT5P_ROOT","PS3_VFS_ROOT","RSX_SHADER_CACHE","GT5P_LAUNCHER_RESTART","GT5P_DISC_CHECK"})
         printf("%s=%s\n",key,getenv(key)?getenv(key):"");
     if(const char* p=getenv("PT5_TEST_HOLD")) { std::ofstream(p)<<"ready"; Sleep(2000); }
+    if(const char* w=getenv("PT5_TEST_WINDOW")) {   // a visible game window after w ms, kept 1.5 s
+        Sleep(atoi(w));
+        HWND h=CreateWindowExW(0,L"STATIC",L"fixture game",WS_OVERLAPPEDWINDOW|WS_VISIBLE,0,0,200,100,nullptr,nullptr,nullptr,nullptr);
+        for(int i=0;i<15;i++){MSG m;while(PeekMessageW(&m,nullptr,0,0,PM_REMOVE))DispatchMessageW(&m);Sleep(100);}
+        DestroyWindow(h);
+    }
     if(const char* p=getenv("PT5_TEST_RESTART")) {
         if(!std::filesystem::exists(p)) {std::ofstream(p)<<"restarted";return pt5_restart::exit_code;}
     }
@@ -910,3 +917,60 @@ write_disc_manifest()
 shutil.copyfile(disc/'USRDIR/MOVIE/tv_1.pam', check_disc/'USRDIR/MOVIE/tv_1.pam')
 prepare(source=check_disc.parent, optional=executable, extra={'PT5_LAUNCHER_HOME': str(WORK/'disc check prepare')})
 print('PASS: game copy: RecompLauncher preparation refuses missing and wrong-sized files, accepts the repaired copy')
+
+# Startup status (launcher/start_status.h): every Play start appends its step
+# times to logs/launcher-start.txt; a slow start shows a status window that
+# closes when the game window appears.
+start_log = check_home/'logs/launcher-start.txt'
+disc_run(extra={'PT5_TEST_WINDOW': '0'})
+last = start_log.read_text(encoding='utf-8').splitlines()[-1]
+assert 'game window shown' in last and 'Checking your game disc' in last and 'Waiting for the game window' in last, last
+disc_run()
+assert 'game exited before showing a window' in start_log.read_text(encoding='utf-8').splitlines()[-1]
+
+user32 = ctypes.WinDLL('user32')
+WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+
+def visible_titles(pid):
+    found = []
+
+    def each(h, _):
+        owner = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(ctypes.c_void_p(h), ctypes.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(ctypes.c_void_p(h)):
+            title = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(ctypes.c_void_p(h), title, 256)
+            found.append(title.value)
+        return True
+    user32.EnumWindows(WNDENUMPROC(each), None)
+    return found
+
+
+# The game window comes 5 s after its process starts: the status window shows, then goes.
+slow = subprocess.Popen([str(WORK/'tourline5.exe')], cwd=WORK,
+                        env={**base_env, **check_env, 'PT5_SETUP_UI': '1', 'PT5_TEST_WINDOW': '5000'})
+shown_at = gone_at = None
+t0 = time.time()
+while time.time() - t0 < 20 and slow.poll() is None:
+    titles = visible_titles(slow.pid)
+    if shown_at is None and 'Project Tourline 5' in titles:
+        shown_at = time.time() - t0
+    if shown_at is not None and 'Project Tourline 5' not in titles:
+        gone_at = time.time() - t0
+        break
+    time.sleep(0.1)
+assert slow.wait(timeout=30) == 0
+assert shown_at is not None and 1.0 <= shown_at < 5, shown_at
+assert gone_at is not None and gone_at < 8, gone_at
+last = start_log.read_text(encoding='utf-8').splitlines()[-1]
+assert 'game window shown' in last, last
+# A quick start shows no status window; PT5_START_STATUS=0 never does.
+for extra in ({'PT5_TEST_WINDOW': '0'}, {'PT5_TEST_WINDOW': '5000', 'PT5_START_STATUS': '0'}):
+    quick = subprocess.Popen([str(WORK/'tourline5.exe')], cwd=WORK, env={**base_env, **check_env, 'PT5_SETUP_UI': '1', **extra})
+    seen = False
+    while quick.poll() is None:
+        seen = seen or 'Project Tourline 5' in visible_titles(quick.pid)
+        time.sleep(0.1)
+    assert quick.returncode == 0 and not seen, extra
+print(f'PASS: startup status: step times logged each start; slow start shows status at {shown_at:.1f} s, gone at {gone_at:.1f} s; none for a quick start or when off')

@@ -6,6 +6,15 @@ versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Startup status window.** If the game window has not appeared 1.5 s after
+  you press Play, a small window shows what the launcher is doing (checking
+  files, starting the game, waiting for its window) with a moving bar and
+  the time so far, and closes as soon as the game window opens. The first
+  start after an update was reported to show nothing for about a minute; the
+  cause was not reproduced here (antivirus checks of the new files are
+  suspected). Every start now writes each step's time to
+  `logs/launcher-start.txt`, which problem reports include, so a slow start
+  shows where the time went. `PT5_START_STATUS=0` hides the window.
 - **Game copy check.** Setup now compares your disc folder with the retail
   GT5 disc (BCUS98114, disc version 02.00): every file the game reads
   (GT.VOL and the MOVIE videos) must be present, the right size and

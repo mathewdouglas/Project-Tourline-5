@@ -265,6 +265,7 @@ static std::wstring quote(const fs::path& p) {
 #include "volmap.h"
 #include "storage.h"
 #include "disc_check.h"
+#include "start_status.h"
 
 // Starts a child in a kill-on-close job with its output in logs/<tag>.*.
 static void start_child(const fs::path& exe, const std::wstring& args, const fs::path& cwd, const wchar_t* tag,
@@ -298,12 +299,19 @@ static void start_child(const fs::path& exe, const std::wstring& args, const fs:
     if (pid) *pid = pi.dwProcessId;
     std::swap(job_out.h, job.h); std::swap(process_out.h, process.h);
 }
+// With a start being timed (start_status.h), the wait also watches for the
+// child's first visible window, which ends the start.
 static DWORD run(const fs::path& exe, const std::wstring& args, const fs::path& cwd, const wchar_t* tag) {
     Handle job(INVALID_HANDLE_VALUE), process(INVALID_HANDLE_VALUE);
-    start_child(exe, args, cwd, tag, job, process);
+    DWORD pid = 0;
+    start_child(exe, args, cwd, tag, job, process, &pid);
+    const bool play = wcscmp(tag, L"play") == 0;   // not setup's RPCS3 runs
+    if (play) start_status::step(L"Waiting for the game window");
     for (;;) {
-        const DWORD waited = MsgWaitForMultipleObjects(1, &process.h, FALSE, INFINITE, QS_ALLINPUT);
-        if (waited == WAIT_OBJECT_0) break;
+        const bool watching = play && start_status::active();
+        const DWORD waited = MsgWaitForMultipleObjects(1, &process.h, FALSE, watching ? 100 : INFINITE, QS_ALLINPUT);
+        if (waited == WAIT_OBJECT_0) { if (watching) start_status::end(L"game exited before showing a window"); break; }
+        if (waited == WAIT_TIMEOUT) { if (start_status::has_window(pid)) start_status::end(L"game window shown"); continue; }
         if (waited == WAIT_FAILED) fail(L"Could not wait for the launched application.");
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
@@ -1218,6 +1226,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             if(!selected.empty()) target=find_target(selected);
         }
         if (quiet) { validate_setup(); validate_engine(); return 0; }
+        // A Play start is timed, with a status window once it is slow (start_status.h).
+        const bool play_start = !open && !change_storage && storage.empty() && !copy_save && !verify_disc &&
+            !mods_ui && mod_zip.empty() && mod_remove.empty() && !configure_only && !force;
+        struct EndStart { ~EndStart() { start_status::end(L"stopped"); } } end_start;
+        if (play_start) start_status::begin(L"Checking the game engine");
         if (!open && !change_storage && storage.empty()) {
             if (!force || configure_only || explicit_target) validate_engine(); // Native setup chooses its version below.
             if (!fs::is_directory(install/L"assets/glyphs")) fail(L"The player assets folder is missing. Rebuild or re-extract the complete player folder.");
@@ -1270,6 +1283,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             if(choice==IDCANCEL) throw Cancelled{};
             target=choice==211 ? &targets[1] : &targets[0];validate_engine();
         }
+        start_status::step(L"Checking your setup");
         bool valid = false;
         if (!force) { try { validate_setup(); valid = true; } catch (const Failure&) {} catch (const fs::filesystem_error&) {} }
         if (!valid) {
@@ -1286,9 +1300,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         const auto cache_override = env(L"RSX_SHADER_CACHE");
         const auto overlay_override = env(L"PS3_FS_OVERLAY");   // a developer's own overlay wins over the mod selection
         for (;;) { // A version change starts a fresh engine under the same storage lease.
+        start_status::step(L"Checking the game engine and your setup");
         validate_setup(); const auto engine = validate_engine();
         atomic_ini(data/L"selection.ini", {{L"target", target->id}});
         if (!fs::is_directory(install/L"assets/glyphs")) fail(L"The player assets folder is missing. Rebuild or re-extract the complete player folder.");
+        start_status::step(L"Copying button art");
         fs::create_directories(target_data()/L"assets");
         fs::copy(install/L"assets/glyphs", target_data()/L"assets/glyphs", fs::copy_options::recursive|fs::copy_options::overwrite_existing);
         const auto settings = data/L"gt5p_settings.toml";
@@ -1300,21 +1316,26 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         }
         setenv(L"GT5P_ROOT", target_data().wstring()); setenv(L"PS3_VFS_ROOT", target_data().wstring());
         setenv(L"GT5P_SETTINGS", settings.wstring());
+        start_status::step(L"Checking your game folder");
         const auto selected_game = game_folder(profile(target_data()/L"setup.ini", L"game", L"directory"));
         setenv(L"GT5P_GAME_DIR", selected_game.wstring()+L"/");
         // Once per launcher run and disc folder; a version change keeps the result.
         static fs::path disc_checked;
         if (disc_checked != selected_game) {
+            start_status::step(L"Checking your game disc");
             setenv(L"GT5P_DISC_CHECK", check_disc(selected_game, DiscCheck::play));
             disc_checked = selected_game;
         }
+        start_status::step(L"Checking installed game data");
         link_installed_data(selected_game);
+        start_status::step(L"Checking saves");
         try { offer_104_save(); }
         catch (const Cancelled&) {}   // copy cancelled: nothing recorded, offered again next launch
         catch (const Failure& f) { report(L"Your 01.04 save was not copied; 2.11 starts with its own save.\n\n" + f.message); }
         catch (const fs::filesystem_error&) { report(L"Your 01.04 save could not be copied (check free space and folder access); 2.11 starts with its own save."); }
         setenv(L"RSX_SHADER_CACHE", cache_override.empty() ? (target_data()/L"shadercache").wstring() : cache_override);
         setenv(L"GT5P_GAME_VERSION", target->version);
+        start_status::step(L"Checking both game versions");
         setenv(L"GT5P_VERSION_211_SUPPORTED", target_ready(targets[1], false) ? L"1" : L"0");
         setenv(L"GT5P_VERSION_104_READY", target_ready(targets[0]) ? L"1" : L"0");
         setenv(L"GT5P_VERSION_211_READY", target_ready(targets[1]) ? L"1" : L"0");
@@ -1323,6 +1344,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         bool version_change = false;
         for (;;) {
             mods::apply_environment(overlay_override);
+            if (start_status::active()) start_status::step(L"Starting the game");
+            else start_status::begin(L"Starting the game");   // F1 restarts and mod changes
             const auto code = run(engine, quote(target_data()/L"input/EMAIN.ELF"), target_data(), L"play");
             if (code == pt5_restart::exit_code) continue;
             if (code == pt5_restart::mods_manage || (code & pt5_restart::mod_select_mask) == pt5_restart::mod_select) {

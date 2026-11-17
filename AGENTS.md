@@ -190,6 +190,12 @@ compiled and interpreted shaders (`RSX_SHADER_WINDOW=0` old coordinates;
 and another affected car. Tests: `rt_self_read.py`, `shader_window.py`
 (WARP). See the headlamp entry in [docs/progress-gt5.md](docs/progress-gt5.md).
 
+**Startup status (0.1.10, launcher).** A slow Play start (over 1.5 s to the
+game window) shows a status window naming the step (`launcher/start_status.h`,
+`PT5_START_STATUS=0` off); every start logs step times to
+`<storage>/logs/launcher-start.txt` (in problem reports). The reported
+one-minute first start after an update was not reproduced; ask for that file.
+
 **Game copy check (0.1.10, launcher).** Setup, RecompLauncher preparation
 and the first start of an older install SHA-256 the disc files the engine
 reads (GT.VOL, MOVIE; `launcher/disc_files.h` from `scripts/disc_manifest.py`),

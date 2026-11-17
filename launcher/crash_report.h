@@ -386,7 +386,7 @@ inline Report write(const fs::path& data, const Analysis& a) {
         "or screenshots are included. Open the files to check before sharing.\r\n"});
     e.push_back({"summary.md", r.body});
     e.push_back({"system.txt", sys + game + "Exit code: "+ std::to_string(a.code) + "\nLauncher: " PT5_VERSION " (" PT5_REVISION ")\n"});
-    for (const char* name : {"play.err", "play.out"}) {
+    for (const char* name : {"play.err", "play.out", "launcher-start.txt"}) {
         const fs::path p = data / L"logs" / name;
         if (fs::is_regular_file(p)) e.push_back({name, sc.apply(as_utf8(bounded(read_file(p))))});
     }

@@ -76,6 +76,28 @@ installed data/executables are retained under `backups/`. Saves are separate
 and are not replaced. Copying shows progress and offers cancellation. Linked
 source files/folders are refused rather than traversed.
 
+## Startup status
+
+Between Play and the game window the launcher checks the engine, setup,
+installed data and disc, then starts the engine: about 0.1-1 s normally.
+After an update, players saw nothing for about a minute on the first start
+(RecompLauncher's trail also shows short sessions after each update). It was
+not reproduced on the developer machine: freshly extracted engines read in
+0.2 s, start in 0.2 s, and a fresh copy of the 0.1.9 install showed its
+window in 1.1 s; the downloaded files carry no Mark of the Web, and Defender
+logged nothing. Antivirus checks remain the suspicion.
+
+`launcher/start_status.h` therefore shows a small status window (moving bar,
+current step, elapsed time; an antivirus hint after 10 s) once a start has
+taken 1.5 s, hides it while any other launcher window is up, and closes it
+when the game's first visible window appears or the game exits. Its Close
+button hides it only. F1 restarts are timed the same way. Each start appends
+one line to `logs/launcher-start.txt` (step times, outcome, launcher
+version; trimmed past 32 KiB), which problem reports include: the next slow
+start names its step. `PT5_START_STATUS=0` hides the window; runs without UI
+(`PT5_SETUP_UI=0`) never show it. Test: `player_setup.py` (fixture game
+window after 5 s: status shown at 1.7 s, gone at 5.4 s).
+
 ## Game copy check
 
 Setup compares the disc folder with the retail BCUS98114 v02.00 disc: the
