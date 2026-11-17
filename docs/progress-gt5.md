@@ -4,6 +4,36 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Issue #47: the 2.11 GPUSyncArray freeze, with the report ring (2026-11-18)
+
+Another player (2.11, no mod, Windows 10, 0.1.10) froze in the button
+assignment settings: no present for 11 s, main in `sys_lwcond_wait`, thread
+`gFKsE` (tid 30) polling `0x00B95248` on `0x01913300`: the same freeze as
+#28, #36, #38. It is the first freeze dump with 0.1.10's report ring:
+
+- **Not a missing report.** 61098 GET_REPORTs processed, every listed one
+  `written=1`; FIFO get = put (`0x00012080`), user commands raised and
+  delivered 7298/7298. The GPU side was idle and caught up.
+- **Workload 4 ended its pass with commands left.** The poll `0x00B99444`
+  takes buffer `idx`'s head (`+0x40 + 16*idx`), counts the queued 8-byte
+  commands from there (list at `*(+0x30 + 4*idx)`, nonzero halfword at +2),
+  and waits until the lowest lane progress (`+0x42..+0x4E`, FFFF unused)
+  reaches head + count. Dump: buffer 0 head 7, lane progress 7, so commands
+  were queued after 7; workload 4 `busy=0 remaining=0 ready=0`, lanes parked
+  normally. Nothing will run them: a lost kick.
+- **Suspect: a kick into a running pass.** `spurs_group_join` (2.11 only,
+  `SPURS_LANE_JOIN`) sends back lanes that already left; if every lane is
+  still inside the pass, the kick does nothing, and a lane past its last
+  list check then ends the pass with the appended commands unread. Not
+  verified: needs the queued commands and the ready count over time
+  (reproduce, then trace kicks and pass ends for workload 4). `SPURS_LANE_JOIN=0`
+  is the experiment to compare (15 -> 32-35 FPS car list came from it).
+
+The same report shows the noisy car body texture of #42 (SLS AMG '10 in the
+Arcade car list, no mod), so #42 is a 2.11 rendering bug, not the mod or the
+slot-table bug. The 0.1.10 notes already have an unconfirmed noisy car
+photo on 2.11; it needs a capture of the car's draw.
+
 ## Loader-request crashes and hangs: sync slot tables ran out (2026-11-18)
 
 **Issues #41, #43, #44, #45 (and #34, #37) are one runtime bug.** All show a
