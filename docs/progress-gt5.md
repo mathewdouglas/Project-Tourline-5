@@ -15,6 +15,15 @@ unchanged (58.2 vs 58.4 FPS back to back). Details, rollbacks and the new
 pre-publish scan (`scripts/release/vt.py`, `clean_build.py --vt-key-file`):
 [release-av.md](release-av.md).
 
+The v0.1.10 release ZIP was replaced the same day (tag unchanged): the
+0.1.10 objects relinked with both changes (the frame-tested exe), packaged by
+0.1.10's own `package_player.py` with the original arguments. Only `gt5.exe`
+and its hash in `release.ini`/`pt5-release.ini` differ. New ZIP SHA-256
+`18e297adfeb91bdd022151a12860f45a5db6311c82e672bf78a58b38fdae04ec`: VirusTotal
+0/64, `gt5.exe` 0/69; `tourline5.exe` keeps one Trapmine
+`suspicious.low.ml.score` (unchanged file, as in the original ZIP).
+`tourline5.exe --check` passes from the extracted package.
+
 ## 0.1.11 work (2026-11-18): game speed, installed-data pass, loader-request bug
 
 **Game speed (#13).** `g_gt5p_game_speed` (1-3, `gt5p_present.cpp`) divides
