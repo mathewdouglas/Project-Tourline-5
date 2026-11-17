@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
     }
     if (!pt5_restart::managed()) return 2;
     printf("cwd=%s\nelf=%s\n", std::filesystem::current_path().string().c_str(),argc>1?argv[1]:"");
-    for (const char* key : {"GT5P_GAME_DIR","GT5P_SETTINGS","GT5P_ROOT","PS3_VFS_ROOT","RSX_SHADER_CACHE","GT5P_LAUNCHER_RESTART"})
+    for (const char* key : {"GT5P_GAME_DIR","GT5P_SETTINGS","GT5P_ROOT","PS3_VFS_ROOT","RSX_SHADER_CACHE","GT5P_LAUNCHER_RESTART","GT5P_DISC_CHECK"})
         printf("%s=%s\n",key,getenv(key)?getenv(key):"");
     if(const char* p=getenv("PT5_TEST_HOLD")) { std::ofstream(p)<<"ready"; Sleep(2000); }
     if(const char* p=getenv("PT5_TEST_RESTART")) {
@@ -188,6 +188,19 @@ def sfo(path, **fields):
 disc = WORK / 'my disc & files/PS3_GAME'
 sfo(disc / 'PARAM.SFO', TITLE_ID='BCUS98114', VERSION='02.00', APP_VER='01.00')
 (disc / 'USRDIR').mkdir(); (disc / 'USRDIR/GT.VOL').write_bytes(b'synthetic volume')
+(disc / 'USRDIR/MOVIE').mkdir(); (disc / 'USRDIR/MOVIE/tv_1.pam').write_bytes(b'synthetic movie')
+# The game copy check (launcher/disc_check.h) compares the fixture disc with
+# its own reference list instead of the retail one.
+disc_manifest = WORK / 'disc manifest.txt'
+
+
+def write_disc_manifest(extra=()):
+    lines = [f'{(disc/p).stat().st_size} {hashlib.sha256((disc/p).read_bytes()).hexdigest()} {p}'
+             for p in ('USRDIR/GT.VOL', 'USRDIR/MOVIE/tv_1.pam')]
+    disc_manifest.write_text('\n'.join(lines + list(extra)) + '\n')
+
+
+write_disc_manifest()
 installed = WORK / 'RPCS3 folder/dev_hdd0/game/BCUS98114'
 sfo(installed / 'PARAM.SFO', TITLE_ID='BCUS98114', APP_VER='01.04')
 (installed / 'USRDIR/PDIPFS/00').mkdir(parents=True)
@@ -197,8 +210,10 @@ sfo(installed / 'PARAM.SFO', TITLE_ID='BCUS98114', APP_VER='01.04')
 executable = WORK / 'my executable.elf'; executable.write_bytes(ELF)
 home = WORK / 'launcher home'; home.mkdir()
 # PT5_RPCS3_DOWNLOAD=0 keeps the explicit-input checks below; the setup-owned route is tested separately.
-base_env = {**os.environ, 'PT5_LAUNCHER_HOME': str(home), 'PT5_SETUP_UI': '0', 'PT5_RPCS3_DOWNLOAD': '0'}
-for key in ('PT5_USER_DIR', 'PT5_STORAGE_LINK', 'GT5P_ROOT', 'GT5P_GAME_DIR', 'GT5P_SETTINGS', 'RSX_SHADER_CACHE', 'GT5P_NO_SETTINGS'):
+base_env = {**os.environ, 'PT5_LAUNCHER_HOME': str(home), 'PT5_SETUP_UI': '0', 'PT5_RPCS3_DOWNLOAD': '0',
+            'PT5_DISC_MANIFEST': str(disc_manifest)}
+for key in ('PT5_USER_DIR', 'PT5_STORAGE_LINK', 'GT5P_ROOT', 'GT5P_GAME_DIR', 'GT5P_SETTINGS', 'RSX_SHADER_CACHE', 'GT5P_NO_SETTINGS',
+            'PT5_DISC_CHECK', 'GT5P_DISC_CHECK', 'GT5P_GAME_VERSION', 'PS3_FS_OVERLAY'):
     base_env.pop(key, None)
 count = WORK / 'child-count.txt'; base_env['PT5_TEST_COUNT'] = str(count)
 subprocess.run([str(WORK/'decryption.exe'), str(WORK)], env={**base_env, 'PT5_TEST_DECRYPT_SOURCE':str(executable)}, check=True, timeout=30)
@@ -562,6 +577,9 @@ with zipfile.ZipFile(crash) as z:
     raw = b''.join(z.read(n) for n in names)
     err = z.read('play.err').decode()
     assert '%USERPROFILE%' in z.read('setup.ini').decode('utf-8'), 'setup.ini must be UTF-8 and scrubbed'
+    system = z.read('system.txt').decode()
+    assert 'Game version: 01.04' in system and 'Game copy: verified' in system and 'Mods: none' in system, system
+    assert '**Game:**' in z.read('summary.md').decode()
 for s in secrets():
     for enc in ('utf-8', 'utf-16-le'):
         assert s.lower().encode(enc) not in raw.lower(), f'personal name left in report ({enc}): ' + s
@@ -812,3 +830,62 @@ known={**chain_env,'PT5_LAUNCHER_HOME':str(known_home),'PT5_TEST_HEADLESS_EXIT':
 run(*chain_args,extra=known)
 run('--check','--target=02.11',extra=known)
 print('PASS: complete output with unrelated tool failure rejected; exact pinned headless teardown accepted')
+
+# Game copy check (launcher/disc_check.h) against the fixture's reference list.
+check_disc = WORK/'disc check copy/PS3_GAME'
+shutil.copytree(disc, check_disc)
+check_home = WORK/'disc check'
+check_env = {'PT5_LAUNCHER_HOME': str(check_home)}
+
+
+def disc_run(*args, success=True, extra=None):
+    return run(*args, success=success, extra={**check_env, **(extra or {})})
+
+
+def play_status():
+    out = (check_home/'logs/play.out').read_text(errors='replace')
+    return [l.split('=', 1)[1] for l in out.splitlines() if l.startswith('GT5P_DISC_CHECK=')][-1]
+
+
+setup = disc_run('--configure', '--game', check_disc, '--game-data', installed, '--elf', executable)
+assert b'[disc-check] read' in setup.stderr, setup.stderr
+cache = (check_home/'disc-check.ini').read_bytes()
+assert cache.startswith(b'\xff\xfe') and 'USRDIR/GT.VOL=' in cache.decode('utf-16'), cache
+first = disc_run()
+assert play_status() == 'verified' and b'[disc-check] read' not in first.stderr, first.stderr   # stored results reused
+assert not (check_home/'logs/disc-check.txt').exists()
+assert disc_run('--verify-disc').returncode == 0
+print('PASS: game copy: verified at setup, stored per file, reused at play, --verify-disc')
+
+# A damaged file of the right size: play warns (no dialog without UI) and still starts.
+vol = check_disc/'USRDIR/GT.VOL'; good_vol = vol.read_bytes()
+vol.write_bytes(bytes(len(good_vol)))
+disc_run()
+assert play_status() == 'problems: USRDIR/GT.VOL damaged', play_status()
+assert 'GT.VOL is damaged' in (check_home/'logs/disc-check.txt').read_text(encoding='utf-8')
+assert disc_run('--verify-disc', success=False).returncode == 3
+manifest_doc = json.loads((ROOT/'launcher/recomplauncher.json').read_text())
+assert 'disc-check.txt' in manifest_doc['exit_codes']['3']
+# Setup refuses the damaged copy and keeps the previous one; PT5_DISC_CHECK=0 skips the check.
+before_check = (check_home/'setup.ini').read_bytes()
+refused = disc_run('--configure', '--game', check_disc, '--game-data', installed, '--elf', executable, success=False)
+assert b'GT.VOL is damaged' in refused.stderr and (check_home/'setup.ini').read_bytes() == before_check
+disc_run('--configure', '--game', check_disc, '--game-data', installed, '--elf', executable, extra={'PT5_DISC_CHECK': '0'})
+disc_run(extra={'PT5_DISC_CHECK': '0'})
+assert play_status() == 'not checked (PT5_DISC_CHECK=0)', play_status()
+vol.write_bytes(good_vol)
+disc_run()
+assert play_status() == 'verified' and not (check_home/'logs/disc-check.txt').exists()
+print('PASS: game copy: damaged file warned at play, refused by setup and --verify-disc (exit 3), switch off, repaired copy passes')
+
+# Missing and wrong-sized files, through RecompLauncher's prepare.
+write_disc_manifest(['123 ' + '0'*64 + ' USRDIR/MOVIE/tv_missing.pam'])
+(check_disc/'USRDIR/MOVIE/tv_1.pam').write_bytes(b'short')
+prepared = prepare(source=check_disc.parent, optional=executable, success=False,
+                   extra={'PT5_LAUNCHER_HOME': str(WORK/'disc check prepare')})
+err = prepared.stderr.decode(errors='replace')
+assert 'tv_missing.pam is missing' in err and 'tv_1.pam is the wrong size' in err, err
+write_disc_manifest()
+shutil.copyfile(disc/'USRDIR/MOVIE/tv_1.pam', check_disc/'USRDIR/MOVIE/tv_1.pam')
+prepare(source=check_disc.parent, optional=executable, extra={'PT5_LAUNCHER_HOME': str(WORK/'disc check prepare')})
+print('PASS: game copy: RecompLauncher preparation refuses missing and wrong-sized files, accepts the repaired copy')

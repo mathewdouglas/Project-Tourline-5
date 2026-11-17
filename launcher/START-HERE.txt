@@ -45,6 +45,9 @@ folder. Existing storage is copied and verified; the previous folder remains
 as a backup. Reconnect an external drive before launching.
 Change game files.cmd selects the source files again. Previous imported game
 data is kept under backups/ when replaced; saves are kept separately.
+Setup checks that your disc files match the retail disc; a damaged or
+incomplete copy causes freezes and crashes. Verify game files.cmd checks them
+again (it reads about 20 GB).
 
 Keep the entire player folder together, including assets/, pt5-release.ini,
 the engine and its DLLs. The player folder itself can also live on your SSD.

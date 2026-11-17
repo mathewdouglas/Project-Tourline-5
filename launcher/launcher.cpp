@@ -264,6 +264,7 @@ static std::wstring quote(const fs::path& p) {
 #include <unordered_map>
 #include "volmap.h"
 #include "storage.h"
+#include "disc_check.h"
 
 // Starts a child in a kill-on-close job with its output in logs/<tag>.*.
 static void start_child(const fs::path& exe, const std::wstring& args, const fs::path& cwd, const wchar_t* tag,
@@ -755,11 +756,84 @@ static fs::path install_updates(const fs::path& disc, fs::path& executable) {
     });
     executable = rpc; return game;
 }
+// The player chose Quit at the game copy warning. RecompLauncher maps the exit
+// code to its own message (launcher/recomplauncher.json, exit_codes).
+struct DiscRefused {};
+constexpr int disc_refused_exit = 3;
+enum class DiscCheck { setup, play, verify };
+// Checks the disc folder (disc_check.h). Every file is read once; later checks
+// reuse the stored results. Setup refuses a copy with problems (the player may
+// continue in the dialog); play warns with Play anyway / Quit. Returns the
+// status line the engine and crash reports carry (GT5P_DISC_CHECK).
+static std::wstring check_disc(const fs::path& game, DiscCheck mode) {
+    if (!disc_check::enabled()) return L"not checked (PT5_DISC_CHECK=0)";
+    const auto cache = data / L"disc-check.ini";
+    const bool refresh = mode == DiscCheck::verify;
+    CopyState state; state.total = 1000;
+    disc_check::Result result;
+    auto body = [&] {
+        result = disc_check::full(game, cache, refresh, state.cancel, [&](const std::wstring& file, double f) {
+            state.copied = static_cast<uint64_t>(1000 * f);
+            {
+                std::lock_guard<std::mutex> guard(state.mutex);
+                state.current = L"Comparing your disc with the retail Gran Turismo 5 disc. Your files are only read; each is checked once.\n\n" + file;
+            }
+            const auto now = GetTickCount64();
+            if (easy_setup && now - state.last_progress_ms >= 250) {
+                state.last_progress_ms = now;
+                setup_progress(0.02 + 0.008 * f, "Checking your disc copy");
+            }
+        });
+    };
+    if (!disc_check::pending(game, cache, refresh)) body();   // all stored: no window
+    else with_progress(L"Checking your game disc", L"Comparing your disc with the retail Gran Turismo 5 disc.", state, body);
+    const auto status = disc_check::status(result);
+    if (result.read_bytes) fwprintf(stderr, L"[disc-check] read %.2f GiB: %ls\n", result.read_bytes / 1073741824.0, status.c_str());
+    if (!result.complete && mode != DiscCheck::play) throw Cancelled{};
+    if (result.problems.empty()) {
+        if (result.complete) { std::error_code ec; fs::remove(data/L"logs/disc-check.txt", ec); }
+        if (mode == DiscCheck::verify && !silent_errors)
+            MessageBoxW(nullptr, L"Your Gran Turismo 5 disc files match the retail disc.", L"Project Tourline 5", MB_OK | MB_ICONINFORMATION);
+        return status;
+    }
+    const std::wstring text = L"Your copy of the Gran Turismo 5 disc does not match the retail disc (BCUS98114, disc version 02.00):\n\n" +
+        disc_check::describe(result) +
+        L"\nA damaged or incomplete copy causes freezes, crashes and missing videos. Extract or dump the disc again, "
+        L"then select it with \"Change game files\". Your saves are not affected.";
+    try {
+        fs::create_directories(data/L"logs");
+        const std::wstring all = text + L"\n\nFolder: " + game.wstring() + L"\n";
+        const int n = WideCharToMultiByte(CP_UTF8, 0, all.c_str(), static_cast<int>(all.size()), nullptr, 0, nullptr, nullptr);
+        std::string utf8(n, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, all.c_str(), static_cast<int>(all.size()), utf8.data(), n, nullptr, nullptr);
+        std::ofstream(data/L"logs/disc-check.txt", std::ios::binary) << utf8;
+    } catch (...) {}
+    if (mode == DiscCheck::setup && silent_errors) fail(text + L"\n\nSetup was not changed.");
+    if (silent_errors) { fwprintf(stderr, L"%ls\n", text.c_str()); if (mode == DiscCheck::verify) throw DiscRefused{}; return status; }
+    TASKDIALOG_BUTTON buttons[] = {
+        {100, mode == DiscCheck::setup ? L"Continue setup anyway\nThe game may freeze or crash." : L"Play anyway\nThe game may freeze or crash. Problem reports will say the copy differs."},
+        {101, mode == DiscCheck::setup ? L"Cancel setup\nFix the disc copy first." : L"Quit\nFix the disc copy first."}};
+    TASKDIALOGCONFIG td{}; td.cbSize = sizeof td;
+    td.dwFlags = static_cast<TASKDIALOG_FLAGS>(TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION);
+    td.pszWindowTitle = L"Project Tourline 5 - game copy check";
+    td.pszMainIcon = TD_WARNING_ICON;
+    td.pszMainInstruction = L"Your game disc copy has problems";
+    td.pszContent = text.c_str();
+    td.pButtons = mode == DiscCheck::verify ? buttons + 1 : buttons; td.cButtons = mode == DiscCheck::verify ? 0 : 2;
+    td.dwCommonButtons = mode == DiscCheck::verify ? TDCBF_OK_BUTTON : 0;
+    int choice = 101;
+    if (FAILED(TaskDialogIndirect(&td, &choice, nullptr, nullptr))) choice = 101;
+    if (mode == DiscCheck::verify) throw DiscRefused{};
+    if (choice == 100) return status;
+    if (mode == DiscCheck::setup) throw Cancelled{};
+    throw DiscRefused{};
+}
 static void configure(fs::path disc, fs::path installed, fs::path executable) {
     setup_progress(0.02, "Checking GT5 disc and update folders");
     if (disc.empty()) disc = pick(true, L"Select your extracted Gran Turismo 5 disc or PS3_GAME folder");
     if (disc.empty()) throw Cancelled{};
     disc = game_folder(disc);
+    check_disc(disc, DiscCheck::setup);
     bool managed = false;
     if (!package_folder.empty()) {
         if (!installed.empty()) fail(L"Choose update packages or an existing installation, not both.");
@@ -1049,7 +1123,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     struct Com { HRESULT result; ~Com() { if (SUCCEEDED(result)) CoUninitialize(); } } apartment{com};
     silent_errors = env(L"PT5_SETUP_UI") == L"0";
     try {
-        bool force = false, open = false, change_storage = false, configure_only = false, copy_save = false, mods_ui = false;
+        bool force = false, open = false, change_storage = false, configure_only = false, copy_save = false, mods_ui = false, verify_disc = false;
         fs::path storage, disc, installed, elf, mod_zip;
         std::wstring mod_remove;
         bool explicit_target = false;
@@ -1069,6 +1143,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             else if (arg == L"--check") { quiet = true; silent_errors = true; }
             else if (arg == L"--open-data") open = true;
             else if (arg == L"--copy-104-save") copy_save = true;
+            else if (arg == L"--verify-disc") verify_disc = true;
             else if (arg == L"--mods") mods_ui = true;
             else if (arg == L"--install-mod" && i+1 < argc) mod_zip = fs::absolute(argv[++i]);
             else if (arg == L"--remove-mod" && i+1 < argc) mod_remove = argv[++i];
@@ -1087,12 +1162,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 else if (arg == L"--game") disc = value;
                 else if (arg == L"--game-data") installed = value;
                 else elf = value;
-            } else fail(L"Supported options: --setup, --check, --open-data, --copy-104-save, --mods, --install-mod <zip>, --remove-mod <id>, --choose-storage, --set-storage <empty folder>, --configure --game <dump> [--elf <ELF or rpcs3.exe>] [--game-data <installation> --elf <ELF or rpcs3.exe>], --recomplauncher-prepare --game <dump> [--game-data=<installation>] [--executable=<ELF or rpcs3.exe>].");
+            } else fail(L"Supported options: --setup, --check, --open-data, --copy-104-save, --verify-disc, --mods, --install-mod <zip>, --remove-mod <id>, --choose-storage, --set-storage <empty folder>, --configure --game <dump> [--elf <ELF or rpcs3.exe>] [--game-data <installation> --elf <ELF or rpcs3.exe>], --recomplauncher-prepare --game <dump> [--game-data=<installation>] [--executable=<ELF or rpcs3.exe>].");
         }
         if (!package_folder.empty() && target != &targets[1]) fail(L"Update packages select GT5 2.11; remove the conflicting --target option.");
         if ((quiet && (force || open || change_storage || !storage.empty())) ||
             (open && (force || change_storage || !storage.empty())) ||
             (copy_save && (quiet || open || force || change_storage || !storage.empty() || explicit_target)) ||
+            (verify_disc && (quiet || open || force || copy_save || change_storage || !storage.empty() || mods_ui || !mod_zip.empty() || !mod_remove.empty())) ||
             ((mods_ui || !mod_zip.empty() || !mod_remove.empty()) &&
              (quiet || open || force || copy_save || change_storage || !storage.empty() || (mods_ui + !mod_zip.empty() + !mod_remove.empty()) > 1)) ||
             (force && (change_storage || !storage.empty())) ||
@@ -1149,6 +1225,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             fail(L"Project Tourline 5 is already running, or this storage is not writable.");
         if (!override_data) link_storage(home);
         if (copy_save) { copy_104_save_command(); return 0; }
+        if (verify_disc) {   // "Verify game files": reads every disc file again
+            validate_setup();
+            check_disc(game_folder(profile(target_data()/L"setup.ini", L"game", L"directory")), DiscCheck::verify);
+            return 0;
+        }
         if (mods_ui || !mod_zip.empty() || !mod_remove.empty()) {
             if (!mods::enabled()) fail(L"Mods are turned off (PT5_MODS=0).");
             validate_setup();
@@ -1212,6 +1293,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         setenv(L"GT5P_SETTINGS", settings.wstring());
         const auto selected_game = game_folder(profile(target_data()/L"setup.ini", L"game", L"directory"));
         setenv(L"GT5P_GAME_DIR", selected_game.wstring()+L"/");
+        // Once per launcher run and disc folder; a version change keeps the result.
+        static fs::path disc_checked;
+        if (disc_checked != selected_game) {
+            setenv(L"GT5P_DISC_CHECK", check_disc(selected_game, DiscCheck::play));
+            disc_checked = selected_game;
+        }
         link_installed_data(selected_game);
         try { offer_104_save(); }
         catch (const Cancelled&) {}   // copy cancelled: nothing recorded, offered again next launch
@@ -1260,6 +1347,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return 0;
         }
     } catch (const Cancelled&) { return 0; }
+      catch (const DiscRefused&) { return disc_refused_exit; }
       catch (const Failure& e) { report(e.message); }
       catch (const std::exception&) { report(L"A file operation failed. Check free space and folder access, then run tourline5.exe --setup again. Your original game files are unchanged."); }
     return 1;

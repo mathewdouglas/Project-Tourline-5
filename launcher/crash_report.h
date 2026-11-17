@@ -289,17 +289,43 @@ inline std::string system_info() {
     return s;
 }
 
+// ---- The game being played ----
+// Version, game copy check (disc_check.h, GT5P_DISC_CHECK) and active mods by
+// folder name (PS3_FS_OVERLAY), all set by the launcher before the start.
+inline std::string game_info() {
+    auto get = [](const wchar_t* key) {
+        std::vector<wchar_t> b(8192);
+        const DWORD n = GetEnvironmentVariableW(key, b.data(), static_cast<DWORD>(b.size()));
+        return n && n < b.size() ? std::wstring(b.data(), n) : std::wstring{};
+    };
+    std::string s;
+    const auto version = get(L"GT5P_GAME_VERSION"), copy = get(L"GT5P_DISC_CHECK"), overlay = get(L"PS3_FS_OVERLAY");
+    if (!version.empty()) s += "Game version: " + narrow(version, CP_UTF8) + "\n";
+    s += "Game copy: " + (copy.empty() ? std::string("not checked") : narrow(copy, CP_UTF8)) + "\n";
+    std::string mods;
+    for (size_t at = 0; at < overlay.size();) {
+        const size_t end = std::min(overlay.find(L';', at), overlay.size());
+        const auto name = fs::path(overlay.substr(at, end - at)).filename().wstring();
+        if (!name.empty()) mods += (mods.empty() ? "" : ", ") + narrow(name, CP_UTF8);
+        at = end + 1;
+    }
+    s += "Mods: " + (mods.empty() ? std::string("none") : mods) + "\n";
+    return s;
+}
+
 // ---- The issue text ----
 inline const char* kind_title(Kind k) {
     return k == Kind::renderer ? "Graphics error" : k == Kind::crash ? "Crash" : k == Kind::freeze ? "Freeze" : "Error exit";
 }
 
-inline std::string summary(const Analysis& a, const std::string& sys, const std::string& zip_name, size_t budget = 2400) {
+inline std::string summary(const Analysis& a, const std::string& sys, const std::string& zip_name, size_t budget = 2400,
+                           const std::string& game = {}) {
     std::string s;
     s += "**What happened:** the game " + a.what + ".\n\n";
     s += "**What were you doing?** (please describe: mode, track, car, what you pressed)\n\n\n";
     s += "**Where:** " + (a.milestone.empty() ? std::string("unknown") : a.milestone) + "\n\n";
     s += "**Version:** Project Tourline 5 " PT5_VERSION " (" PT5_REVISION ")\n\n";
+    if (!game.empty()) s += "**Game:**\n```\n" + game + "```\n\n";
     s += "**PC:**\n```\n" + sys + "```\n\n";
     if (!a.detail.empty() && budget) {
         s += "<details><summary>Log lines</summary>\n\n```\n";
@@ -342,13 +368,13 @@ inline Report write(const fs::path& data, const Analysis& a) {
     const fs::path dir = data / L"logs" / L"reports";
     fs::create_directories(dir);
     Report r; r.zip = dir / (std::string(stamp) + ".zip");
-    const std::string sys = sc.apply(system_info());
+    const std::string sys = sc.apply(system_info()), game = sc.apply(game_info());
     Analysis shown = a;
     for (auto& d : shown.detail) d = sc.apply(d);
     shown.milestone = sc.apply(shown.milestone);
     // GitHub refuses very long new-issue links; the full logs are in the ZIP.
     for (size_t budget : {2400u, 1200u, 500u, 0u}) {
-        r.body = summary(shown, sys, r.zip.filename().string(), budget);
+        r.body = summary(shown, sys, r.zip.filename().string(), budget, game);
         r.url = issue_url(shown, r.body);
         if (r.url.size() <= 7000) break;
     }
@@ -359,7 +385,7 @@ inline Report write(const fs::path& data, const Analysis& a) {
         "folder and PC name were replaced before it was written; no game files, saves\r\n"
         "or screenshots are included. Open the files to check before sharing.\r\n"});
     e.push_back({"summary.md", r.body});
-    e.push_back({"system.txt", sys + "Exit code: " + std::to_string(a.code) + "\nLauncher: " PT5_VERSION " (" PT5_REVISION ")\n"});
+    e.push_back({"system.txt", sys + game + "Exit code: "+ std::to_string(a.code) + "\nLauncher: " PT5_VERSION " (" PT5_REVISION ")\n"});
     for (const char* name : {"play.err", "play.out"}) {
         const fs::path p = data / L"logs" / name;
         if (fs::is_regular_file(p)) e.push_back({name, sc.apply(as_utf8(bounded(read_file(p))))});

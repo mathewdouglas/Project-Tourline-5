@@ -3,6 +3,31 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Game copy check.** Setup now compares your disc folder with the retail
+  GT5 disc (BCUS98114, disc version 02.00): every file the game reads
+  (GT.VOL and the MOVIE videos) must be present, the right size and
+  byte-identical. Each file is read once (about 20 GB, measured at about 20 s
+  here; a hard drive takes a few minutes) and only checked again if it
+  changes. A damaged or incomplete copy stops setup with the list of bad files.
+  Existing installs are checked once at the next start; a copy with problems
+  shows a warning with Play anyway or Quit. "Verify game files.cmd" (or
+  `tourline5.exe --verify-disc`) reads every file again. RecompLauncher's
+  preparation runs the same check, and its Quit exit code shows a message
+  there. Problem reports and the F8 debug export now say whether the copy was
+  verified and which mods are active. `PT5_DISC_CHECK=0` turns the check off.
+
+### Fixed
+- **GT5 2.11: stuck on the GT logo while loading the main menu** (issue #37).
+  A loader thread waited forever on a lock in a request that had already
+  finished. Lock ownership is now kept by the port itself
+  (`PS3_LWM_HOST_STATE=0` restores the old behaviour).
+- **Slowdown in long sessions** (issue #37). After about half an hour a debug
+  log reopened and wrote every SPU transfer to the log (14.8 GB in one
+  player's session). Log limits now stop counting at their cap.
+
 ## [0.1.9] - 2026-11-16
 
 ### Added

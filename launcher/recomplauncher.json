@@ -8,6 +8,9 @@
       "tourline5.exe"
     ]
   },
+  "exit_codes": {
+    "3": "Your Gran Turismo 5 disc copy does not match the retail disc, so the game was not started. The damaged or missing files are listed in logs/disc-check.txt (Open Logs). Extract or dump the disc again, then choose the new folder as your copy and run setup."
+  },
   "config": [
     {
       "id": "main",

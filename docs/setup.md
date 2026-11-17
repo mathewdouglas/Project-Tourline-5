@@ -76,9 +76,41 @@ installed data/executables are retained under `backups/`. Saves are separate
 and are not replaced. Copying shows progress and offers cancellation. Linked
 source files/folders are refused rather than traversed.
 
+## Game copy check
+
+Setup compares the disc folder with the retail BCUS98114 v02.00 disc: the
+files the engine reads (`USRDIR/GT.VOL` and `USRDIR/MOVIE/*.pam`, 18.4 GiB)
+must be present, the right size and match their SHA-256
+(`launcher/disc_check.h`; the list is `launcher/disc_files.h`, generated with
+`config/gt5-disc.json` by `scripts/disc_manifest.py` from a Redump-named
+dump). Other disc files are not checked: the engine does not use them, setup
+verifies `DATA000.PKG` itself, and folder-dump tools may change `EBOOT.BIN`
+or `PARAM.SFO`. Each file's hash is stored in `disc-check.ini` with its path,
+size and write time, so later checks cost a directory listing. Measured on
+this machine: 19 s for the first check (possibly from the file cache),
+0 s after.
+
+- Setup with a damaged, missing or wrong-sized file stops and lists the files.
+  Interactive setup offers Continue setup anyway; `--configure` and
+  RecompLauncher's preparation fail, leaving the previous setup selected.
+- Play checks once per launcher run. An install from before the check reads
+  its files once, behind a progress window that can be cancelled (the game
+  then starts, reported as "not fully checked"). Problems show a warning with
+  Play anyway or Quit; Quit exits with code 3, which RecompLauncher's
+  `exit_codes` turns into a message. Without UI (`PT5_SETUP_UI=0`) play
+  continues. The list of bad files is written to `logs/disc-check.txt`.
+- **Verify game files.cmd** (`--verify-disc`) reads every file again and
+  reports the result; exit code 3 when there are problems.
+- The result reaches the engine as `GT5P_DISC_CHECK` and appears in problem
+  reports (`system.txt` and the issue text, with the game version and active
+  mods) and in the F8 debug export.
+- `PT5_DISC_CHECK=0` turns the check off. `PT5_DISC_MANIFEST=<file>` replaces
+  the reference list (`<bytes> <sha256> <path>` per line; tests only).
+
 | Storage location | Contents |
 | --- | --- |
 | `setup.ini` | Remembered disc location and target |
+| `disc-check.ini` | Stored game copy check results per disc file |
 | `input/EMAIN.ELF` | Verified imported update executable |
 | `gamedata/` | Installed data, saves and guest writable files |
 | `gt5p_settings.toml` | F1 settings |

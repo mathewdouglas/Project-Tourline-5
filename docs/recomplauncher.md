@@ -55,6 +55,16 @@ they never open another launcher setup dialog. The 01.04 disc-only route answers
 to allow large imports on slower drives. No shared key or file destinations
 are declared in the manifest: RecompLauncher passes selected paths directly.
 
+Preparation also checks the disc copy against the retail disc (see
+[Game copy check](setup.md#game-copy-check)): a damaged, missing or
+wrong-sized file fails preparation with the list in stderr and
+`logs/setup.err`. RecompLauncher has no verify hook or program action (its
+actions only open or clear folders, and its only content check is a CRC32
+badge for single-file copies), so the check lives in `tourline5.exe`. At Play,
+an install from before the check is read once; if the player chooses Quit at
+the warning, the launcher exits with code 3, which the manifest's
+`exit_codes` turns into a message pointing at `logs/disc-check.txt`.
+
 After preparation, Play starts the native launcher normally. Existing setup
 is remembered by both launch paths. Use Change storage.cmd to relocate it.
 RecompLauncher reruns preparation when setup inputs or the installed version
