@@ -71618,3 +71618,643 @@ index 6f618dd..557e7cf 100644
  }
  /* ---- [scene] end ---- */
  
+diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
+index 557e7cf..deaab58 100644
+--- a/libs/video/rsx_d3d12_backend.c
++++ b/libs/video/rsx_d3d12_backend.c
+@@ -668,6 +668,18 @@ typedef struct {
+      * exactly these to video memory before the frame's draws run). */
+     u32   ext_vb, ext_ib, ext_vraw, vper_lo, vper_hi;
+     int   ext_set;
++    /* [mv] Camera motion vectors (RSX_MV), filled by scene_frame_scan on the
++     * walker for the replay: where the scene is, after which record its depth
++     * is final, which record and unit are the boundary, and per viewport the
++     * matrix taking this frame's (ndc.x, ndc.y, clip z/w, 1) to last frame's
++     * clip position. */
++    struct {
++        int n;                      /* viewports, 0 = no vectors this frame */
++        u32 rt_off, gw, gh;         /* scene target and its guest clip */
++        u32 last, disp, unit;       /* last depth-tested scene record, boundary record, its scene unit */
++        int reset;                  /* nothing of the frame before belongs to this one */
++        struct { float rect[4], prect[4], R[16], vz[2]; int ok; } reg[2];
++    } mv;
+ } FrameSet;
+ static FrameSet s_frs[2];
+ static FrameSet* s_fr_rec = &s_frs[0];
+@@ -12929,6 +12941,327 @@ static void depth_copy_capture(int rt)
+     s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 2, bb);
+ }
+ 
++/* ---- [mv] Camera motion vectors (DLSS step 2), replay side ----
++ * Run once a frame, when the replay leaves the scene target after its last
++ * depth-tested draw (FR->mv.last): the scene's depth goes to the depth copy
++ * (depth_copy_capture, which also resolves a multisampled one), and one
++ * full-screen pass over the scene's host size writes
++ *   s_mv_tex  R16G16_FLOAT: per pixel, last frame's position minus this one,
++ *             in host pixels of the scene target (current + vector = previous)
++ *   s_mv_viz  RGBA8: the same as colour, for RSX_MV_VIEW
++ * With RSX_MV_VIEW the boundary draw's scene unit reads s_mv_viz instead of
++ * the scene (mv_substitute), so the picture shows the vectors under the HUD.
++ * RSX_MV_VIEW=c<amp>: the check view instead. Red is how much the scene's
++ * colour changed since the frame before at the same pixel, green how much
++ * is left after taking last frame's colour from where the vector points
++ * (both times <amp>). Right vectors leave still scenery dark green or black
++ * where the red is bright; what moves in the world (cars) stays green until
++ * per-object vectors (step 3). Keeps a copy of the scene (s_mv_hist).
++ * SRV heap slots 24-27 are reserved for this. */
++static float mv_view_px(void);   /* [mv] RSX_MV_VIEW, defined with the walker side */
++static int mv_view_check(void);
++#define MV_SRV_DEPTH 24u
++#define MV_SRV_SCENE 25u   /* the scene's colour (check view) */
++#define MV_SRV_HIST  26u   /* last frame's scene colour (check view) */
++#define MV_SRV_VIZ   27u
++static ID3D12Resource *s_mv_tex, *s_mv_viz, *s_mv_cb, *s_mv_hist;
++static u32 s_mv_hist_fmt;
++static int s_mv_hist_ok;
++static u8* s_mv_cb_map;
++static ID3D12DescriptorHeap* s_mv_rtv;
++static ID3D12PipelineState* s_mv_pso;
++static u32 s_mv_w, s_mv_h, s_mv_passes;
++static int s_mv_failed;
++static void off_rt_defer_release(ID3D12Resource* res);
++static int mv_pso_ensure(void)
++{
++    if (s_mv_pso) return 1;
++    if (s_mv_failed) return 0;
++    /* hdr = (viewports, host w / guest w, host h / guest h, view px); per
++     * viewport 7 rows: rect (guest), previous rect, R rows 0-3, (vz0, vz1, ok, 0). */
++    static const char src[] =
++        "cbuffer MV : register(b1) { float4 hdr; float4 g[14]; float4 hdr2; };"
++        "Texture2D<float> z : register(t0); Texture2D sc : register(t1); Texture2D hi : register(t2);"
++        "SamplerState lin : register(s1);"
++        "struct O { float2 mv : SV_Target0; float4 viz : SV_Target1; };"
++        "float4 vs(uint i : SV_VertexID) : SV_Position {"
++        " return float4(i == 1 ? 3 : -1, i == 2 ? -3 : 1, 0, 1); }"
++        "O ps(float4 p : SV_Position) {"
++        " O o; o.mv = float2(0, 0);"
++        " float d = z.Load(int3(p.xy, 0));"
++        " float2 gp = p.xy / hdr.yz;"
++        " for (int k = (int)hdr.x - 1; k >= 0; k--) {"
++        "  float4 rc = g[k * 7], pr = g[k * 7 + 1], vz = g[k * 7 + 6];"
++        "  if (gp.x < rc.x || gp.y < rc.y || gp.x >= rc.x + rc.z || gp.y >= rc.y + rc.w) continue;"
++        "  if (vz.z == 0) break;"
++        "  float4 h = float4(2 * (gp.x - rc.x) / rc.z - 1, 1 - 2 * (gp.y - rc.y) / rc.w, (d - vz.y) / vz.x, 1);"
++        "  float4 q = float4(dot(g[k * 7 + 2], h), dot(g[k * 7 + 3], h), dot(g[k * 7 + 4], h), dot(g[k * 7 + 5], h));"
++        "  if (q.w <= 1e-6) break;"
++        "  float2 prev = float2(pr.x + (q.x / q.w + 1) * pr.z * 0.5, pr.y + (1 - q.y / q.w) * pr.w * 0.5);"
++        "  o.mv = (prev - gp) * hdr.yz;"
++        "  break; }"
++        " if (hdr.w < 0) {"
++        "  float3 l = float3(0.299, 0.587, 0.114);"
++        "  float c = dot(sc.Load(int3(p.xy, 0)).rgb, l);"
++        "  float h0 = dot(hi.Load(int3(p.xy, 0)).rgb, l);"
++        "  float2 sz; hi.GetDimensions(sz.x, sz.y);"
++        "  float h1 = dot(hi.SampleLevel(lin, (p.xy + o.mv * hdr2.x) / sz, 0).rgb, l);"
++        "  o.viz = float4(saturate(abs(c - h0) * -hdr.w), saturate(abs(c - h1) * -hdr.w), 0, 1);"
++        "  return o; }"
++        " float m = length(o.mv), a = atan2(o.mv.y, o.mv.x) / 6.2831853 + 0.5;"
++        " float3 hue = saturate(abs(frac(a + float3(0, 2.0 / 3, 1.0 / 3)) * 6 - 3) - 1);"
++        " o.viz = float4(hue * saturate(m / max(hdr.w, 0.001)), 1);"
++        " return o; }";
++    ID3DBlob *vs = NULL, *ps = NULL, *err = NULL;
++    HRESULT hr = D3DCompile(src, sizeof(src) - 1, "motion-vectors", NULL, NULL, "vs", "vs_5_0",
++                            D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &vs, &err);
++    if (err) { err->lpVtbl->Release(err); err = NULL; }
++    if (SUCCEEDED(hr)) hr = D3DCompile(src, sizeof(src) - 1, "motion-vectors", NULL, NULL, "ps", "ps_5_0",
++                                       D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &ps, &err);
++    if (SUCCEEDED(hr)) {
++        D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {0};
++        pd.pRootSignature = s_d3d.vp_root_sig;
++        pd.VS.pShaderBytecode = vs->lpVtbl->GetBufferPointer(vs);
++        pd.VS.BytecodeLength = vs->lpVtbl->GetBufferSize(vs);
++        pd.PS.pShaderBytecode = ps->lpVtbl->GetBufferPointer(ps);
++        pd.PS.BytecodeLength = ps->lpVtbl->GetBufferSize(ps);
++        pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
++        pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
++        pd.RasterizerState.DepthClipEnable = TRUE;
++        pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
++        pd.BlendState.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
++        pd.BlendState.IndependentBlendEnable = TRUE;
++        pd.SampleMask = UINT_MAX;
++        pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
++        pd.NumRenderTargets = 2;
++        pd.RTVFormats[0] = DXGI_FORMAT_R16G16_FLOAT;
++        pd.RTVFormats[1] = DXGI_FORMAT_R8G8B8A8_UNORM;
++        pd.SampleDesc.Count = 1;
++        hr = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(s_d3d.device, &pd, &IID_ID3D12PipelineState,
++                                                               (void**)&s_mv_pso);
++    }
++    if (FAILED(hr)) {
++        s_mv_failed = 1;
++        fprintf(stderr, "[mv] pipeline creation failed 0x%08lX %s\n", (unsigned long)hr,
++                err ? (const char*)err->lpVtbl->GetBufferPointer(err) : "");
++    }
++    if (err) err->lpVtbl->Release(err);
++    if (vs) vs->lpVtbl->Release(vs);
++    if (ps) ps->lpVtbl->Release(ps);
++    return s_mv_pso != NULL;
++}
++static int mv_targets_ensure(u32 w, u32 h)
++{
++    if (s_mv_tex && s_mv_w == w && s_mv_h == h) return 1;
++    if (s_mv_failed) return 0;
++    if (s_mv_tex) { off_rt_defer_release(s_mv_tex); s_mv_tex = NULL; }
++    if (s_mv_viz) { off_rt_defer_release(s_mv_viz); s_mv_viz = NULL; }
++    HRESULT hr;
++    if (!s_mv_rtv) {
++        D3D12_DESCRIPTOR_HEAP_DESC hd = {0};
++        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; hd.NumDescriptors = 2;
++        hr = s_d3d.device->lpVtbl->CreateDescriptorHeap(s_d3d.device, &hd, &IID_ID3D12DescriptorHeap, (void**)&s_mv_rtv);
++        if (FAILED(hr)) { s_mv_failed = 1; fprintf(stderr, "[mv] RTV heap failed 0x%08lX\n", (unsigned long)hr); return 0; }
++    }
++    if (!s_mv_cb) {
++        D3D12_HEAP_PROPERTIES up = {0}; up.Type = D3D12_HEAP_TYPE_UPLOAD;
++        D3D12_RESOURCE_DESC bd = {0};
++        bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = 4096; bd.Height = 1; bd.DepthOrArraySize = 1;
++        bd.MipLevels = 1; bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
++        hr = s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &up, D3D12_HEAP_FLAG_NONE, &bd,
++            D3D12_RESOURCE_STATE_GENERIC_READ, NULL, &IID_ID3D12Resource, (void**)&s_mv_cb);
++        if (SUCCEEDED(hr)) hr = s_mv_cb->lpVtbl->Map(s_mv_cb, 0, NULL, (void**)&s_mv_cb_map);
++        if (FAILED(hr)) { s_mv_failed = 1; fprintf(stderr, "[mv] constant buffer failed 0x%08lX\n", (unsigned long)hr); return 0; }
++    }
++    D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
++    D3D12_RESOURCE_DESC td = {0};
++    td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; td.Width = w; td.Height = h;
++    td.DepthOrArraySize = 1; td.MipLevels = 1; td.SampleDesc.Count = 1;
++    td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN; td.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
++    D3D12_CLEAR_VALUE cv = {0};
++    td.Format = cv.Format = DXGI_FORMAT_R16G16_FLOAT;
++    hr = s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE, &td,
++        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &cv, &IID_ID3D12Resource, (void**)&s_mv_tex);
++    if (SUCCEEDED(hr)) {
++        td.Format = cv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
++        hr = s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE, &td,
++            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &cv, &IID_ID3D12Resource, (void**)&s_mv_viz);
++    }
++    if (FAILED(hr)) {
++        s_mv_failed = 1;
++        fprintf(stderr, "[mv] %ux%u targets failed 0x%08lX\n", w, h, (unsigned long)hr);
++        return 0;
++    }
++    D3D12_CPU_DESCRIPTOR_HANDLE r;
++    s_mv_rtv->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_mv_rtv, &r);
++    s_d3d.device->lpVtbl->CreateRenderTargetView(s_d3d.device, s_mv_tex, NULL, r);
++    r.ptr += s_d3d.device->lpVtbl->GetDescriptorHandleIncrementSize(s_d3d.device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
++    s_d3d.device->lpVtbl->CreateRenderTargetView(s_d3d.device, s_mv_viz, NULL, r);
++    s_mv_w = w; s_mv_h = h;
++    fprintf(stderr, "[mv] vector targets %ux%u\n", w, h);
++    return 1;
++}
++/* RSX_MV_MIRROR=1: camera vectors in the second viewport (the rear mirror)
++ * too. Off by default: the check view showed them wrong there (the error got
++ * larger, 1.2x, where the main view's halved). Hypothesis: GT5 keeps the
++ * mirror's pixels from the main view with a depth-zero clear, as Prologue
++ * does (Phase 95), so the depth left there is not the mirror's geometry.
++ * Per-object vectors, written by the draws themselves, will not need it. */
++static int mv_mirror_on(void)
++{
++    static int v = -1;
++    if (v < 0) { const char* e = getenv("RSX_MV_MIRROR"); v = e && e[0] == '1'; }
++    return v;
++}
++/* RSX_MV_CHECK_SCALE=<f> (1): the check view takes last frame's colour from
++ * f times the vector, to show the error is smallest at 1. */
++static float mv_check_scale(void)
++{
++    static float v = -1.0f;
++    if (v < 0.0f) { const char* e = getenv("RSX_MV_CHECK_SCALE"); v = e ? (float)atof(e) : 1.0f; if (v < 0.0f) v = 1.0f; }
++    return v;
++}
++/* The pass, with the scene target `rt` still bound; the caller binds its next
++ * target right after. */
++static void mv_pass(int rt)
++{
++    if (rt < 0 || !FR->mv.n || !s_d3d.cmd_list) return;
++    const OffRT* r = &s_d3d.off_rt[rt];
++    /* The depth it was drawn with: the multisampled one, or the shared
++     * window-sized one. A target with a depth buffer of its own is not
++     * handled yet. */
++    if (!r->ms && !(r->w == s_d3d.width && r->h == s_d3d.height)) {
++        static int said;
++        if (!said) { said = 1; fprintf(stderr, "[mv] scene target %ux%u has its own depth buffer: no vectors (not handled yet)\n", r->w, r->h); }
++        return;
++    }
++    if (!mv_pso_ensure() || !mv_targets_ensure(r->w, r->h)) return;
++    depth_copy_ensure();
++    if (!s_depth_copy) return;
++    depth_copy_capture(rt);
++    ID3D12GraphicsCommandList* cl = s_d3d.cmd_list;
++    /* Constants, one 256-byte block per frame set. */
++    float* k = (float*)(s_mv_cb_map + (FR->parity ? 256 : 0));
++    memset(k, 0, 256);
++    k[0] = (float)FR->mv.n;
++    k[1] = FR->mv.gw ? (float)r->w / (float)FR->mv.gw : 1.0f;
++    k[2] = FR->mv.gh ? (float)r->h / (float)FR->mv.gh : 1.0f;
++    k[3] = mv_view_px() > 0.0f ? mv_view_px() : 16.0f;
++    if (mv_view_check()) k[3] = s_mv_hist_ok ? -k[3] : 0.0001f;
++    k[60] = mv_check_scale();
++    for (int i = 0; i < FR->mv.n && i < 2; i++) {
++        float* g = k + 4 + i * 28;
++        memcpy(g, FR->mv.reg[i].rect, 16); memcpy(g + 4, FR->mv.reg[i].prect, 16);
++        memcpy(g + 8, FR->mv.reg[i].R, 64);
++        g[24] = FR->mv.reg[i].vz[0]; g[25] = FR->mv.reg[i].vz[1];
++        g[26] = (FR->mv.reg[i].ok && !FR->mv.reset && (i == 0 || mv_mirror_on())) ? 1.0f : 0.0f;
++    }
++    D3D12_CPU_DESCRIPTOR_HANDLE ch; D3D12_GPU_DESCRIPTOR_HANDLE gh;
++    s_d3d.srv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.srv_heap, &ch);
++    s_d3d.srv_heap->lpVtbl->GetGPUDescriptorHandleForHeapStart(s_d3d.srv_heap, &gh);
++    ch.ptr += MV_SRV_DEPTH * s_d3d.srv_inc; gh.ptr += MV_SRV_DEPTH * s_d3d.srv_inc;
++    D3D12_SHADER_RESOURCE_VIEW_DESC sv = {0};
++    sv.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
++    sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
++    sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
++    sv.Texture2D.MipLevels = 1;
++    s_d3d.device->lpVtbl->CreateShaderResourceView(s_d3d.device, s_depth_copy, &sv, ch);
++    /* Check view: the scene's colour (resolved) and last frame's copy. */
++    const int check = mv_view_check();
++    if (check) {
++        if (s_mv_hist && (s_mv_hist_fmt != r->dxgi)) { off_rt_defer_release(s_mv_hist); s_mv_hist = NULL; }
++        if (s_mv_hist) {
++            D3D12_RESOURCE_DESC hd;
++            s_mv_hist->lpVtbl->GetDesc(s_mv_hist, &hd);
++            if (hd.Width != r->w || hd.Height != r->h) { off_rt_defer_release(s_mv_hist); s_mv_hist = NULL; }
++        }
++        if (!s_mv_hist) {
++            D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
++            D3D12_RESOURCE_DESC td = {0};
++            td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; td.Width = r->w; td.Height = r->h;
++            td.DepthOrArraySize = 1; td.MipLevels = 1; td.SampleDesc.Count = 1; td.Format = (DXGI_FORMAT)r->dxgi;
++            if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE, &td,
++                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, NULL, &IID_ID3D12Resource, (void**)&s_mv_hist)))
++                s_mv_hist = NULL;
++            s_mv_hist_fmt = r->dxgi; s_mv_hist_ok = 0;
++        }
++        off_rt_transition(rt, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
++        sv.Format = (DXGI_FORMAT)r->dxgi;
++        D3D12_CPU_DESCRIPTOR_HANDLE c2 = ch;
++        c2.ptr += (MV_SRV_SCENE - MV_SRV_DEPTH) * s_d3d.srv_inc;
++        s_d3d.device->lpVtbl->CreateShaderResourceView(s_d3d.device, r->res, &sv, c2);
++        c2.ptr += (MV_SRV_HIST - MV_SRV_SCENE) * s_d3d.srv_inc;
++        if (s_mv_hist) s_d3d.device->lpVtbl->CreateShaderResourceView(s_d3d.device, s_mv_hist, &sv, c2);
++        if (!s_mv_hist || FR->mv.reset) { s_mv_hist_ok = 0; k[3] = 0.0001f; }
++    }
++    D3D12_RESOURCE_BARRIER b[2] = {0};
++    b[0].Type = b[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
++    b[0].Transition.pResource = s_mv_tex; b[1].Transition.pResource = s_mv_viz;
++    b[0].Transition.Subresource = b[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++    b[0].Transition.StateBefore = b[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++    b[0].Transition.StateAfter = b[1].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
++    cl->lpVtbl->ResourceBarrier(cl, 2, b);
++    D3D12_CPU_DESCRIPTOR_HANDLE rtv;
++    s_mv_rtv->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_mv_rtv, &rtv);
++    cl->lpVtbl->OMSetRenderTargets(cl, 2, &rtv, TRUE, NULL);
++    D3D12_VIEWPORT vp = {0, 0, (float)r->w, (float)r->h, 0, 1};
++    D3D12_RECT sc = {0, 0, (LONG)r->w, (LONG)r->h};
++    cl->lpVtbl->RSSetViewports(cl, 1, &vp);
++    cl->lpVtbl->RSSetScissorRects(cl, 1, &sc);
++    interp_sig_restore();
++    cl->lpVtbl->SetPipelineState(cl, s_mv_pso);
++    cl->lpVtbl->SetGraphicsRootDescriptorTable(cl, 1, gh);
++    cl->lpVtbl->SetGraphicsRootConstantBufferView(cl, 2,
++        s_mv_cb->lpVtbl->GetGPUVirtualAddress(s_mv_cb) + (FR->parity ? 256 : 0));
++    cl->lpVtbl->DrawInstanced(cl, 3, 1, 0, 0);
++    for (int i = 0; i < 2; i++) {
++        b[i].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
++        b[i].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++    }
++    cl->lpVtbl->ResourceBarrier(cl, 2, b);
++    if (check && s_mv_hist) {
++        /* This frame's scene becomes the next one's history. */
++        off_rt_transition(rt, D3D12_RESOURCE_STATE_COPY_SOURCE);
++        D3D12_RESOURCE_BARRIER hb = {0};
++        hb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
++        hb.Transition.pResource = s_mv_hist; hb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++        hb.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++        hb.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
++        cl->lpVtbl->ResourceBarrier(cl, 1, &hb);
++        D3D12_TEXTURE_COPY_LOCATION dst = {0}, src = {0};
++        dst.pResource = s_mv_hist; dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++        src.pResource = r->res; src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++        D3D12_BOX box = {0, 0, 0, r->w, r->h, 1};
++        cl->lpVtbl->CopyTextureRegion(cl, &dst, 0, 0, 0, &src, &box);
++        hb.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
++        hb.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++        cl->lpVtbl->ResourceBarrier(cl, 1, &hb);
++        s_mv_hist_ok = 1;
++    }
++    if (!s_mv_passes++)
++        fprintf(stderr, "[mv] first pass: scene 0x%X host %ux%u (guest %ux%u), %d viewports, %s depth%s\n",
++                FR->mv.rt_off, r->w, r->h, FR->mv.gw, FR->mv.gh, FR->mv.n, r->ms ? "multisampled" : "shared",
++                FR->mv.reset ? ", reset" : "");
++}
++/* RSX_MV_VIEW: the boundary draw (record `d`) reads the vectors as colour in
++ * place of the scene, through its own SRV window. */
++static void mv_substitute(u32 d)
++{
++    if (!s_mv_viz || !FR->mv.n || d != FR->mv.disp || FR->mv.unit >= RSX_TEX_UNITS || mv_view_px() <= 0.0f) return;
++    const u32 slot = DRAW_SRV_BASE + d * RSX_TEX_UNITS + FR->mv.unit;
++    D3D12_CPU_DESCRIPTOR_HANDLE ch;
++    s_d3d.srv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.srv_heap, &ch);
++    ch.ptr += (SIZE_T)slot * s_d3d.srv_inc;
++    D3D12_SHADER_RESOURCE_VIEW_DESC sv = {0};
++    sv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
++    sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
++    sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
++    sv.Texture2D.MipLevels = 1;
++    s_d3d.device->lpVtbl->CreateShaderResourceView(s_d3d.device, s_mv_viz, &sv, ch);
++    srv_slot_forget(slot);
++}
++/* ---- [mv] replay end ---- */
++
+ /* Depth-only passes. A draw with colour target NONE and a depth surface (GT5
+  * Prologue's shadow pass: 18 draws into a 1024x1024 DEPTH24_D8 at local
+  * 0x5080000) used to land on the display with the shared depth buffer, which
+@@ -14326,12 +14659,13 @@ static const char* const s_scn_kind[] = { "none", "scene", "held", "bypass" };
+ static const char* const s_scn_why[] = { "", "no display draw", "first display draw is blended",
+                                          "first display draw tests depth",
+                                          "first display draw samples no depth-tested target" };
+-typedef struct { u32 off, zeta, draws, w, h, fmt; } ScnRt;
++typedef struct { u32 off, zeta, draws, w, h, fmt, last; } ScnRt;
+ static struct {
+     u32 frame;                    /* frames judged */
+     int kind, why;                /* this frame's judgement */
+     u32 off, zeta, w, h, fmt;     /* the scene target, its zeta, its clip and format */
+     u32 disp_i, disp_n, unit;     /* the boundary draw's record index, records, and its unit */
++    u32 last_rec;                 /* the last depth-tested record into the scene target */
+     u32 fp;                       /* the boundary draw's fragment program */
+     u32 last_off;                 /* the scene target of the last "scene" frame */
+     int last_kind, last_why;
+@@ -14369,8 +14703,10 @@ static int scene_consts_wanted(void)
+     }
+     return v;
+ }
++static void scene_mv_note(const D3D12DrawRecord* dr, const rsx_state* st);
+ static void scene_consts_note(const D3D12DrawRecord* dr, const rsx_state* st)
+ {
++    scene_mv_note(dr, st);
+     if (s_scn_cf_state != 2 || !dr->rt_off || dr->rt_off != s_scn.last_off || !dr->zeta_off || dr->is_clear) return;
+     fprintf(s_scn_cf, "%u,%u,%u,%u,0x%X,%d,%u,%u,%u,%u,%u", s_scn.frame + 1, FR->draw_count, dr->vertex_count,
+             dr->topology, dr->fp_addr, dr->vs_idx, st->transform_program_start, dr->vp_x, dr->vp_y, dr->vp_w,
+@@ -14400,11 +14736,14 @@ static void scene_consts_frame(void)
+         fprintf(stderr, "[scene] vertex constants written\n");
+     }
+ }
++static int mv_on(void);
++static void scene_mv_frame(void);
+ /* Anything that needs the boundary. */
+ static int scene_on(void)
+ {
+     const int consts = scene_consts_wanted();   /* read the switch even when the log is on */
+-    return scene_log_level() > 0 || consts;
++    const int mv = mv_on();
++    return scene_log_level() > 0 || consts || mv;
+ }
+ /* The units a record's fragment program samples: bindings left over from
+  * earlier draws stay set and must not count (the first live run judged a
+@@ -14443,7 +14782,7 @@ static void scene_frame_scan(void)
+                 memset(&rts[nrt], 0, sizeof rts[0]);
+                 rts[nrt++].off = dr->rt_off;
+             }
+-            rts[k].draws++; rts[k].zeta = dr->zeta_off;
++            rts[k].draws++; rts[k].zeta = dr->zeta_off; rts[k].last = i;
+             rts[k].w = dr->rt_w; rts[k].h = dr->rt_h; rts[k].fmt = dr->rt_fmt;
+             continue;
+         }
+@@ -14465,6 +14804,7 @@ static void scene_frame_scan(void)
+             s_scn.kind = SCN_SCENE; s_scn.why = SCN_R_OK; s_scn.unit = best_u;
+             s_scn.off = rts[best].off; s_scn.zeta = rts[best].zeta;
+             s_scn.w = rts[best].w; s_scn.h = rts[best].h; s_scn.fmt = rts[best].fmt;
++            s_scn.last_rec = rts[best].last;
+             s_scn.last_off = s_scn.off;
+         } else if (held_u != ~0u) {
+             s_scn.kind = SCN_HELD; s_scn.why = SCN_R_OK; s_scn.unit = held_u;
+@@ -14504,7 +14844,199 @@ static void scene_frame_scan(void)
+     }
+     s_scn.last_kind = s_scn.kind; s_scn.last_why = s_scn.why;
+     scene_consts_frame();
++    scene_mv_frame();
++}
++/* ---- [mv] Camera motion vectors (DLSS step 2), walker side ----
++ * Measured on 01.04 (progress-gt5.md, "DLSS step 2 groundwork"): a scene
++ * draw's c[0..3] are the rows of object-to-clip C and c[4..6] those of
++ * object-to-world M, so C * inverse(M) is the view-projection of the
++ * viewport it is drawn through, the same for about 97% of scene draws. The
++ * renderer's vertex output keeps clip x, y and w and maps z by the guest's
++ * viewport depth transform (vp_record_cb), so a scene pixel at host
++ * (ndc.x, ndc.y) with depth d is clip/w = (ndc.x, ndc.y, (d - vz1) / vz0, 1),
++ * and VP_prev * inverse(VP_now) takes it to last frame's clip position.
++ *
++ * Per frame: every distinct C among the scene draws becomes an object with
++ * its view-projection; each viewport (main view, rear mirror) takes the one
++ * of its most-drawn object. Camera only: what moves in the world (cars) gets
++ * the camera's vector here; per-object vectors are step 3.
++ *   RSX_MV=1           make the vectors (the replay's mv_pass)
++ *   RSX_MV_VIEW=<px>   show them in place of the 3D picture: hue the
++ *                      direction, full brightness at <px> host pixels
++ *   RSX_MV_LOG=1       a "[mv]" line every 300 frames
++ * Unset: none of this runs. */
++static int mv_on(void)
++{
++    static int v = -1;
++    if (v < 0) { const char* e = getenv("RSX_MV"); v = e ? atoi(e) : 0; }
++    return v;
++}
++static float mv_view_px(void)
++{
++    static float v = -1.0f;
++    if (v < 0.0f) { const char* e = getenv("RSX_MV_VIEW"); v = e ? (float)atof(e + (*e == 'c')) : 0.0f; if (v < 0.0f) v = 0.0f; }
++    return v;
++}
++static int mv_view_check(void)
++{
++    static int v = -1;
++    if (v < 0) { const char* e = getenv("RSX_MV_VIEW"); v = e && *e == 'c'; }
++    return v;
++}
++static int mv_log_on(void)
++{
++    static int v = -1;
++    if (v < 0) { const char* e = getenv("RSX_MV_LOG"); v = e ? atoi(e) : 0; }
++    return v;
++}
++static int mv_inv4(const double* m, double* out)
++{
++    double a[4][8];
++    for (int i = 0; i < 4; i++)
++        for (int j = 0; j < 8; j++) a[i][j] = j < 4 ? m[i * 4 + j] : (j - 4 == i ? 1.0 : 0.0);
++    for (int c = 0; c < 4; c++) {
++        int p = c;
++        for (int r = c + 1; r < 4; r++) if (fabs(a[r][c]) > fabs(a[p][c])) p = r;
++        if (fabs(a[p][c]) < 1e-12) return 0;
++        if (p != c) for (int j = 0; j < 8; j++) { double t = a[c][j]; a[c][j] = a[p][j]; a[p][j] = t; }
++        const double pv = a[c][c];
++        for (int j = 0; j < 8; j++) a[c][j] /= pv;
++        for (int r = 0; r < 4; r++)
++            if (r != c && a[r][c] != 0.0) {
++                const double f = a[r][c];
++                for (int j = 0; j < 8; j++) a[r][j] -= f * a[c][j];
++            }
++    }
++    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) out[i * 4 + j] = a[i][j + 4];
++    return 1;
+ }
++static void mv_mul4(const double* a, const double* b, double* out)
++{
++    for (int i = 0; i < 4; i++)
++        for (int j = 0; j < 4; j++) {
++            double t = 0;
++            for (int k = 0; k < 4; k++) t += a[i * 4 + k] * b[k * 4 + j];
++            out[i * 4 + j] = t;
++        }
++}
++#define MV_OBJ_MAX 192
++typedef struct { float C[16]; double VP[16]; u32 vp[4]; float vz[2]; u32 draws; int ok; } MvObj;
++typedef struct { u32 vp[4]; float vz[2]; double VP[16]; u32 draws; } MvReg;
++static MvObj s_mvo[MV_OBJ_MAX];
++static u32 s_mvo_n, s_mvo_full;
++static int s_mvo_last = -1;
++static MvReg s_mvr_prev[2];
++static u32 s_mvr_prev_n, s_mvr_prev_frame;
++static u32 s_mv_st[6];          /* frames with vectors, reset, no object, object tables full, viewports dropped, mismatched */
++static void scene_mv_note(const D3D12DrawRecord* dr, const rsx_state* st)
++{
++    if (!mv_on() || !dr->rt_off || dr->rt_off != s_scn.last_off || !dr->zeta_off || dr->is_clear) return;
++    const float* c = &st->vertex_constants[0][0];
++    if (s_mvo_last >= 0 && !memcmp(s_mvo[s_mvo_last].C, c, sizeof s_mvo[0].C)) { s_mvo[s_mvo_last].draws++; return; }
++    for (u32 i = 0; i < s_mvo_n; i++)
++        if (!memcmp(s_mvo[i].C, c, sizeof s_mvo[0].C)) { s_mvo[i].draws++; s_mvo_last = (int)i; return; }
++    if (s_mvo_n == MV_OBJ_MAX) { s_mvo_full = 1; return; }
++    MvObj* o = &s_mvo[s_mvo_n];
++    memcpy(o->C, c, sizeof o->C);
++    o->vp[0] = dr->vp_x; o->vp[1] = dr->vp_y; o->vp[2] = dr->vp_w; o->vp[3] = dr->vp_h;
++    const float vz0 = st->viewport_scale[2], vz1 = st->viewport_offset[2];
++    o->vz[0] = vz0 != 0.0f ? vz0 : 1.0f; o->vz[1] = vz0 != 0.0f ? vz1 : 0.0f;
++    o->draws = 1;
++    double Cd[16], M[16], Mi[16];
++    for (int i = 0; i < 16; i++) Cd[i] = c[i];
++    for (int i = 0; i < 12; i++) M[i] = c[16 + i];
++    M[12] = M[13] = M[14] = 0.0; M[15] = 1.0;
++    o->ok = mv_inv4(M, Mi);
++    if (o->ok) mv_mul4(Cd, Mi, o->VP);
++    s_mvo_last = (int)s_mvo_n++;
++}
++/* At a judged frame's end (walker, FR still the frame's set). */
++static void scene_mv_frame(void)
++{
++    FR->mv.n = 0;
++    if (!mv_on()) return;
++    const int scene = s_scn.kind == SCN_SCENE;
++    MvReg cur[2]; u32 ncur = 0, dropped = 0;
++    if (scene) {
++        /* Viewports by their most-drawn object with a world matrix. */
++        MvReg all[8]; u32 nall = 0;
++        for (u32 i = 0; i < s_mvo_n; i++) {
++            const MvObj* o = &s_mvo[i];
++            if (!o->ok) continue;
++            u32 k = 0;
++            while (k < nall && memcmp(all[k].vp, o->vp, sizeof o->vp)) k++;
++            if (k == nall) {
++                if (nall == 8) { dropped++; continue; }
++                memset(&all[nall], 0, sizeof all[0]); memcpy(all[nall].vp, o->vp, sizeof o->vp); nall++;
++            }
++            if (o->draws > all[k].draws) {
++                all[k].draws = o->draws; memcpy(all[k].VP, o->VP, sizeof o->VP);
++                all[k].vz[0] = o->vz[0]; all[k].vz[1] = o->vz[1];
++            }
++        }
++        /* The two largest viewports, the larger first. */
++        for (u32 pick = 0; pick < 2 && pick < nall; pick++) {
++            int b = -1;
++            for (u32 k = 0; k < nall; k++) {
++                int taken = 0;
++                for (u32 q = 0; q < ncur; q++) if (!memcmp(cur[q].vp, all[k].vp, sizeof all[k].vp)) taken = 1;
++                if (taken) continue;
++                if (b < 0 || (u64)all[k].vp[2] * all[k].vp[3] > (u64)all[b].vp[2] * all[b].vp[3]) b = (int)k;
++            }
++            if (b >= 0) cur[ncur++] = all[b];
++        }
++        if (nall > 2) dropped += nall - 2;
++    }
++    const int consecutive = scene && s_mvr_prev_n && s_mvr_prev_frame + 1 == s_scn.frame;
++    if (scene && ncur) {
++        FR->mv.n = (int)ncur;
++        FR->mv.rt_off = s_scn.off; FR->mv.gw = s_scn.w; FR->mv.gh = s_scn.h;
++        FR->mv.last = s_scn.last_rec; FR->mv.disp = s_scn.disp_i; FR->mv.unit = s_scn.unit;
++        FR->mv.reset = !consecutive;
++        int any = 0;
++        for (u32 k = 0; k < ncur; k++) {
++            const MvReg* r = &cur[k];
++            const MvReg* p = NULL;
++            for (u32 q = 0; consecutive && q < s_mvr_prev_n; q++)
++                if (!memcmp(s_mvr_prev[q].vp, r->vp, sizeof r->vp)) p = &s_mvr_prev[q];
++            for (int i = 0; i < 4; i++) { FR->mv.reg[k].rect[i] = (float)r->vp[i]; FR->mv.reg[k].prect[i] = (float)r->vp[i]; }
++            FR->mv.reg[k].vz[0] = r->vz[0]; FR->mv.reg[k].vz[1] = r->vz[1];
++            double inv[16], R[16];
++            FR->mv.reg[k].ok = p && mv_inv4(r->VP, inv);
++            if (FR->mv.reg[k].ok) {
++                mv_mul4(p->VP, inv, R);
++                for (int i = 0; i < 16; i++) FR->mv.reg[k].R[i] = (float)R[i];
++                any = 1;
++            }
++        }
++        if (consecutive && !any) s_mv_st[5]++;
++        s_mv_st[0]++;
++        if (!consecutive) s_mv_st[1]++;
++    } else if (scene) s_mv_st[2]++;
++    if (s_mvo_full) s_mv_st[3]++;
++    s_mv_st[4] += dropped;
++    if (scene && ncur) { memcpy(s_mvr_prev, cur, sizeof cur[0] * ncur); s_mvr_prev_n = ncur; s_mvr_prev_frame = s_scn.frame; }
++    else s_mvr_prev_n = 0;
++    if (mv_log_on() && s_scn.frame % 300 == 0 && FR->mv.n) {
++        for (int i = 0; i < FR->mv.n; i++) {
++            const float* R = FR->mv.reg[i].R;
++            fprintf(stderr, "[mv]   viewport %d: %.0f,%.0f %.0fx%.0f vz %g,%g %s R row0 %g %g %g %g row3 %g %g %g %g\n", i,
++                    FR->mv.reg[i].rect[0], FR->mv.reg[i].rect[1], FR->mv.reg[i].rect[2], FR->mv.reg[i].rect[3],
++                    FR->mv.reg[i].vz[0], FR->mv.reg[i].vz[1], FR->mv.reg[i].ok ? "matched" : "unmatched",
++                    R[0], R[1], R[2], R[3], R[12], R[13], R[14], R[15]);
++        }
++        for (u32 i = 0; i < s_mvo_n && i < 64; i++)
++            if (s_mvo[i].vp[2] != 1280 || mv_log_on() > 1)
++                fprintf(stderr, "[mv]   object %u: vp %u,%u %ux%u draws %u ok %d\n", i, s_mvo[i].vp[0], s_mvo[i].vp[1],
++                        s_mvo[i].vp[2], s_mvo[i].vp[3], s_mvo[i].draws, s_mvo[i].ok);
++    }
++    if (mv_log_on() && s_scn.frame % 300 == 0)
++        fprintf(stderr, "[mv] frames: %u with vectors, %u reset, %u scene frames with no object, %u object table full, "
++                "%u viewports dropped, %u without a previous match\n",
++                s_mv_st[0], s_mv_st[1], s_mv_st[2], s_mv_st[3], s_mv_st[4], s_mv_st[5]);
++    s_mvo_n = 0; s_mvo_last = -1; s_mvo_full = 0;
++}
++/* ---- [mv] walker end ---- */
+ /* ---- [scene] end ---- */
+ 
+ static void render_frame(void)
+@@ -15910,6 +16442,7 @@ static void render_frame_body_inner(void)
+             double _rec0 = perf_on() ? perf_now() : 0.0;
+             if (hitch_on() && s_hitch_mark > 0) { s_hitch_mid_ms += (perf_now() - s_hitch_mark) * 1000.; s_hitch_mark = 0; }
+             int seen_small_vp = 0, captured = 0;
++            int mv_done = 0;                       /* [mv] this frame's vectors made */
+             for (u32 d = 0; d < FR->draw_count && d < MAX_DRAWS; d++) {
+                 const D3D12DrawRecord* dr = &FR->draws[d];
+                 if (!dr->is_vp) continue;
+@@ -15956,6 +16489,13 @@ static void render_frame_body_inner(void)
+                         wantrz = zb_get(dr->zeta_off, s_d3d.off_rt[want].w, s_d3d.off_rt[want].h);
+                 }
+                 if (wantrz >= 0) same_depth = 1;
++                /* [mv] Leaving the scene target after its last depth-tested
++                 * draw: its depth is final, make the frame's vectors. */
++                if (FR->mv.n && !mv_done && d > FR->mv.last && cur_rt >= 0 && want != cur_rt &&
++                    s_d3d.off_rt[cur_rt].off == FR->mv.rt_off) {
++                    mv_done = 1;
++                    mv_pass(cur_rt);
++                }
+                 if (want != cur_rt || wantm[0] != cur_m[0] ||
+                     wantm[1] != cur_m[1] || wantm[2] != cur_m[2] || wantz != cur_z || wantrz != cur_rtz ||
+                     (depth_keep_on() && cur_has_dsv && wantz < 0 && dr->zeta_off && !same_depth)) {
+@@ -16481,6 +17021,7 @@ static void render_frame_body_inner(void)
+                 else {
+                     D3D12_GPU_DESCRIPTOR_HANDLE gh = gh_base;
+                     gh.ptr += (u64)(DRAW_SRV_BASE + d * RSX_TEX_UNITS) * s_d3d.srv_inc;
++                    if (mv_done) mv_substitute(d);   /* [mv] RSX_MV_VIEW */
+                     s_d3d.cmd_list->lpVtbl->SetGraphicsRootDescriptorTable(s_d3d.cmd_list, 1, gh);
+                 }
+                 /* Per-draw constants: this draw's vp_cb + FP texscale slots. */

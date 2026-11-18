@@ -4,7 +4,9 @@ Status (2026-11-18): step 1 is done for 01.04 races at 720p and 1080p, and
 step 2's measurement too: `c[0..3] * inverse(c[4..6])` is one view-projection
 per viewport for about 97% of scene draws, the rear mirror is a second
 viewport in the scene target, and world matrices are in world space
-(progress-gt5.md, "DLSS step 2 groundwork"). Step 1 detail
+(progress-gt5.md, "DLSS step 2 groundwork"). Step 2's camera motion vectors
+work for the main view (`RSX_MV`; the check view's error is lowest at the
+vectors' own scale); the rear mirror is open and left to step 3. Step 1 detail
 (`RSX_SCENE_LOG`, see "0.2.0 DLSS step 1" in [progress-gt5.md](progress-gt5.md)).
 GT5's boundary is its own resolve draw: unit 0 is the multisampled scene
 (4 samples at 720p, 2 across at 1080p), units 1-3 the bloom chain. Every

@@ -4,6 +4,53 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.2.0 DLSS step 2: camera motion vectors (2026-11-18)
+
+`RSX_MV=1` (runtime, off by default). Walker: every scene draw's distinct
+`c[0..3]` becomes an object with view-projection `C * inverse(c[4..6])`;
+each viewport takes its most-drawn object's; with the frame before's, each
+viewport gets `R = VP_prev * inverse(VP_now)` (`scene_mv_frame`). Replay:
+when the replay leaves the scene target after its last depth-tested draw,
+`mv_pass` copies the scene depth (`depth_copy_capture`, resolving the
+multisampled one) and draws one full-screen pass writing `R16G16_FLOAT`
+vectors in host pixels (current + vector = previous) at the scene target's
+size. Views: `RSX_MV_VIEW=<px>` shows the vectors as colour in place of the
+scene (hue direction), `RSX_MV_VIEW=c<amp>` the check view (red: change
+since the frame before at the same pixel; green: change left after taking
+last frame's colour, bilinear, from where the vector points), both by
+swapping the boundary draw's scene SRV, which is also how DLSS output will go
+in. `RSX_MV_LOG=1|2` logs viewports, matrices and objects.
+
+01.04 High Speed Ring race, 720p, check view at amp 4, mean over the main
+view (x 0-1040, y 170-540 of four window shots per run, HUD list excluded):
+
+| Vector scale (`RSX_MV_CHECK_SCALE`) | compensated / uncompensated error |
+| --- | --- |
+| 0.7 | 0.71-0.83 |
+| 1.0 | 0.44-0.53 |
+| 1.3 | 0.71-0.83 |
+
+So the vectors have the right direction and size: the error is smallest at
+1.0 and grows the same either side. What is left at 1.0: the other cars
+(camera vectors only), thin high-contrast edges, and bloom, which the
+boundary adds on top of the view. The hue view shows the expected forward
+flow (vectors back toward the vanishing point, large on the near road,
+near zero on sky and distance).
+
+**Rear mirror: open.** Both viewports are found and matched every frame, and
+the mirror's `R` is plausible (the reverse of the main camera's forward
+motion), but its camera vectors made the error larger (1.2x). Hypothesis,
+untested: GT5 protects the mirror's pixels from the main view with a
+depth-zero clear (as Prologue does, Phase 95), so the depth left there is not
+the mirror's. Its vectors are zero for now (`RSX_MV_MIRROR=1` keeps them);
+per-object vectors (step 3), written by the draws, do not need that depth.
+The check view cannot measure the mirror: with zero vectors red and green
+should match there but read 1.2x apart, so the HUD's mirror frame or bloom
+tints it.
+
+Not handled yet: a scene target with its own depth buffer (neither
+multisampled nor window-sized; logged once), 1080p, 21:9, 2.11.
+
 ## 0.2.0 DLSS step 2 groundwork: how scene draws form positions (2026-11-18)
 
 `RSX_SCENE_CONSTS=<file>` (runtime, off by default; `RSX_SCENE_CONSTS_AT`
