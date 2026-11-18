@@ -326,6 +326,9 @@ inputs, pinned downloads) and `scripts/release/package_player.py`
 (allowlist; never game files). Releases carry the ZIP; the tag is
 `v<CMake project VERSION>`.
 
+**DLSS / DLAA (0.2.0, planned, `release/v0.2.0`).** Plan, research and steps in
+[docs/plan-dlss.md](docs/plan-dlss.md). Nothing built yet.
+
 **Car-list render pass (Phase 44).** Workload 4 (body `0x0196FF40`, four lanes)
 is the car-list frame's critical path. GT5 now starts all lanes together
 (`SPURS_LANE_STAGGER_MS` defaults to 0 for GT5; `=1` old): car list +9%,
