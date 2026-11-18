@@ -4,6 +4,51 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.12: car damage streaks are border addressing clamped (2026-11-18)
+
+User report (0.1.11, 01.04, 21:9, 8x MSAA): the player's car shows wavy
+stripes over its body once it has taken damage, strongest on dark cars
+(#42/#47). Reproduced on High Speed Ring with the Fiat 500 and Cross held
+from the start (`gt5boot.ps1 -Route race -FrameTest`): the car scrapes the
+walls and the stripes build up shot by shot. RPCS3 (user's check) shows local
+scuffs and dents instead.
+
+- The body program samples unit 8, a 256x512 A8R8G8B8 map in the car's paint
+  UV layout (`0x06A99100` for the player's car in these runs); its colour
+  multiplies reflections, its alpha the specular. Guest memory there holds
+  black, alpha 1 (the load-time clear); the content is drawn on the GPU.
+- On each impact GT5 draws the car mesh into that map (`vp=256x512`, blend
+  SRC_ALPHA/INV_SRC_ALPHA, no depth), fp `0x06A41401` (8 instructions:
+  scratch texture on unit 1 at `tc0.xy`, alpha faded by `|c0.x - tc0.z|`),
+  vertex program projecting the body onto the impact plane (`tc0.xy` =
+  `dot(pos, c48/c49)`, `tc0.z` = `dot(pos, c50)`).
+- Unit 1 is the scratch texture (256x256 DXT45) with address `0x10040404`:
+  wrap mode 4, BORDER, on both axes. The sampler bank has only wrap and
+  clamp, so it was clamped, and the projection's coordinates run far outside
+  0..1 over the rest of the body: the texture's edge texels became long
+  streaks over every panel, accumulating with each hit.
+- Fix (runtime, fifth patch section, `patches/incremental/car-damage-border.patch`):
+  units with wrap 4 or 7 on an axis are recorded per draw with their border
+  colours; the pipeline key carries the mask and a colour hash (border-free
+  keys, and the fast-lookup table, are unchanged); every Sample-family call
+  of such a unit becomes `rsx_bd<u>(call, coords)`, which returns the border
+  colour outside 0..1 (after the texel-scale rewrites). Cubes, volumes and
+  SampleCmp are left alone. Draws with a border unit do not use the shader
+  interpreter while their pipeline compiles (it would sample clamped into an
+  accumulating target); they wait for it like other offscreen draws (31 ms
+  for the damage pass). `RSX_TEX_BORDER=0` restores the old addressing.
+- Result: the damage map now holds marks only along the front and sides that
+  touched the wall (`RSX_CAP_RT=6A99100` captures, before/after). The race's
+  shadow map (unit 13) is also border-addressed; scenery looked the same in
+  the before/after shots. FrameTest 57.3 FPS, as before.
+- Tools found on the way: `RSX_RDOC=2 RSX_CAP_RT=<surface>` captures the
+  frame after the first one that draws there (it missed the bake);
+  `RSX_CAP=1:<n>:1 RSX_CAP_RT=<surface>` writes a manifest and the target for
+  each frame that draws there, which is what found the damage pass.
+- The pipeline failures in the same reports (`PSO FAIL 0x80070057`,
+  `rtfmt=11`) also happen at 2x MSAA and did not reproduce under the debug
+  layer; not the cause.
+
 ## 0.1.12: the 2.11 picture freeze is a lost workload-flag kick (2026-11-18)
 
 Issues #28, #36, #38, #39, #47 (and probably #46): 2.11's picture stops while

@@ -178,6 +178,15 @@ old). Reproduce: 2.11 Arcade car list with Right every 3 s for 10 minutes
 workload's passes, lane exits, joins and kicks in every stall dump. See
 progress-gt5.md.
 
+**Car damage streaks (0.1.12, runtime).** #42/#47: GT5 scratches each
+car's 256x512 damage map with a border-addressed scratch texture; the
+sampler bank had no border mode, so clamp stretched its edges over whole
+panels. Border units (RSX wrap 4/7) now return their border colour outside
+0..1 via a per-unit shader wrapper keyed in the pipeline (`RSX_TEX_BORDER=0`
+old); such draws wait for their pipeline rather than use the interpreter.
+Reproduce: `gt5boot.ps1 -Route race -FrameTest` (Fiat scrapes the walls).
+See progress-gt5.md.
+
 **2.11 race audio underruns (0.1.12).** The extended-range check runs only
 in the images named by `audio_extended_range_images` (2.11: the EQ
 `j0B07CA3D`): 482-511 underruns -> 1 per race, no NaN with scrubbing off
