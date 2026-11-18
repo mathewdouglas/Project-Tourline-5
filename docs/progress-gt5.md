@@ -31,12 +31,32 @@ flag kick. The kernel's busy path cleared the flag word, then asked the
 running pass to join; the pass was ending, the join refused, and the flag was
 gone: the appended jobs were never run.
 
+A second freeze of the unfixed build (control run, 160 s into the car list)
+had another shape: a pass started by the flag, 23 `j` (kicks met while all
+four lanes were inside, counted as taken), the four `L` after 2-5.6 ms of
+work, `E 0 0`, jobs left at both heads. Lanes past their last look at the
+list leave without the new jobs, so a kick absorbed by a running pass is no
+safer than one refused. On hardware the kernel consumes the flag only when
+it selects the workload, so a kick during a pass always gets another run.
+
 Fix (runtime, `libs/spurs/cellSpurs.c`, fourth patch section,
-`patches/incremental/v211-freeze-flag-kick.patch`): `spurs_group_join` returns
-whether the pass took the kick; when it did not, the flag is written back (the
-game only writes 0 to kick, so this restores a kick, never invents one) and the
-next pass takes it (`SPURS_FLAG_KICK_KEEP=0` old). Ready-count kicks were
-already safe: the count is not consumed by a refused join.
+`patches/incremental/v211-freeze-flag-kick.patch`;
+`SPURS_FLAG_KICK_KEEP`): =2 (default) a flag kick met during a pass is marked
+pending on the group (set before the join), sends back lanes that already
+left as before, and at the pass's end sets the flag again (`K 1`), so the
+next dispatch runs the workload once more; a refused join restores it at once
+(`K 0`). The game only writes 0 to kick, so writing 0 back restores a kick,
+never invents one. Leaving the flag set during the pass instead would send
+every leaving lane straight back, and the pass would never end. =1 keeps it
+only when refused (caught the first shape, not the second), =0 the old way.
+Ready-count kicks need nothing: a join does not consume the count.
+`spurs_group_join` now returns whether the pass took the kick.
+
+First fix (=1) on the scrolling route: 0 freezes in 3 x 10 min; the second
+shape shows that was not proof. Unfixed: 2 of 2 runs froze (8 min, 160 s).
+Final fix (=2), same route and relink of 0.1.11's 2.11 objects: 0 freezes in
+3 x 11.3 min (34 min). Car list parked on the Zonda R, 90 s windows,
+alternating: old 32.0 / 32.2 FPS, fixed 30.3 / 32.8: no measurable cost.
 
 ## Release 0.1.11 published (2026-11-18)
 
