@@ -838,6 +838,9 @@ static int locate_project_root(void)
  *   retries kept 2.11's car-list workload busy after its pass and put a
  *   ready unit back that started an empty pass (Zonda R ~26 -> ~33 FPS;
  *   01.04 car list and race unchanged).
+ * - SPURS_KEVLOG=4, GT5 only: workload 4 (the car render list) keeps its last
+ *   256 kicks, passes, lane exits and joins for the stall dump, to settle the
+ *   2.11 GPUSyncArray freeze (issues #28/#36/#38/#39/#47); =-1 off.
  * - RSX_SHADER_ASYNC=1: shaders compile on background threads (Phase 65).
  * - GT5 only: RSX_SHADER_INTERP=1 and RSX_SHADER_INTERP_VP=1, the shader
  *   interpreters stand in for draws whose pipeline is still being built,
@@ -881,6 +884,7 @@ static void apply_env_defaults()
         {"SPURS_LANE_STAGGER_MS", "0",               stagger},
         {"SPURS_LANE_PIN_SCOPE", "1",                gt5 && race_scope},
         {"SPURS_LANE_RETRY",     "0",                gt5},
+        {"SPURS_KEVLOG",         "4",                gt5},
         {"RSX_SHADER_ASYNC",     "1",                true},
         {"RSX_SHADER_INTERP",    "1",                gt5},
         {"RSX_SHADER_INTERP_VP", "1",                gt5},

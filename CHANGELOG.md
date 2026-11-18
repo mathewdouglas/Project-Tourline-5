@@ -5,6 +5,17 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- 2.11: the picture stopping while the game keeps running, on screens that
+  show a car (dealership, garage, tuning shop, settings, B-Spec; #28, #36,
+  #38, #39, #47). A restart signal the game sends its car-rendering jobs
+  could be dropped when it arrived just as the previous batch finished; the
+  jobs then never ran and the game waited for them for ever. Reproduced on
+  the Arcade car list (one freeze in 8 minutes of browsing) and gone in 33
+  minutes with the fix. `SPURS_FLAG_KICK_KEEP=0` restores the old behaviour.
+- Freeze reports now record the last 256 job-system events for the car
+  rendering work (`SPURS_KEVLOG=-1` turns this off).
+
 ## [0.1.11] - 2026-11-18
 
 Fixes the crashes and hangs that came after playing for a while (buying a

@@ -71164,3 +71164,188 @@ index 44f4d2a..5ae414a 100644
      ctx->gpr[3] = 0;
  }
  
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index deadc68..470f59a 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -539,7 +539,8 @@ static int spurs_ready_coh(void)
+  * workload, after running, has gone 3 s without a dispatch. Tells a kick that
+  * was overwritten from one never dispatched from one that found nothing. */
+ static int s_kev_wid = -2;
+-static struct { ULONGLONG t; char kind; u8 a, b; u32 us; } s_kev[48];
++#define KEV_N 256
++static struct { ULONGLONG t; char kind; u8 a, b; u32 us; } s_kev[KEV_N];
+ static volatile LONG s_kev_n;
+ static volatile ULONGLONG s_kev_last_dispatch;
+ static void spurs_kev(u32 wid, char kind, u8 a, u8 b, u32 us)
+@@ -547,8 +548,8 @@ static void spurs_kev(u32 wid, char kind, u8 a, u8 b, u32 us)
+     if (s_kev_wid == -2) { const char* e = getenv("SPURS_KEVLOG"); s_kev_wid = e ? atoi(e) : -1; }
+     if ((int)wid != s_kev_wid) return;
+     LONG i = InterlockedIncrement(&s_kev_n) - 1;
+-    s_kev[i % 48].t = GetTickCount64(); s_kev[i % 48].kind = kind;
+-    s_kev[i % 48].a = a; s_kev[i % 48].b = b; s_kev[i % 48].us = us;
++    s_kev[i % KEV_N].t = GetTickCount64(); s_kev[i % KEV_N].kind = kind;
++    s_kev[i % KEV_N].a = a; s_kev[i % KEV_N].b = b; s_kev[i % KEV_N].us = us;
+     if (kind == 'D') s_kev_last_dispatch = GetTickCount64();
+ }
+ static void spurs_kev_check(void)
+@@ -558,12 +559,12 @@ static void spurs_kev_check(void)
+     ULONGLONG now = GetTickCount64();
+     if (now - s_kev_last_dispatch < 3000) return;
+     dumped = 1;
+-    LONG n = s_kev_n, first = n > 48 ? n - 48 : 0;
++    LONG n = s_kev_n, first = n > KEV_N ? n - KEV_N : 0;
+     fprintf(stderr, "[kev] wid=%d: no dispatch for %llu ms; last %ld events (S store v/before, D dispatch ready, X exit ready/us):\n",
+             s_kev_wid, now - s_kev_last_dispatch, (long)(n - first));
+     for (LONG i = first; i < n; i++)
+-        fprintf(stderr, "[kev]   -%5llu ms %c %u %u %u\n", now - s_kev[i % 48].t, s_kev[i % 48].kind,
+-                s_kev[i % 48].a, s_kev[i % 48].b, s_kev[i % 48].us);
++        fprintf(stderr, "[kev]   -%5llu ms %c %u %u %u\n", now - s_kev[i % KEV_N].t, s_kev[i % KEV_N].kind,
++                s_kev[i % KEV_N].a, s_kev[i % KEV_N].b, s_kev[i % KEV_N].us);
+ }
+ 
+ static int  spurs_kern_wake_on(void);
+@@ -2110,6 +2111,9 @@ static void spurs_lane_run_body(struct spurs_pm_worker_arg* a)
+         LONG others = a->working ? InterlockedDecrement(a->working) : 0;
+         QueryPerformanceCounter(&q1);
+         uint64_t ran_us = (uint64_t)((q1.QuadPart - q0.QuadPart) * 1000000 / qf.QuadPart);
++        /* a lane's module returned: ready count it left, lane, run time */
++        spurs_kev(a->wid, 'L', *(vm_base + a->ea + SPURS_WKL_READY1 + a->wid), (u8)a->spu_num,
++                  (u32)(ran_us > 0xFFFFFFFFu ? 0xFFFFFFFFu : ran_us));
+         unsigned long long ran = ran_us / 1000;
+         if (ran_us >= 500 && a->did_work) *a->did_work = 1;
+         if (g_tl_on) ps3_tl_rec('L', a->wid << 8 | a->spu_num, (uint32_t)(ps3_tl_us() - tl0));
+@@ -2239,25 +2243,32 @@ static int spurs_lane_join_on(void)
+ }
+ static void spurs_group_end(struct spurs_wkl_group* g);
+ static int spurs_lane_pool_on(void);
+-static void spurs_group_join_locked(struct spurs_wkl_group* g, u8 value);
++static int spurs_group_join_locked(struct spurs_wkl_group* g, u8 value);
+ /* The lock: a kick from a PPU thread could join a lane while the kernel was
+  * setting up the next pass; both counted the lane in `remaining`, its two
+  * wakes merged into one, and the pass waited for ever (remaining=1, no lane
+  * working). */
+-static void spurs_group_join(struct spurs_wkl_group* g, u8 value)
++/* Returns 1 if the running pass takes the kick (its lanes are all inside,
++ * or one was sent back in), 0 if no pass will: it had ended, was ending, or
++ * had no lane to send. */
++static int spurs_group_join(struct spurs_wkl_group* g, u8 value)
+ {
++    int took = 0;
+     AcquireSRWLockExclusive(&g->join_lock);
+-    if (g->busy) spurs_group_join_locked(g, value);
++    if (g->busy) took = spurs_group_join_locked(g, value);
+     ReleaseSRWLockExclusive(&g->join_lock);
++    return took;
+ }
+-static void spurs_group_join_locked(struct spurs_wkl_group* g, u8 value)
++static int spurs_group_join_locked(struct spurs_wkl_group* g, u8 value)
+ {
+     u32 n = g->lanes > 8 ? 8 : g->lanes;
+     u32 want = value < n ? value : n, running = 0;
+     for (u32 i = 0; i < n; i++) running += g->lane_run[i] ? 1u : 0u;
++    /* event log: 'j' a kick that sent nobody (lanes running / wanted) */
++    if (running >= want) spurs_kev(g->a.wid, 'j', (u8)running, (u8)want, 0);
+     while (running < want) {
+         LONG r = g->remaining;
+-        if (r <= 0) return;                               /* the pass is ending */
++        if (r <= 0) { spurs_kev(g->a.wid, 'n', (u8)running, (u8)want, 0); return 0; }   /* the pass is ending */
+         if (InterlockedCompareExchange(&g->remaining, r + 1, r) != r) continue;
+         int got = -1;
+         for (u32 i = 0; i < n && got < 0; i++)
+@@ -2265,8 +2276,9 @@ static void spurs_group_join_locked(struct spurs_wkl_group* g, u8 value)
+                 got = (int)i;
+         if (got < 0) {                                    /* nobody to send: give the slot back */
+             if (InterlockedDecrement(&g->remaining) == 0) spurs_group_end(g);
+-            return;
++            return 0;
+         }
++        spurs_kev(g->a.wid, 'J', (u8)got, (u8)want, 0);   /* a lane sent to join */
+         g->lane_a[got].delay_ms = 0; g->lane_a[got].delay_us = 0;
+         { static volatile LONG said;
+           if (InterlockedIncrement(&said) <= 3)
+@@ -2276,6 +2288,7 @@ static void spurs_group_join_locked(struct spurs_wkl_group* g, u8 value)
+         SetEvent(g->lane_go[got]);
+         running++;
+     }
++    return 1;
+ }
+ static void spurs_group_kick(u32 ea, u32 wid, u8 value)
+ {
+@@ -2365,6 +2378,7 @@ static void spurs_group_end(struct spurs_wkl_group* g)
+               } }
+     spurs_cont_store(g->a.ea, g->a.wid, 0);
+     ps3_tl('E', g->a.wid, 0);
++    spurs_kev(g->a.wid, 'E', *(vm_base + g->a.ea + SPURS_WKL_READY1 + g->a.wid), 0, busiest);
+     InterlockedExchange(&g->busy, 0);
+     if (spurs_kern_wake_on()) spurs_kern_wake(g->a.ea);
+ }
+@@ -2778,6 +2792,34 @@ void cellSpurs_debug_dump_to(FILE* out)
+                 for (int k = 0; k < 16; k++) fprintf(out, "%s%02X", (k & 1) ? "" : " ", q[k]);
+                 fprintf(out, "%c", 10);
+             }
++        /* Each queue's job entries around its published head: a job the
++         * SPUs should have taken is a nonzero entry at or after the lowest
++         * progress halfword (GT5 2.11's GPUSyncArray freeze, issue #47). */
++        if (hd >= 0x10000 && hd < 0xC0000000u && !(hd & 0xF) && wws_addr_ok(hd, 0x80))
++            for (u32 qn = 0; qn < 2; qn++) {
++                const u32 list = vm_read32(hd + 0x30 + 4 * qn);
++                const u32 head = vm_read16(hd + 0x40 + 16 * qn);
++                if (head > 0x1000 || !wws_addr_ok(list, 8 * (head + 8))) continue;
++                const u32 from = head >= 2 ? head - 2 : 0;
++                fprintf(out, "[stall]     queue %u @%08X head %u, jobs %u..%u:", qn, list, head, from, head + 5);
++                for (u32 j = from; j < head + 6; j++)
++                    fprintf(out, " %08X%08X", vm_read32(list + 8 * j), vm_read32(list + 8 * j + 4));
++                fprintf(out, "%c", 10);
++            }
++    }
++    /* SPURS_KEVLOG=<wid>: that workload's recent events, oldest first. */
++    if (s_kev_wid >= 0 && s_kev_n) {
++        LONG n = s_kev_n, first = n > KEV_N ? n - KEV_N : 0;
++        ULONGLONG now = GetTickCount64();
++        fprintf(out, "[stall]   kev wid=%d, %ld events (S store value/before, P pass start ready/lanes, "
++                     "L lane left ready/spu/us, J join spu/want, j kick sent nobody running/want, "
++                     "n pass ending running/want, E pass end ready, K flag kick kept, D/X inline dispatch/exit):%c",
++                s_kev_wid, (long)(n - first), 10);
++        for (LONG i = first; i < n; i++) {
++            const int k = (int)(i % KEV_N);
++            fprintf(out, "[stall]     -%llu ms %c %u %u %u%c", now - s_kev[k].t, s_kev[k].kind,
++                    s_kev[k].a, s_kev[k].b, s_kev[k].us, 10);
++        }
+     }
+     fflush(out);
+ }
+@@ -2990,9 +3032,24 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+                  * SPUs would take it, with its lanes joining (GT5 2.11 sets the flag
+                  * during workload 4's pass; kept for later, it started an empty pass
+                  * after the real one, ~2 ms the title waited for contention 0). */
++                /* SPURS_FLAG_KICK_KEEP (on; =0 old): if the pass does not take it
++                 * (it is ending, or had no lane to send), the flag is put back,
++                 * so the kick starts the next pass once this one is over. It was
++                 * consumed either way: a kick that met the pass's last lane on its
++                 * way out was lost, the jobs GT5 2.11 had just appended to
++                 * workload 4 were never run, and its GPUSyncArray poll waited for
++                 * ever (the picture freeze, issues #28/#36/#38/#39/#47; caught
++                 * with SPURS_KEVLOG=4 on a scrolling car list: lanes all left,
++                 * 'n', pass end with ready 0). The game only clears the word to
++                 * kick, so writing 0 back restores a kick, never invents one. */
+                 if (s_gate && flag_kick && spurs_lane_join_on() && spurs_lane_pool_on()) {
++                    static int keep = -1;
++                    if (keep < 0) { const char* e = getenv("SPURS_FLAG_KICK_KEEP"); keep = !(e && *e == '0'); }
+                     vm_write32(ea + SPURS_WKL_FLAG_WORD, 0xFFFFFFFFu);
+-                    spurs_group_join(&s_wkl_group[wid], 0xFF);
++                    if (!spurs_group_join(&s_wkl_group[wid], 0xFF) && keep) {
++                        vm_write32(ea + SPURS_WKL_FLAG_WORD, 0);
++                        spurs_kev(wid, 'K', 0, 0, 0);    /* flag kick kept for the next pass */
++                    }
+                 }
+                 continue;
+             }
+@@ -3126,6 +3183,7 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+                                       wid, maxcont, *rdy, *(vm_base + ea + SPURS_WKL_MAXCONT + wid), 10); }
+                     InterlockedExchange(&g->busy, 1);
+                     InterlockedIncrement(&s_kstat_runs[wid]);
++                    spurs_kev(wid, 'P', *rdy, (u8)maxcont, 0);     /* a lane pass starts */
+                     ps3_tl('D', wid, maxcont);
+                     if (spurs_lane_pool_on() && spurs_pool_dispatch(g)) continue;   /* the last lane ends it */
+                     HANDLE gt = CreateThread(NULL, 1u << 20, spurs_wkl_group_thread, g, 0, NULL);

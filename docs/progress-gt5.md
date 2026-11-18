@@ -4,6 +4,40 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.12: the 2.11 picture freeze is a lost workload-flag kick (2026-11-18)
+
+Issues #28, #36, #38, #39, #47 (and probably #46): 2.11's picture stops while
+the game runs; thread `gFKsE` polls `0x00B95248` on the GPUSyncArray
+`0x01913300` (workload 4's WWS job list: queue pointers +0x30, rows +0x40) for
+jobs nobody runs. Reproduced locally: 0.1.11's 2.11 engine (relinked with
+`cellSpurs.c` only), Arcade car list, Right every 3 s
+(`gt5boot.ps1 -Route carlist -ExtraHold`, 2.11's `PAD_MILESTONE_FILES`): froze
+about 8 minutes into the car list with the field signature (ready 0, both
+queues holding nonzero jobs at their heads, progress = head). A 10-minute
+race and 10 minutes on one car did not freeze.
+
+The game's side (2.11): `0x00B9A3F0` appends an 8-byte job with
+`ldarx`/`stdcx.`; `0x00B9513C` kicks with `cellSpursReadyCountStore`
+(`0x00B99DC8` dependency counter, `0x00B98CE0`), and 2.11 also kicks through
+the workload flag (`cellSpursGetWorkloadFlag`).
+
+New event log (`SPURS_KEVLOG=<wid>`, now default 4 for GT5, `=-1` off; 256
+events, printed in every stall dump with each queue's job entries around its
+head): P pass start, L lane left (ready, spu, us), J join sent, j kick taken by
+running lanes, n kick refused (pass ending), E pass end, S store, K kept. The
+freeze's last events: `P 0 4` (a pass started by the flag), `j` x10, four
+`L`, `n 0 4`, `E 0 0`, and nothing after. No store preceded the `n`: it was a
+flag kick. The kernel's busy path cleared the flag word, then asked the
+running pass to join; the pass was ending, the join refused, and the flag was
+gone: the appended jobs were never run.
+
+Fix (runtime, `libs/spurs/cellSpurs.c`, fourth patch section,
+`patches/incremental/v211-freeze-flag-kick.patch`): `spurs_group_join` returns
+whether the pass took the kick; when it did not, the flag is written back (the
+game only writes 0 to kick, so this restores a kick, never invents one) and the
+next pass takes it (`SPURS_FLAG_KICK_KEEP=0` old). Ready-count kicks were
+already safe: the count is not consumed by a refused join.
+
 ## Release 0.1.11 published (2026-11-18)
 
 Tag `v0.1.11` = `6d66309` (the RC's `320cb04` plus release notes, docs and

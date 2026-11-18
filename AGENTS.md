@@ -167,6 +167,15 @@ old) and lwmutex slots on destroy (`PS3_LWM_SLOT_FREE=0` old). Test:
 `scripts/test/sync_slots.py`. Never key host state by guest address without
 freeing it.
 
+**2.11 picture freeze (0.1.12, runtime).** #28/#36/#38/#39/#47: a
+workload-flag kick that met workload 4's pass as it ended was consumed and
+lost (`gFKsE` polled `0x00B95248` for ever). The flag is now put back when
+the pass refuses it (`SPURS_FLAG_KICK_KEEP=0` old). Reproduce: 2.11 Arcade
+car list with Right every 3 s for 10 minutes (about one freeze per 8 min
+before; 0 in 33 min after). `SPURS_KEVLOG=4` (GT5 default) prints the
+workload's passes, lane exits, joins and kicks in every stall dump. See
+progress-gt5.md.
+
 **Antivirus (release check).** Bitdefender `Gen:Variant.Lazy` scores the
 first 16 KB of `.text`: every PGO `gt5.exe` 0.1.4-0.1.10 was flagged because
 lld's call-graph sort and a cold `main()` moved `main.cpp` off the start.
