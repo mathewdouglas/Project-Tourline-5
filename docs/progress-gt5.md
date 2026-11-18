@@ -36,11 +36,17 @@ scuffs and dents instead.
   SampleCmp are left alone. Draws with a border unit do not use the shader
   interpreter while their pipeline compiles (it would sample clamped into an
   accumulating target); they wait for it like other offscreen draws (31 ms
-  for the damage pass). `RSX_TEX_BORDER=0` restores the old addressing.
+  for the damage pass). `RSX_TEX_BORDER_ADDR=0` restores the old addressing.
 - Result: the damage map now holds marks only along the front and sides that
   touched the wall (`RSX_CAP_RT=6A99100` captures, before/after). The race's
   shadow map (unit 13) is also border-addressed; scenery looked the same in
   the before/after shots. FrameTest 57.3 FPS, as before.
+- Only units whose SET_TEXTURE_FORMAT bit 3 is set (border colour) take the
+  colour; a border texture (bit 3 clear: edge texels stored in the data, which
+  the runtime decodes for cubes under the older, separate `RSX_TEX_BORDER`)
+  keeps the old addressing. The scratch texture has bit 3 set (rechecked).
+  gt5-recomp (MormonFTP-hub, MIT) fixed "rainbow car paint" from bordered
+  texture layout on 3 Nov; that is the bit-3-clear case, not this one.
 - Tools found on the way: `RSX_RDOC=2 RSX_CAP_RT=<surface>` captures the
   frame after the first one that draws there (it missed the bake);
   `RSX_CAP=1:<n>:1 RSX_CAP_RT=<surface>` writes a manifest and the target for
@@ -4496,7 +4502,7 @@ when more are given.
 - Both cubes are **border textures** (`SET_TEXTURE_FORMAT` bit 3 clear). Each
   face is a 16x16 swizzled grid holding the 8x8 image centred, with a
   one-texel border (rows and columns 3 and 12). The upload copies the image
-  out of each face's grid (`RSX_TEX_BORDER=0`: old reading). Running the job
+  out of each face's grid (`RSX_TEX_BORDER_ADDR=0`: old reading). Running the job
   body on the interpreter (`SPU_INTERP_OVL=40`, new) gives the same layout,
   so this is the game's format, not a lifting fault.
 - The Fiat now draws painted (grey). Its thumbnail is cream, so the tint may

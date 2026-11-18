@@ -1,5 +1,5 @@
 diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
-index dc8ba72..31ac21e 100644
+index dc8ba72..92b83dd 100644
 --- a/libs/video/rsx_d3d12_backend.c
 +++ b/libs/video/rsx_d3d12_backend.c
 @@ -151,6 +151,10 @@ static u32 s_pso_vmask = 0xFFFFu;   /* vertex mask of the draw being replayed (P
@@ -7,7 +7,7 @@ index dc8ba72..31ac21e 100644
  static u32 s_pso_unhi;              /* texel-addressed 2D units 4-15, bit = unit (PSO key) */
  static u32 s_pso_shd;               /* shadow units, bit = unit, and their compare in bits 16-18 (PSO key) */
 +/* Units addressed with BORDER (RSX wrap 4 or 7): bit u = s axis, bit 16+u =
-+ * t axis, and their border colours (0xAARRGGBB) (PSO key, RSX_TEX_BORDER). */
++ * t axis, and their border colours (0xAARRGGBB) (PSO key, RSX_TEX_BORDER_ADDR). */
 +static u32 s_pso_border;
 +static u32 s_pso_border_col[16];
  /* Depth buffers of depth-only passes (zb_*); DSV heap slots 2.. hold their views. */
@@ -31,7 +31,7 @@ index dc8ba72..31ac21e 100644
      u32 vmask;              /* vertex attributes in the buffer (input layout) */
      u32 cube_mask;          /* which units are cube textures (PSO key): the HLSL
                               * declares those samplers as TextureCube, so a cube
-@@ -4271,6 +4279,69 @@ static int fp_wrap_fn(char* hlsl, size_t cap, int u, const char* pre)
+@@ -4271,6 +4279,71 @@ static int fp_wrap_fn(char* hlsl, size_t cap, int u, const char* pre)
      return patched;
  }
  
@@ -42,7 +42,9 @@ index dc8ba72..31ac21e 100644
 + * scratch texture at every impact; clamped, the edges became long streaks over
 + * whole panels that built up with every hit (#42/#47). Every Sample-family
 + * call of unit `u` becomes rsx_bd<u>(call, coords); run after the texel-scale
-+ * rewrites so the coordinates tested are normalized. RSX_TEX_BORDER=0: old. */
++ * rewrites so the coordinates tested are normalized. Only units whose format
++ * asks for the border colour (SET_TEXTURE_FORMAT bit 3); a border texture
++ * (bit 3 clear) keeps its own edge texels. RSX_TEX_BORDER_ADDR=0: old. */
 +static int fp_border_unit(char* hlsl, size_t cap, int u)
 +{
 +    char needles[2][32], pre[16];
@@ -94,14 +96,14 @@ index dc8ba72..31ac21e 100644
 +static int tex_border_on(void)
 +{
 +    static int on = -1;
-+    if (on < 0) { const char* e = getenv("RSX_TEX_BORDER"); on = !(e && e[0] == '0'); }
++    if (on < 0) { const char* e = getenv("RSX_TEX_BORDER_ADDR"); on = !(e && e[0] == '0'); }
 +    return on;
 +}
 +
  /* Compiled guest shaders kept on disk, keyed by their HLSL text: GT5
   * Prologue's showroom compiles about thirty 27-37 KB pixel shaders on first
   * entry, 0.25-0.5 s each in the compiler front end whatever the optimisation
-@@ -7549,6 +7620,7 @@ static u32 fp_key_hash(const VPFPEntry* k)
+@@ -7549,6 +7622,7 @@ static u32 fp_key_hash(const VPFPEntry* k)
                          k->vmask, (u32)k->samp_key, (u32)(k->samp_key >> 32), k->ghi, k->shd, k->unhi };
      u32 h = 2166136261u;
      for (int i = 0; i < (int)(sizeof w / sizeof w[0]); i++) { h ^= w[i]; h *= 16777619u; h ^= h >> 15; }
@@ -109,7 +111,7 @@ index dc8ba72..31ac21e 100644
      return h;
  }
  static int fp_key_eq(const VPFPEntry* a, const VPFPEntry* b)
-@@ -7558,7 +7630,8 @@ static int fp_key_eq(const VPFPEntry* a, const VPFPEntry* b)
+@@ -7558,7 +7632,8 @@ static int fp_key_eq(const VPFPEntry* a, const VPFPEntry* b)
             a->ucode_hash == b->ucode_hash && a->cmask == b->cmask && a->cull == b->cull &&
             a->stencil == b->stencil && a->unnorm == b->unnorm && a->cube_mask == b->cube_mask &&
             a->vmask == b->vmask && a->samp_key == b->samp_key && a->ghi == b->ghi &&
@@ -119,7 +121,7 @@ index dc8ba72..31ac21e 100644
  }
  /* RSX_PSO_TIMING=1: where a pipeline-cache miss spends its time, every 5 s:
   * building the HLSL (decompile and patches), getting the DXBC (disk cache or
-@@ -7829,6 +7902,9 @@ static u64 fplk_key(const VPFPEntry* k, u64 vs_code)
+@@ -7829,6 +7904,9 @@ static u64 fplk_key(const VPFPEntry* k, u64 vs_code)
      h = fplk_mix(h, ((u64)(u32)k->exp32 << 32) | k->cull); h = fplk_mix(h, ((u64)k->stencil << 32) | k->unnorm);
      h = fplk_mix(h, ((u64)k->cube_mask << 32) | k->vmask); h = fplk_mix(h, k->samp_key);
      h = fplk_mix(h, ((u64)k->ghi << 32) | k->shd); h = fplk_mix(h, k->unhi);
@@ -129,7 +131,7 @@ index dc8ba72..31ac21e 100644
      return h ? h : 1;
  }
  static u64 fplk_get(u64 key)
-@@ -8018,6 +8094,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -8018,6 +8096,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
            s_pso_unhi &= used;
            s_pso_shd = (s_pso_shd & used & 0xFFFFu) ?
                (s_pso_shd & (0xFFFF0000u | used)) : 0;
@@ -137,7 +139,7 @@ index dc8ba72..31ac21e 100644
            for (u32 u = 0; u < 16; u++)
                if (!(used & (1u << u))) samp_key &= ~((u64)15 << (4 * u));
            /* Packed texel-scale/depth-copy/mip flags are for low units only. */
-@@ -8060,8 +8137,16 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -8060,8 +8139,16 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
          if (none) { unnorm = 0; unnorm_mask = 0; }
      }
  
@@ -154,7 +156,7 @@ index dc8ba72..31ac21e 100644
      key.fp_addr = fp_addr; key.vs_idx = vs_idx; key.vs_hash = vs_hash; key.gen = s_d3d.vp_gen;
      key.blend = blend; key.nrt = nrt; key.rtfmt = (u32)rtfmt; key.exp32 = exp32; key.ucode_hash = code_identity;
      key.cmask = cmask; key.cull = cull; key.stencil = stencil; key.unnorm = unnorm; key.cube_mask = cube_mask;
-@@ -8087,7 +8172,8 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -8087,7 +8174,8 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
              s_d3d.vp_fp[i].cube_mask == cube_mask &&
              s_d3d.vp_fp[i].vmask == s_pso_vmask &&
              s_d3d.vp_fp[i].samp_key == samp_key && s_d3d.vp_fp[i].ghi == s_pso_ghi &&
@@ -164,7 +166,7 @@ index dc8ba72..31ac21e 100644
              if (!s_library_fp) { vp_ps_hold_set(s_d3d.vp_fp[i].ps_keep); pso_race_learn(s_d3d.vp_fp[i].native_hash); return s_d3d.vp_fp[i].pso; } }
      /* Keys whose pixel shader the pool is compiling: answer "pending" without
       * building the HLSL again. Both the pre-pass and the draw ask every frame,
-@@ -8553,6 +8639,37 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+@@ -8553,6 +8641,37 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
                fprintf(stderr, "[UNNORM-HI] fp=0x%X units=0x%X: %d sample sites scaled%c",
                        fp_addr, s_pso_unhi, np, 10); }
      }
@@ -202,7 +204,7 @@ index dc8ba72..31ac21e 100644
      /* Units bound to the depth copy: the guest reads a depth surface as an
       * A8R8G8B8 texture, so the 24-bit depth arrives as three bytes (A = high,
       * R = middle, G = low; B is the stencil) and then goes through the
-@@ -9360,6 +9477,8 @@ fp_memo_have_pb:
+@@ -9360,6 +9479,8 @@ fp_memo_have_pb:
      s_d3d.vp_fp[s_d3d.vp_fp_n].ghi = s_pso_ghi;
      s_d3d.vp_fp[s_d3d.vp_fp_n].shd = s_pso_shd;
      s_d3d.vp_fp[s_d3d.vp_fp_n].unhi = s_pso_unhi;
@@ -211,7 +213,7 @@ index dc8ba72..31ac21e 100644
      s_d3d.vp_fp[s_d3d.vp_fp_n].native_hash = native_hash;
      s_d3d.vp_fp[s_d3d.vp_fp_n].pso     = pso;
      s_d3d.vp_fp[s_d3d.vp_fp_n].ps_keep = vp_ps_hold_ref();
-@@ -9405,7 +9524,7 @@ void rsx_d3d12_backend_prepare_library(void)
+@@ -9405,7 +9526,7 @@ void rsx_d3d12_backend_prepare_library(void)
      HANDLE f = FindFirstFileA(pattern, &fd);
      if (f == INVALID_HANDLE_VALUE) { fprintf(stderr, "[shader-library] no extracted fragment programs in %s\n", dir); return; }
      u32 count = 0, rejected = 0, attempts = 0, visited = 0;
@@ -220,7 +222,7 @@ index dc8ba72..31ac21e 100644
      const char* lim = getenv("RSX_SHADER_LIBRARY_LIMIT");
      u32 limit = lim ? (u32)strtoul(lim, NULL, 10) : 16384;
      if (!limit || limit > 16384) limit = 16384;
-@@ -9430,7 +9549,7 @@ void rsx_d3d12_backend_prepare_library(void)
+@@ -9430,7 +9551,7 @@ void rsx_d3d12_backend_prepare_library(void)
          for (u32 i = 0; i < np; i++) {
              if (profiles[i].textures != 0xFFFFFFFFu && profiles[i].textures != textures &&
                  (!broad || strcmp(broad, "1"))) continue;
@@ -229,7 +231,7 @@ index dc8ba72..31ac21e 100644
              s_library_result = 0;
              vp_get_fp_pso(-1, 1, 0, 1, DXGI_FORMAT_R8G8B8A8_UNORM, (int)profiles[i].exp32,
                            15, 0, profiles[i].cube, profiles[i].stencil, profiles[i].unnorm, NULL, profiles[i].samplers);
-@@ -9445,7 +9564,7 @@ void rsx_d3d12_backend_prepare_library(void)
+@@ -9445,7 +9566,7 @@ void rsx_d3d12_backend_prepare_library(void)
      FindClose(f);
      while (g_rsx_shaders_pending) Sleep(10);
      for (u32 i = 0; i < SHC_TAB; i++) if (s_shc_st[i] == 2) rejected++;
@@ -238,7 +240,7 @@ index dc8ba72..31ac21e 100644
      fprintf(stderr, "[shader-library] finished: programs=%u attempts=%u rejected=%u compiled=%ld elapsed_ms=%llu\n",
              count, attempts, rejected, g_rsx_shaders_compiled - before, (unsigned long long)(GetTickCount64() - started));
      win_set_title("Gran Turismo 5 Prologue (ps3recomp)");
-@@ -11756,18 +11875,33 @@ static int off_rt_find_in(u32 raw, u32* x0, u32* y0)
+@@ -11756,18 +11877,33 @@ static int off_rt_find_in(u32 raw, u32* x0, u32* y0)
      return -1;
  }
  
@@ -264,7 +266,7 @@ index dc8ba72..31ac21e 100644
          dr->tex_control0[u] = st->textures[u].control0;
          dr->tex_filter[u] = st->textures[u].filter;
          dr->tex_address[u] = st->textures[u].address;
-+        if (bord) {
++        if (bord && (st->textures[u].format & 8u)) {   /* border colour, not border texels */
 +            const u32 ad = st->textures[u].address, ws = ad & 0xFu, wt = (ad >> 8) & 0xFu;
 +            const u32 m = ((ws == 4u || ws == 7u) ? 1u : 0u) | ((wt == 4u || wt == 7u) ? 0x10000u : 0u);
 +            dr->tex_border |= m << u;
@@ -273,7 +275,7 @@ index dc8ba72..31ac21e 100644
      }
      /* sRGB on both sides of the fragment program. A texture unit can ask for
       * its colour channels to be decoded to linear when sampled
-@@ -15472,7 +15606,7 @@ static void render_frame_body_inner(void)
+@@ -15472,7 +15608,7 @@ static void render_frame_body_inner(void)
          u32 _un_dim[16][2];
          u32 _un_mask = dr_unnorm(dr, _un_dim);
          s_pso_vmask = dr->vtx_mask ? dr->vtx_mask : 0xFFFFu; s_pso_ghi = dr->tex_gamma_hi | (dr_volume_mask(dr) << 16);
@@ -282,7 +284,7 @@ index dc8ba72..31ac21e 100644
          s_pso_shd = dr->tex_shd ? (dr->tex_shd | ((u32)dr->shd_func << 16)) : 0u;
          if (dr->fp_addr && dr->vs_idx != VS_PENDING) vp_get_fp_pso(dr->vs_idx, dr->fp_addr, dr->blend_key,
                                         dr_num_rts(dr),
-@@ -15946,7 +16080,7 @@ static void render_frame_body_inner(void)
+@@ -15946,7 +16082,7 @@ static void render_frame_body_inner(void)
                  u32 _un_dim[16][2];
                  u32 _un_mask = dr_unnorm(dr, _un_dim);
                  s_pso_vmask = dr->vtx_mask ? dr->vtx_mask : 0xFFFFu; s_pso_ghi = dr->tex_gamma_hi | (dr_volume_mask(dr) << 16);
@@ -291,7 +293,7 @@ index dc8ba72..31ac21e 100644
                  s_pso_shd = dr->tex_shd ? (dr->tex_shd | ((u32)dr->shd_func << 16)) : 0u;
  #define DR_GET_FP_PSO() \
                      (dr->fp_addr ? vp_get_fp_pso(dr->vs_idx, dr->fp_addr, dr->blend_key, \
-@@ -16032,7 +16166,7 @@ static void render_frame_body_inner(void)
+@@ -16032,7 +16168,7 @@ static void render_frame_body_inner(void)
                  if (s_ib_small < 0) { const char* e = getenv("RSX_SHADER_INTERP_BUDGET_SMALL"); s_ib_small = e && e[0] == '1'; }
                  const int _ibx = _ib || (_small_rt && !s_ib_small);
                  if (!use_interp && !use_vp && ((!dpso && s_fp_pending) || (interp_pair() && vp_stage)) &&
@@ -300,7 +302,7 @@ index dc8ba72..31ac21e 100644
                      /* Explicit paired mode keeps a program-independent pipeline
                       * while either stage/driver PSO is pending. */
                      if (interp_pair() && !vp_stage) vp_stage = vp_interp_stage(dr, &vp_hdr);
-@@ -16087,7 +16221,9 @@ static void render_frame_body_inner(void)
+@@ -16087,7 +16223,9 @@ static void render_frame_body_inner(void)
                         * hundreds. RSX_SHADER_INTERP_WAIT_RETRY=0: wait for the specialized pipeline only. */
                        static int s_iwr = -1;
                        if (s_iwr < 0) { const char* e = getenv("RSX_SHADER_INTERP_WAIT_RETRY"); s_iwr = !(e && e[0] == '0'); }

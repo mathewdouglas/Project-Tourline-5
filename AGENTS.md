@@ -182,7 +182,7 @@ progress-gt5.md.
 car's 256x512 damage map with a border-addressed scratch texture; the
 sampler bank had no border mode, so clamp stretched its edges over whole
 panels. Border units (RSX wrap 4/7) now return their border colour outside
-0..1 via a per-unit shader wrapper keyed in the pipeline (`RSX_TEX_BORDER=0`
+0..1 via a per-unit shader wrapper keyed in the pipeline (`RSX_TEX_BORDER_ADDR=0`
 old); such draws wait for their pipeline rather than use the interpreter.
 Reproduce: `gt5boot.ps1 -Route race -FrameTest` (Fiat scrapes the walls).
 See progress-gt5.md.

@@ -11,7 +11,7 @@ versions follow [SemVer](https://semver.org/).
   car's damage map with a scratch texture that should end at its edges; the
   renderer stretched its edge pixels across the panel instead, and every hit
   added more. The marks now stay where the car was hit, as on RPCS3.
-  `RSX_TEX_BORDER=0` restores the old behaviour.
+  `RSX_TEX_BORDER_ADDR=0` restores the old behaviour.
 - 2.11: the picture stopping while the game keeps running, on screens that
   show a car (dealership, garage, tuning shop, settings, B-Spec; #28, #36,
   #38, #39, #47). A restart signal the game sends its car-rendering jobs
