@@ -4,6 +4,56 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.2.0 DLSS step 3: per-object motion vectors (2026-11-18)
+
+`RSX_MV=2` (runtime, off by default; `=1` stays camera only). Every draw
+into the scene target uses a pipeline variant (bits `0x100`/`0x200` in the
+colour-mask key `cmask`, so every cache, recipe and pack keeps it apart) that
+has one more render target, `R16G16_FLOAT` at the scene's sample count,
+cleared to the sentinel 30000 when the scene target is first bound in a
+frame. A wrapper around the generated fragment shader (`mv_wrap_hlsl`)
+writes the draw's vector from the pixel's own position and depth through a
+per-draw matrix T (`rsx_mvt`, 256 more bytes in the b1 slot only with
+`RSX_MV=2`); opaque, depth-writing draws write it, others are masked. The
+walker builds T per object (distinct `c[0..3]`): `P_prev * C_prev *
+inverse(C_now) * A_now`, C_prev from the object of the frame before with the
+nearest world matrix and object-to-clip in the same viewport, else the
+viewport's camera motion. The camera pass (step 2) fills only the pixels no
+draw wrote. Vertex shaders are unchanged.
+
+01.04 High Speed Ring race, 720p, check view at amp 4, read back every 15
+frames in game (`[mv] check`, compensated / uncompensated over the main view):
+
+| Mode | samples | median | frames over 1 |
+| --- | --- | --- | --- |
+| camera only from depth (`RSX_MV=1`), window shots | 17 | 0.50 | 0 |
+| per object, first version | 150 | about 0.45 when right | about 45% |
+| per object with every object given the camera's motion (`RSX_MV_OBJ_MATCH=0`) | 105 | 0.38 | 0 |
+| per object, fixed matching | 122 | 0.41 | 0 |
+
+The bad frames were the matching: the track's world matrix is the identity
+give or take 1e-4 from frame to frame, and camera-space objects (6 draws,
+object-to-clip constant) are exactly the identity, so they won and the
+track's vectors were thousands of pixels off in about half the frames
+(`RSX_MV_LOG=4` listed the matches). The object-to-clip distance now weighs
+in the match (`RSX_MV_MATCH_DC`, 0.01): about 0.2-0.8 for the same object a
+frame later, hundreds for another. In the vector view cars ahead now read
+near zero (they move with us), wheels show their spin, and the mirror has a
+flow field of its own.
+
+Frame test (`gt5boot.ps1 -Route race -FrameTest -Settle 40`, same engine):
+off 55.2 FPS, p99 34.0 ms, 15.2% late; `RSX_MV=2` 55.2 FPS, p99 29.7 ms,
+17.6% late. No measurable cost.
+
+Diagnostics: `RSX_MV_VIEW=d<amp>` (difference between a draw's vector and the
+camera's, blue where a draw wrote), `RSX_MV_OBJ_READ=0` (draws write vectors,
+the camera pass ignores them), `RSX_MV_OBJ_MATCH=0`, `RSX_MV_LOG=2` (still
+objects that move unlike the camera), `=3` (most-drawn object's T every
+frame), `=4` (every object's match). Open: the sky reads zero while
+turning; the mirror cannot be measured with the check view (its frame tints
+it); draws that run without the variant while it compiles (interpreter or
+fallback pipeline) leave the sentinel, filled by the camera pass.
+
 ## 0.2.0 DLSS step 2: camera motion vectors (2026-11-18)
 
 `RSX_MV=1` (runtime, off by default). Walker: every scene draw's distinct

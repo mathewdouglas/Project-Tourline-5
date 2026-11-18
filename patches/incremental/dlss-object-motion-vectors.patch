@@ -1,0 +1,793 @@
+diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
+index deaab58..42b84ee 100644
+--- a/libs/video/rsx_d3d12_backend.c
++++ b/libs/video/rsx_d3d12_backend.c
+@@ -137,7 +137,16 @@ static u32 s_draw_cap = MAX_DRAWS;
+  * and the title patches them every frame: a recompile of a 37 KB shader per
+  * draw, and a window that stopped answering (Phase 41). */
+ #define FP_CB_CONSTS       256
+-#define VP_FPCB_STRIDE    ((((4 + 1 + FP_CB_CONSTS) * 16) + 255) & ~255)
++#define VP_FPCB_BASE      ((((4 + 1 + FP_CB_CONSTS) * 16) + 255) & ~255)
++/* [mv] RSX_MV=2 (per-object motion vectors): 256 more bytes a slot, where
++ * rsx_mvt[4] sits at byte VP_FPCB_BASE (scene_mv_note, mv_wrap_hlsl). */
++static unsigned vp_fpcb_stride(void)
++{
++    static unsigned s;
++    if (!s) { const char* e = getenv("RSX_MV"); s = VP_FPCB_BASE + ((e && atoi(e) >= 2) ? 256u : 0u); }
++    return s;
++}
++#define VP_FPCB_STRIDE    vp_fpcb_stride()
+ /* Generic VP vertex buffer, per parity half (vertices are 16 bytes per kept
+  * attribute; see vp_stage_commit). Sized at init: RSX_VPVB_MB, default 64
+  * with GPU vertex fetch on (MAX_VERTICES * 256 = 320 without it). Since GPU
+@@ -678,6 +687,7 @@ typedef struct {
+         u32 rt_off, gw, gh;         /* scene target and its guest clip */
+         u32 last, disp, unit;       /* last depth-tested scene record, boundary record, its scene unit */
+         int reset;                  /* nothing of the frame before belongs to this one */
++        u32 frame, nobj, matched, camera, none;   /* for the check readback (RSX_MV_VIEW=c) */
+         struct { float rect[4], prect[4], R[16], vz[2]; int ok; } reg[2];
+     } mv;
+ } FrameSet;
+@@ -7920,6 +7930,84 @@ static void fplk_log(void)
+             (unsigned long long)s_fplk_stat.checked, (unsigned long long)s_fplk_stat.mismatch);
+ }
+ 
++/* [mv] Pipeline variant bits in the colour-mask key (cmask), so every cache,
++ * recipe and pack that keys on it keeps the variant: MV_CMASK_RT, the draw
++ * has the motion-vector target bound after its colour targets; MV_CMASK_WR,
++ * and writes it (opaque, depth-writing scene draws). */
++#define MV_CMASK_RT 0x100u
++#define MV_CMASK_WR 0x200u
++#define MV_SENTINEL "30000.0"   /* in the target: no draw wrote a vector here */
++/* The pixel shader of a MV_CMASK_RT pipeline: the program as generated,
++ * renamed, under a main that also returns the draw's vector at SV_TARGET<nrt>:
++ * T (rsx_mvt, per draw, vp_record_cb) applied to the pixel's guest position
++ * and depth, minus that position, in host pixels; the sentinel when the draw
++ * has no T. Returns 0 when the text has an unexpected shape (no pipeline then). */
++static int mv_wrap_hlsl(char* hlsl, size_t cap, int nrt)
++{
++    static const char full_b1[] =
++        "cbuffer PSConstants : register(b1) { float4 rsx_texscale[4];"
++        " float4 rsx_alphatest; float4 fp_constants[256]; float4 rsx_fogstate;"
++        " float4 rsx_texexpand[4]; float4 rsx_texscale_hi[6]; float4 rsx_mvt[4]; };";
++    /* b1: the whole slot, rsx_mvt last (at byte VP_FPCB_BASE). The shorter
++     * declarations are prefixes of this one. */
++    char* cb = strstr(hlsl, "cbuffer PSConstants : register(b1) {");
++    if (cb) {
++        char* ce = strstr(cb, "};");
++        if (!ce || !strstr(cb, "float4 rsx_texscale[4];") || (size_t)(ce - cb) > sizeof full_b1) return 0;
++        const size_t oldlen = (size_t)(ce + 2 - cb), newlen = strlen(full_b1), tail = strlen(ce + 2) + 1;
++        if ((size_t)(cb - hlsl) + newlen + tail > cap) return 0;
++        memmove(cb + newlen, cb + oldlen, tail);
++        memcpy(cb, full_b1, newlen);
++    } else {
++        const size_t l = strlen(hlsl), dl = strlen(full_b1);
++        if (l + dl + 2 > cap) return 0;
++        memmove(hlsl + dl + 1, hlsl, l + 1);
++        memcpy(hlsl, full_b1, dl); hlsl[dl] = '\n';
++    }
++    int targets = 1;
++    char* m = strstr(hlsl, "float4 main(PSInput input) : SV_TARGET {");
++    if (m) {
++        static const char from[] = "float4 main(PSInput input) : SV_TARGET {";
++        static const char to[] = "float4 rsx_mv_inner(PSInput input) {";
++        memmove(m + strlen(to), m + strlen(from), strlen(m + strlen(from)) + 1);
++        memcpy(m, to, strlen(to));
++    } else {
++        m = strstr(hlsl, "PSOutput main(PSInput input) {");
++        if (!m) return 0;
++        static const char to[] = "PSOutput rsx_mv_inner(PSInput input) {";
++        static const char from[] = "PSOutput main(PSInput input) {";
++        memmove(m + strlen(to), m + strlen(from), strlen(m + strlen(from)) + 1);
++        memcpy(m, to, strlen(to));
++        targets = 0;
++        for (const char* q = strstr(hlsl, "struct PSOutput"); q && (q = strstr(q, ": SV_TARGET")); q++) targets++;
++        if (targets < 1) return 0;
++    }
++    if (strstr(hlsl, "main(PSInput input)")) return 0;   /* more than one entry: leave it */
++    char w[2048]; int n = 0;
++    n += snprintf(w + n, sizeof w - n,
++        "\nfloat2 rsx_mv(float4 p) {"
++        " if (rsx_mvt[3].z == 0) return float2(" MV_SENTINEL ", " MV_SENTINEL ");"
++        " float2 g = p.xy * rsx_mvt[3].xy; float4 h = float4(g, p.z, 1);"
++        " float3 q = float3(dot(rsx_mvt[0], h), dot(rsx_mvt[1], h), dot(rsx_mvt[2], h));"
++        " if (q.z <= 1e-6) return float2(" MV_SENTINEL ", " MV_SENTINEL ");"
++        " return (q.xy / q.z - g) / rsx_mvt[3].xy; }\n"
++        "struct RsxMvOut {");
++    const int keep = targets < nrt ? targets : nrt;
++    for (int t = 0; t < keep; t++) n += snprintf(w + n, sizeof w - n, " float4 t%d : SV_TARGET%d;", t, t);
++    n += snprintf(w + n, sizeof w - n, " float2 mv : SV_TARGET%d; };\n"
++                  "RsxMvOut main(PSInput input) { RsxMvOut o;", nrt);
++    if (m == strstr(hlsl, "float4 rsx_mv_inner"))
++        n += snprintf(w + n, sizeof w - n, " o.t0 = rsx_mv_inner(input);");
++    else {
++        n += snprintf(w + n, sizeof w - n, " PSOutput r = rsx_mv_inner(input);");
++        for (int t = 0; t < keep; t++) n += snprintf(w + n, sizeof w - n, " o.t%d = r.t%d;", t, t);
++    }
++    n += snprintf(w + n, sizeof w - n, " o.mv = rsx_mv(input.position); return o; }\n");
++    if (n <= 0 || (size_t)n >= sizeof w || strlen(hlsl) + (size_t)n + 1 > cap) return 0;
++    strcat(hlsl, w);
++    return 1;
++}
++
+ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, int nrt,
+                                           DXGI_FORMAT rtfmt, int exp32, u32 cmask, u32 cull,
+                                           u32 cube_mask, u32 stencil,
+@@ -9089,6 +9177,12 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
+               }
+           }
+       } }
++    /* [mv] The motion-vector variant: one more output (mv_wrap_hlsl). */
++    if ((cmask & MV_CMASK_RT) && !mv_wrap_hlsl(hlsl, sizeof hlsl, nrt)) {
++        static int said;
++        if (said++ < 8) fprintf(stderr, "[mv] fp 0x%08X: no motion-vector variant (unexpected shader shape)%c", fp_addr, 10);
++        return NULL;
++    }
+     ID3DBlob* pb = NULL; ID3DBlob* e = NULL;
+     /* Remap all units once; never reinterpret a bank register as a texture unit. */
+     if (pso_timing_on()) s_pt_rew += pt_ms_since(&pt_mark);
+@@ -9214,9 +9308,21 @@ fp_memo_have_pb:
+      * A mis-decoded mask makes geometry rasterize correctly and write nothing,
+      * which is indistinguishable from "the draw never happened". */
+     { static int _cf = -1; if (_cf < 0) _cf = getenv("CMASK_FORCE") ? 1 : 0;
+-      if (_cf) cmask = 0xF; }
++      if (_cf) cmask = 0xF | (cmask & ~0xFu); }
+     for (int _r = 0; _r < nrt; _r++)
+         pd.BlendState.RenderTarget[_r].RenderTargetWriteMask = (UINT8)(cmask & 0xF);
++    /* [mv] The motion-vector target after the colour targets, never blended. */
++    if ((cmask & MV_CMASK_RT) && nrt < 8) {
++        pd.BlendState.IndependentBlendEnable = TRUE;
++        pd.NumRenderTargets = (UINT)nrt + 1;
++        pd.RTVFormats[nrt] = DXGI_FORMAT_R16G16_FLOAT;
++        memset(&pd.BlendState.RenderTarget[nrt], 0, sizeof pd.BlendState.RenderTarget[nrt]);
++        pd.BlendState.RenderTarget[nrt].SrcBlend = pd.BlendState.RenderTarget[nrt].SrcBlendAlpha = D3D12_BLEND_ONE;
++        pd.BlendState.RenderTarget[nrt].DestBlend = pd.BlendState.RenderTarget[nrt].DestBlendAlpha = D3D12_BLEND_ZERO;
++        pd.BlendState.RenderTarget[nrt].BlendOp = pd.BlendState.RenderTarget[nrt].BlendOpAlpha = D3D12_BLEND_OP_ADD;
++        pd.BlendState.RenderTarget[nrt].RenderTargetWriteMask = (cmask & MV_CMASK_WR)
++            ? (UINT8)(D3D12_COLOR_WRITE_ENABLE_RED | D3D12_COLOR_WRITE_ENABLE_GREEN) : 0;
++    }
+     pd.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+     pd.DepthStencilState.DepthEnable = TRUE;
+     pd.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+@@ -11119,6 +11225,7 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+  * instead. RSX_VCB_REUSE=0: copy every time. */
+ static u32 s_vcb_copies, s_vcb_calls;   /* per 5 s, on the [present-thread] line */
+ static void scene_consts_note(const D3D12DrawRecord* dr, const rsx_state* st);   /* [scene] RSX_SCENE_CONSTS */
++static const float* s_mv_draw_t;   /* [mv] defined with the walker side */
+ static u32 vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+ {
+     s_vcb_calls++;
+@@ -11133,13 +11240,13 @@ static u32 vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+         /* Fog state occupies previously unused alignment padding after the
+          * fixed-size inline-constant array; existing constant offsets stay put. */
+         float* fog = ts + 20 + FP_CB_CONSTS * 4;
+-        _Static_assert((20 + FP_CB_CONSTS * 4 + 4) * 4 <= VP_FPCB_STRIDE, "fog fits b1 padding");
++        _Static_assert((20 + FP_CB_CONSTS * 4 + 4) * 4 <= VP_FPCB_BASE, "fog fits b1 padding");
+         /* Per-output RGBA mask for TEX _bx2. Constant-zero crossbar lanes
+          * stay zero, float textures stay float, and absent resource channels
+          * are not interpreted as unsigned data. This fits the existing b1
+          * alignment padding, after fog, without moving inline constants. */
+         float* expansion = fog + 4;
+-        _Static_assert((20 + FP_CB_CONSTS * 4 + 4 + 16) * 4 <= VP_FPCB_STRIDE,
++        _Static_assert((20 + FP_CB_CONSTS * 4 + 4 + 16) * 4 <= VP_FPCB_BASE,
+                        "texture expansion fits b1 padding");
+         for (u32 u = 0; u < RSX_TEX_UNITS; u++) {
+             u32 mask = 0;
+@@ -11171,7 +11278,7 @@ static u32 vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+                           dr->fp_addr,st->shader_window,dr->rt_off,dr->tex_address[10],10); }
+           } }
+         float* hi_scale = expansion + 16;
+-        _Static_assert((20 + FP_CB_CONSTS * 4 + 4 + 16 + 24) * 4 <= VP_FPCB_STRIDE,
++        _Static_assert((20 + FP_CB_CONSTS * 4 + 4 + 16 + 24) * 4 <= VP_FPCB_BASE,
+                        "upper texture scales fit b1 padding");
+         for (u32 u = 4; u < RSX_TEX_UNITS; u++) {
+             u32 at = (u - 4) * 2;
+@@ -11233,6 +11340,18 @@ static u32 vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+             ts[16] = 0.0f; ts[17] = 0.0f; ts[18] = 7.0f; ts[19] = 0.0f;
+         }
+         ts[19] = wpos_fy;
++        /* [mv] rsx_mvt (RSX_MV=2): the draw's T rows, then (guest per host
++         * pixel in x and y, 1 when T is valid, 0). */
++        if (VP_FPCB_STRIDE > VP_FPCB_BASE) {
++            float* mvt = (float*)((char*)ts + VP_FPCB_BASE);
++            if (s_mv_draw_t && dr && dr->rt_w && dr->rt_h) {
++                memcpy(mvt, s_mv_draw_t, 12 * sizeof(float));
++                const u32 hw = uw_host_w(dr->rt_w, dr->rt_h), hh = uw_host_h(dr->rt_w, dr->rt_h);
++                mvt[12] = hw ? (float)dr->rt_w / (float)hw : 1.0f;
++                mvt[13] = hh ? (float)dr->rt_h / (float)hh : 1.0f;
++                mvt[14] = 1.0f; mvt[15] = 0.0f;
++            } else memset(mvt, 0, 16 * sizeof(float));
++        }
+ 
+         /* fp_k[]: the program's inline fragment constants, re-read from the
+          * guest ucode every draw. The decompiler emits fp_k[i] lookups instead
+@@ -12960,36 +13079,48 @@ static void depth_copy_capture(int rt)
+  * SRV heap slots 24-27 are reserved for this. */
+ static float mv_view_px(void);   /* [mv] RSX_MV_VIEW, defined with the walker side */
+ static int mv_view_check(void);
++static float mv_view_diff(void);
++static int mv_on(void);
+ #define MV_SRV_DEPTH 24u
+ #define MV_SRV_SCENE 25u   /* the scene's colour (check view) */
+ #define MV_SRV_HIST  26u   /* last frame's scene colour (check view) */
+ #define MV_SRV_VIZ   27u
++#define MV_SRV_OBJ   28u   /* the per-object vectors (t4 of the table at 24) */
+ static ID3D12Resource *s_mv_tex, *s_mv_viz, *s_mv_cb, *s_mv_hist;
+ static u32 s_mv_hist_fmt;
++/* [mv] RSX_MV=2: the per-object vector target (mv_obj_prepare) */
++static ID3D12Resource* s_mv_obj;
++static u32 s_mv_obj_w, s_mv_obj_h, s_mv_obj_n;
++static int s_mv_obj_ready, s_mv_obj_slot = -1, s_mv_obj_cleared;
++static u32 s_mvc[4];   /* this frame's scene draws: writing vectors, other pipeline, not writing, left out */
+ static int s_mv_hist_ok;
+ static u8* s_mv_cb_map;
+ static ID3D12DescriptorHeap* s_mv_rtv;
+-static ID3D12PipelineState* s_mv_pso;
++static ID3D12PipelineState* s_mv_psos[3];   /* camera only; with per-object vectors, one sample / several */
+ static u32 s_mv_w, s_mv_h, s_mv_passes;
+ static int s_mv_failed;
+ static void off_rt_defer_release(ID3D12Resource* res);
+-static int mv_pso_ensure(void)
++static int mv_pso_ensure(int obj)
+ {
+-    if (s_mv_pso) return 1;
++    if (s_mv_psos[obj]) return 1;
+     if (s_mv_failed) return 0;
+     /* hdr = (viewports, host w / guest w, host h / guest h, view px); per
+      * viewport 7 rows: rect (guest), previous rect, R rows 0-3, (vz0, vz1, ok, 0). */
+     static const char src[] =
+-        "cbuffer MV : register(b1) { float4 hdr; float4 g[14]; float4 hdr2; };"
++        "cbuffer MV : register(b1) { float4 hdr; float4 g[14]; float4 hdr2; };\n"
++        "#if OBJ == 1\nTexture2D<float2> mo : register(t4);\n#elif OBJ == 2\nTexture2DMS<float2> mo : register(t4);\n#endif\n"
+         "Texture2D<float> z : register(t0); Texture2D sc : register(t1); Texture2D hi : register(t2);"
+         "SamplerState lin : register(s1);"
+         "struct O { float2 mv : SV_Target0; float4 viz : SV_Target1; };"
+         "float4 vs(uint i : SV_VertexID) : SV_Position {"
+         " return float4(i == 1 ? 3 : -1, i == 2 ? -3 : 1, 0, 1); }"
+         "O ps(float4 p : SV_Position) {"
+-        " O o; o.mv = float2(0, 0);"
++        " O o; o.mv = float2(0, 0); bool have = false;\n"
++        "#if OBJ == 1\n float2 om = mo.Load(int3(p.xy, 0));\n#elif OBJ == 2\n float2 om = mo.Load(int2(p.xy), 0);\n#endif\n"
++        "#if OBJ\n if (abs(om.x) < 20000) { o.mv = om; have = true; }\n#endif\n"
+         " float d = z.Load(int3(p.xy, 0));"
+         " float2 gp = p.xy / hdr.yz;"
++        " float2 cam = float2(0, 0);"
+         " for (int k = (int)hdr.x - 1; k >= 0; k--) {"
+         "  float4 rc = g[k * 7], pr = g[k * 7 + 1], vz = g[k * 7 + 6];"
+         "  if (gp.x < rc.x || gp.y < rc.y || gp.x >= rc.x + rc.z || gp.y >= rc.y + rc.w) continue;"
+@@ -12998,8 +13129,10 @@ static int mv_pso_ensure(void)
+         "  float4 q = float4(dot(g[k * 7 + 2], h), dot(g[k * 7 + 3], h), dot(g[k * 7 + 4], h), dot(g[k * 7 + 5], h));"
+         "  if (q.w <= 1e-6) break;"
+         "  float2 prev = float2(pr.x + (q.x / q.w + 1) * pr.z * 0.5, pr.y + (1 - q.y / q.w) * pr.w * 0.5);"
+-        "  o.mv = (prev - gp) * hdr.yz;"
++        "  cam = (prev - gp) * hdr.yz;"
+         "  break; }"
++        " if (!have) o.mv = cam;"
++        " if (hdr2.y > 0) { o.viz = float4(saturate(abs(o.mv - cam) * hdr2.y), have ? 0.25 : 0, 1); return o; }"
+         " if (hdr.w < 0) {"
+         "  float3 l = float3(0.299, 0.587, 0.114);"
+         "  float c = dot(sc.Load(int3(p.xy, 0)).rgb, l);"
+@@ -13013,10 +13146,12 @@ static int mv_pso_ensure(void)
+         " o.viz = float4(hue * saturate(m / max(hdr.w, 0.001)), 1);"
+         " return o; }";
+     ID3DBlob *vs = NULL, *ps = NULL, *err = NULL;
+-    HRESULT hr = D3DCompile(src, sizeof(src) - 1, "motion-vectors", NULL, NULL, "vs", "vs_5_0",
++    static const char* const objv[3] = { "0", "1", "2" };
++    const D3D_SHADER_MACRO defs[2] = { { "OBJ", objv[obj] }, { NULL, NULL } };
++    HRESULT hr = D3DCompile(src, sizeof(src) - 1, "motion-vectors", defs, NULL, "vs", "vs_5_0",
+                             D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &vs, &err);
+     if (err) { err->lpVtbl->Release(err); err = NULL; }
+-    if (SUCCEEDED(hr)) hr = D3DCompile(src, sizeof(src) - 1, "motion-vectors", NULL, NULL, "ps", "ps_5_0",
++    if (SUCCEEDED(hr)) hr = D3DCompile(src, sizeof(src) - 1, "motion-vectors", defs, NULL, "ps", "ps_5_0",
+                                        D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &ps, &err);
+     if (SUCCEEDED(hr)) {
+         D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {0};
+@@ -13038,7 +13173,7 @@ static int mv_pso_ensure(void)
+         pd.RTVFormats[1] = DXGI_FORMAT_R8G8B8A8_UNORM;
+         pd.SampleDesc.Count = 1;
+         hr = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(s_d3d.device, &pd, &IID_ID3D12PipelineState,
+-                                                               (void**)&s_mv_pso);
++                                                               (void**)&s_mv_psos[obj]);
+     }
+     if (FAILED(hr)) {
+         s_mv_failed = 1;
+@@ -13048,7 +13183,7 @@ static int mv_pso_ensure(void)
+     if (err) err->lpVtbl->Release(err);
+     if (vs) vs->lpVtbl->Release(vs);
+     if (ps) ps->lpVtbl->Release(ps);
+-    return s_mv_pso != NULL;
++    return s_mv_psos[obj] != NULL;
+ }
+ static int mv_targets_ensure(u32 w, u32 h)
+ {
+@@ -13059,7 +13194,7 @@ static int mv_targets_ensure(u32 w, u32 h)
+     HRESULT hr;
+     if (!s_mv_rtv) {
+         D3D12_DESCRIPTOR_HEAP_DESC hd = {0};
+-        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; hd.NumDescriptors = 2;
++        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; hd.NumDescriptors = 3;   /* vectors, view, per-object */
+         hr = s_d3d.device->lpVtbl->CreateDescriptorHeap(s_d3d.device, &hd, &IID_ID3D12DescriptorHeap, (void**)&s_mv_rtv);
+         if (FAILED(hr)) { s_mv_failed = 1; fprintf(stderr, "[mv] RTV heap failed 0x%08lX\n", (unsigned long)hr); return 0; }
+     }
+@@ -13135,7 +13270,12 @@ static void mv_pass(int rt)
+         if (!said) { said = 1; fprintf(stderr, "[mv] scene target %ux%u has its own depth buffer: no vectors (not handled yet)\n", r->w, r->h); }
+         return;
+     }
+-    if (!mv_pso_ensure() || !mv_targets_ensure(r->w, r->h)) return;
++    /* Per-object vectors of this frame's draws, when they were bound. */
++    /* RSX_MV_OBJ_READ=0 (diagnostic): draw them, but leave them out here. */
++    static int objread = -1;
++    if (objread < 0) { const char* e = getenv("RSX_MV_OBJ_READ"); objread = !(e && e[0] == '0'); }
++    const int obj = (objread && s_mv_obj_ready && s_mv_obj_cleared && rt == s_mv_obj_slot) ? (s_mv_obj_n > 1 ? 2 : 1) : 0;
++    if (!mv_pso_ensure(obj) || !mv_targets_ensure(r->w, r->h)) return;
+     depth_copy_ensure();
+     if (!s_depth_copy) return;
+     depth_copy_capture(rt);
+@@ -13149,6 +13289,7 @@ static void mv_pass(int rt)
+     k[3] = mv_view_px() > 0.0f ? mv_view_px() : 16.0f;
+     if (mv_view_check()) k[3] = s_mv_hist_ok ? -k[3] : 0.0001f;
+     k[60] = mv_check_scale();
++    k[61] = mv_view_diff();
+     for (int i = 0; i < FR->mv.n && i < 2; i++) {
+         float* g = k + 4 + i * 28;
+         memcpy(g, FR->mv.reg[i].rect, 16); memcpy(g + 4, FR->mv.reg[i].prect, 16);
+@@ -13194,6 +13335,22 @@ static void mv_pass(int rt)
+         if (s_mv_hist) s_d3d.device->lpVtbl->CreateShaderResourceView(s_d3d.device, s_mv_hist, &sv, c2);
+         if (!s_mv_hist || FR->mv.reset) { s_mv_hist_ok = 0; k[3] = 0.0001f; }
+     }
++    D3D12_RESOURCE_BARRIER ob = {0};
++    if (obj) {
++        ob.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
++        ob.Transition.pResource = s_mv_obj; ob.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++        ob.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
++        ob.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++        s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list, 1, &ob);
++        D3D12_SHADER_RESOURCE_VIEW_DESC ov = {0};
++        ov.Format = DXGI_FORMAT_R16G16_FLOAT;
++        ov.ViewDimension = obj == 2 ? D3D12_SRV_DIMENSION_TEXTURE2DMS : D3D12_SRV_DIMENSION_TEXTURE2D;
++        ov.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
++        if (obj == 1) ov.Texture2D.MipLevels = 1;
++        D3D12_CPU_DESCRIPTOR_HANDLE c4 = ch;
++        c4.ptr += (MV_SRV_OBJ - MV_SRV_DEPTH) * s_d3d.srv_inc;
++        s_d3d.device->lpVtbl->CreateShaderResourceView(s_d3d.device, s_mv_obj, &ov, c4);
++    }
+     D3D12_RESOURCE_BARRIER b[2] = {0};
+     b[0].Type = b[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+     b[0].Transition.pResource = s_mv_tex; b[1].Transition.pResource = s_mv_viz;
+@@ -13209,7 +13366,7 @@ static void mv_pass(int rt)
+     cl->lpVtbl->RSSetViewports(cl, 1, &vp);
+     cl->lpVtbl->RSSetScissorRects(cl, 1, &sc);
+     interp_sig_restore();
+-    cl->lpVtbl->SetPipelineState(cl, s_mv_pso);
++    cl->lpVtbl->SetPipelineState(cl, s_mv_psos[obj]);
+     cl->lpVtbl->SetGraphicsRootDescriptorTable(cl, 1, gh);
+     cl->lpVtbl->SetGraphicsRootConstantBufferView(cl, 2,
+         s_mv_cb->lpVtbl->GetGPUVirtualAddress(s_mv_cb) + (FR->parity ? 256 : 0));
+@@ -13219,6 +13376,11 @@ static void mv_pass(int rt)
+         b[i].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+     }
+     cl->lpVtbl->ResourceBarrier(cl, 2, b);
++    if (obj) {   /* later draws into the scene target still have it bound */
++        ob.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++        ob.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
++        cl->lpVtbl->ResourceBarrier(cl, 1, &ob);
++    }
+     if (check && s_mv_hist) {
+         /* This frame's scene becomes the next one's history. */
+         off_rt_transition(rt, D3D12_RESOURCE_STATE_COPY_SOURCE);
+@@ -13237,12 +13399,131 @@ static void mv_pass(int rt)
+         hb.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+         cl->lpVtbl->ResourceBarrier(cl, 1, &hb);
+         s_mv_hist_ok = 1;
++        /* The check view's numbers, without screenshots: every 15th pass the
++         * view is read back and, six passes later, "[mv] check" gives the
++         * frame's compensated / uncompensated error over the main view
++         * (x 0-81%, y 24-75%: the area window shots were measured on) with
++         * the frame's object counts. */
++        static struct { ID3D12Resource* buf; int pending, age; u32 frame, nobj, matched, camera, none, reset, c[4];
++                        D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp; u32 w, h; } rb[4];
++        static u32 rb_next;
++        for (int i = 0; i < 4; i++) {
++            if (!rb[i].pending || ++rb[i].age < 6) continue;
++            rb[i].pending = 0;
++            u8* m = NULL; D3D12_RANGE rr = { 0, (SIZE_T)rb[i].fp.Footprint.RowPitch * rb[i].h };
++            if (FAILED(rb[i].buf->lpVtbl->Map(rb[i].buf, 0, &rr, (void**)&m)) || !m) continue;
++            double R = 0, G = 0;
++            const u32 x1 = rb[i].w * 81u / 100u, y0 = rb[i].h * 24u / 100u, y1 = rb[i].h * 75u / 100u;
++            for (u32 y = y0; y < y1; y += 2)
++                for (u32 x = 0; x < x1; x += 2) {
++                    const u8* px = m + (size_t)y * rb[i].fp.Footprint.RowPitch + (size_t)x * 4;
++                    R += px[0]; G += px[1];
++                }
++            D3D12_RANGE wr = { 0, 0 };
++            rb[i].buf->lpVtbl->Unmap(rb[i].buf, 0, &wr);
++            fprintf(stderr, "[mv] check frame %u: ratio %.2f (uncompensated %.1f) objects %u: %u matched, %u by the camera, "
++                    "%u without%s; draws %u writing, %u other pipeline, %u not writing, %u left out\n", rb[i].frame,
++                    R > 0 ? G / R : 0.0, R / ((double)(x1 / 2) * ((y1 - y0) / 2)),
++                    rb[i].nobj, rb[i].matched, rb[i].camera, rb[i].none, rb[i].reset ? ", reset" : "",
++                    rb[i].c[0], rb[i].c[1], rb[i].c[2], rb[i].c[3]);
++        }
++        if (s_mv_passes % 15 == 0 && !rb[rb_next & 3].pending) {
++            const int i = (int)(rb_next++ & 3);
++            D3D12_RESOURCE_DESC vd;
++            s_mv_viz->lpVtbl->GetDesc(s_mv_viz, &vd);
++            UINT64 total = 0;
++            s_d3d.device->lpVtbl->GetCopyableFootprints(s_d3d.device, &vd, 0, 1, 0, &rb[i].fp, NULL, NULL, &total);
++            if (rb[i].buf && (rb[i].w != (u32)vd.Width || rb[i].h != vd.Height)) { off_rt_defer_release(rb[i].buf); rb[i].buf = NULL; }
++            if (!rb[i].buf) {
++                D3D12_HEAP_PROPERTIES rh = {0}; rh.Type = D3D12_HEAP_TYPE_READBACK;
++                D3D12_RESOURCE_DESC bd = {0};
++                bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = total; bd.Height = 1; bd.DepthOrArraySize = 1;
++                bd.MipLevels = 1; bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
++                if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &rh, D3D12_HEAP_FLAG_NONE, &bd,
++                        D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&rb[i].buf)))
++                    rb[i].buf = NULL;
++                rb[i].w = (u32)vd.Width; rb[i].h = vd.Height;
++            }
++            if (rb[i].buf) {
++                D3D12_RESOURCE_BARRIER vb = {0};
++                vb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
++                vb.Transition.pResource = s_mv_viz; vb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++                vb.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++                vb.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
++                cl->lpVtbl->ResourceBarrier(cl, 1, &vb);
++                D3D12_TEXTURE_COPY_LOCATION d2 = {0}, s2 = {0};
++                d2.pResource = rb[i].buf; d2.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; d2.PlacedFootprint = rb[i].fp;
++                s2.pResource = s_mv_viz; s2.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++                cl->lpVtbl->CopyTextureRegion(cl, &d2, 0, 0, 0, &s2, NULL);
++                vb.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
++                vb.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++                cl->lpVtbl->ResourceBarrier(cl, 1, &vb);
++                rb[i].pending = 1; rb[i].age = 0; rb[i].frame = FR->mv.frame; rb[i].nobj = FR->mv.nobj;
++                rb[i].matched = FR->mv.matched; rb[i].camera = FR->mv.camera; rb[i].none = FR->mv.none;
++                rb[i].reset = (u32)FR->mv.reset; memcpy(rb[i].c, s_mvc, sizeof s_mvc);
++            }
++        }
+     }
++    { static u32 objp; if (obj && !objp++) fprintf(stderr, "[mv] first pass with per-object vectors (%u sample%s)%c",
++                                               s_mv_obj_n, s_mv_obj_n > 1 ? "s" : "", 10); }
+     if (!s_mv_passes++)
+         fprintf(stderr, "[mv] first pass: scene 0x%X host %ux%u (guest %ux%u), %d viewports, %s depth%s\n",
+                 FR->mv.rt_off, r->w, r->h, FR->mv.gw, FR->mv.gh, FR->mv.n, r->ms ? "multisampled" : "shared",
+                 FR->mv.reset ? ", reset" : "");
+ }
++/* ---- [mv] Per-object vectors (RSX_MV=2), replay side ----
++ * s_mv_obj: R16G16_FLOAT at the scene target's host size and sample count,
++ * bound after the scene's colour targets whenever the scene target is (so
++ * every draw into it uses the MV_CMASK_RT pipeline variant), cleared to the
++ * sentinel the first time in a frame. mv_pass reads it (sample 0) and uses
++ * the camera vector only where no draw wrote one. */
++static D3D12_CPU_DESCRIPTOR_HANDLE mv_obj_rtv(void)
++{
++    D3D12_CPU_DESCRIPTOR_HANDLE r;
++    s_mv_rtv->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_mv_rtv, &r);
++    r.ptr += 2u * s_d3d.device->lpVtbl->GetDescriptorHandleIncrementSize(s_d3d.device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
++    return r;
++}
++/* At the start of a frame's draws (replay): is there a scene to give vectors
++ * to, and is its target ready? */
++static void mv_obj_prepare(void)
++{
++    s_mv_obj_ready = 0; s_mv_obj_cleared = 0; s_mv_obj_slot = -1;
++    memset(s_mvc, 0, sizeof s_mvc);
++    if (mv_on() < 2 || !FR->mv.n || s_mv_failed) return;
++    const int slot = off_rt_find(FR->mv.rt_off);
++    if (slot < 0) return;
++    const OffRT* r = &s_d3d.off_rt[slot];
++    const u32 n = r->ms ? r->ms_n : 1u;
++    if (!s_mv_rtv && !mv_targets_ensure(r->w, r->h)) return;
++    if (!s_mv_obj || s_mv_obj_w != r->w || s_mv_obj_h != r->h || s_mv_obj_n != n) {
++        if (s_mv_obj) { off_rt_defer_release(s_mv_obj); s_mv_obj = NULL; }
++        D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
++        D3D12_RESOURCE_DESC td = {0};
++        td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; td.Width = r->w; td.Height = r->h;
++        td.DepthOrArraySize = 1; td.MipLevels = 1; td.SampleDesc.Count = n;
++        td.Format = DXGI_FORMAT_R16G16_FLOAT; td.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
++        D3D12_CLEAR_VALUE cv = {0}; cv.Format = DXGI_FORMAT_R16G16_FLOAT;
++        cv.Color[0] = cv.Color[1] = 30000.0f;
++        if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE, &td,
++                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, &IID_ID3D12Resource, (void**)&s_mv_obj))) {
++            s_mv_obj = NULL; s_mv_failed = 1;
++            fprintf(stderr, "[mv] per-object target %ux%u x%u failed\n", r->w, r->h, n);
++            return;
++        }
++        s_d3d.device->lpVtbl->CreateRenderTargetView(s_d3d.device, s_mv_obj, NULL, mv_obj_rtv());
++        s_mv_obj_w = r->w; s_mv_obj_h = r->h; s_mv_obj_n = n;
++        fprintf(stderr, "[mv] per-object target %ux%u, %u sample%s\n", r->w, r->h, n, n > 1 ? "s" : "");
++    }
++    s_mv_obj_ready = 1; s_mv_obj_slot = slot;
++}
++/* The pipeline variant bits for a draw (replay; also the pre-pass). */
++static u32 mv_draw_bits(const D3D12DrawRecord* dr)
++{
++    if (!s_mv_obj_ready || !dr->rt_off || dr->rt_off != FR->mv.rt_off || dr->zonly || dr->is_clear) return 0;
++    const int writes = !dr->blend && dr->zeta_off && !(dr->stencil & (1u << 31));
++    return MV_CMASK_RT | (writes ? MV_CMASK_WR : 0u);
++}
+ /* RSX_MV_VIEW: the boundary draw (record `d`) reads the vectors as colour in
+  * place of the scene, through its own SRV window. */
+ static void mv_substitute(u32 d)
+@@ -14874,7 +15155,15 @@ static int mv_on(void)
+ static float mv_view_px(void)
+ {
+     static float v = -1.0f;
+-    if (v < 0.0f) { const char* e = getenv("RSX_MV_VIEW"); v = e ? (float)atof(e + (*e == 'c')) : 0.0f; if (v < 0.0f) v = 0.0f; }
++    if (v < 0.0f) { const char* e = getenv("RSX_MV_VIEW"); v = e ? (float)atof(e + (*e == 'c' || *e == 'd')) : 0.0f; if (v < 0.0f) v = 0.0f; }
++    return v;
++}
++/* RSX_MV_VIEW=d<amp>: red/green = |draw's own vector - camera vector| in x/y
++ * times <amp>, blue where a draw wrote one (diagnostic). */
++static float mv_view_diff(void)
++{
++    static float v = -1.0f;
++    if (v < 0.0f) { const char* e = getenv("RSX_MV_VIEW"); v = (e && *e == 'd') ? (float)atof(e + 1) : 0.0f; if (v < 0.0f) v = 0.0f; }
+     return v;
+ }
+ static int mv_view_check(void)
+@@ -14920,24 +15209,139 @@ static void mv_mul4(const double* a, const double* b, double* out)
+         }
+ }
+ #define MV_OBJ_MAX 192
+-typedef struct { float C[16]; double VP[16]; u32 vp[4]; float vz[2]; u32 draws; int ok; } MvObj;
++/* Per object also (RSX_MV=2): T, three rows taking a guest pixel and its
++ * depth, (x, y, z, 1), to the homogeneous guest pixel the same point of the
++ * same object had in the frame before: T = P_prev * C_prev * inverse(C_now)
++ * * A_now, A taking a pixel to clip/w (the viewport undone) and P a clip
++ * position to a homogeneous pixel. The object of the frame before is the one
++ * with the nearest world matrix in the same viewport (within MV_GATE in
++ * position; cars are about 33 units apart and move about 0.5 a frame on
++ * High Speed Ring). One with none takes the viewport's camera motion, and
++ * one with no world matrix gets no T (the camera pass fills its pixels).
++ * Each draw of the object writes its vector into a second render target
++ * (mv_wrap_hlsl), and the camera pass fills only what none wrote. */
++#define MV_GATE 4.0
++typedef struct {
++    float C[16], M[12]; double VP[16]; u32 vp[4]; float vz[2]; u32 draws; int ok;
++    float T[12]; int t_ok;      /* RSX_MV=2 */
++    int m_idx; float m_dt, m_dr, m_dc;   /* the previous object it was matched to (RSX_MV_LOG=4), -1 none */
++} MvObj;
+ typedef struct { u32 vp[4]; float vz[2]; double VP[16]; u32 draws; } MvReg;
+-static MvObj s_mvo[MV_OBJ_MAX];
+-static u32 s_mvo_n, s_mvo_full;
++static MvObj s_mvo[MV_OBJ_MAX], s_mvo_prev[MV_OBJ_MAX];
++static u32 s_mvo_n, s_mvo_full, s_mvo_prev_n, s_mvo_prev_frame;
+ static int s_mvo_last = -1;
+ static MvReg s_mvr_prev[2];
+ static u32 s_mvr_prev_n, s_mvr_prev_frame;
+-static u32 s_mv_st[6];          /* frames with vectors, reset, no object, object tables full, viewports dropped, mismatched */
++static u32 s_mv_st[9];          /* frames with vectors, reset, no object, object tables full, viewports dropped, mismatched;
++                                 * objects matched, by camera, without T */
++static const float* s_mv_draw_t;   /* the T of the draw vp_record_cb is filling, or NULL */
++static void mv_object_t(MvObj* o)
++{
++    o->t_ok = 0;
++    if (!o->ok || s_mvo_prev_frame != s_scn.frame) return;
++    double Cn[16], Ci[16], Mobj[16], A[16], MA[16];
++    for (int i = 0; i < 16; i++) Cn[i] = o->C[i];
++    if (!mv_inv4(Cn, Ci)) return;
++    const MvObj* best = NULL; double bs = 1e30, bdt = 0, bdr = 0, bdc = 0;
++    o->m_idx = -1;
++    static int match = -1;   /* RSX_MV_OBJ_MATCH=0 (diagnostic): every object takes the camera's motion */
++    if (match < 0) { const char* e = getenv("RSX_MV_OBJ_MATCH"); match = !(e && e[0] == '0'); }
++    for (u32 i = 0; match && i < s_mvo_prev_n; i++) {
++        const MvObj* p = &s_mvo_prev[i];
++        if (!p->ok || memcmp(p->vp, o->vp, sizeof o->vp)) continue;
++        double dt = 0, dr = 0;
++        for (int r = 0; r < 3; r++)
++            for (int c = 0; c < 4; c++) {
++                const double d = fabs((double)o->M[r * 4 + c] - (double)p->M[r * 4 + c]);
++                if (c == 3) { if (d > dt) dt = d; } else if (d > dr) dr = d;
++            }
++        if (dt > MV_GATE || dr > 0.5) continue;
++        /* Equal world matrices are not one object. On High Speed Ring the
++         * track (about 140 draws) has the identity, give or take 1e-4 from
++         * frame to frame, and so do objects drawn in camera space, whose
++         * object-to-clip stays put: exactly the identity, they won the match
++         * and the track's vectors were thousands of pixels off in about half
++         * the frames. The object-to-clip distance (summed, |dC|) separates
++         * them: about 0.2-0.8 for the same object a frame later, hundreds
++         * for another one. RSX_MV_MATCH_DC=<w> (0.01) weighs it. */
++        static double wdc = -1.0;
++        if (wdc < 0.0) { const char* e = getenv("RSX_MV_MATCH_DC"); wdc = e ? atof(e) : 0.01; if (wdc < 0.0) wdc = 0.0; }
++        double dc = 0;
++        for (int i = 0; i < 16; i++) dc += fabs((double)o->C[i] - (double)p->C[i]);
++        const double sc = dt + dr + wdc * dc;
++        if (sc < bs) { bs = sc; best = p; bdt = dt; bdr = dr; bdc = dc; o->m_idx = (int)i; }
++    }
++    const u32* pvp = o->vp;
++    if (best) {
++        double Cp[16];
++        for (int i = 0; i < 16; i++) Cp[i] = best->C[i];
++        mv_mul4(Cp, Ci, Mobj);
++        o->m_dt = (float)bdt; o->m_dr = (float)bdr; o->m_dc = (float)bdc;
++        s_mv_st[6]++;
++        /* RSX_MV_LOG=2: an object whose world matrix did not change should
++         * move as the camera does; say when it does not (objects drawn with
++         * their own depth offset differ a little, legitimately). */
++        if (mv_log_on() >= 2 && bdt + bdr < 1e-4) {
++            const MvReg* r = NULL;
++            for (u32 q = 0; q < s_mvr_prev_n; q++) if (!memcmp(s_mvr_prev[q].vp, o->vp, sizeof o->vp)) r = &s_mvr_prev[q];
++            double vi[16], cam[16];
++            if (r && s_mvr_prev_frame == s_scn.frame && mv_inv4(o->VP, vi)) {
++                mv_mul4(r->VP, vi, cam);
++                double d = 0, m = 0;
++                for (int i = 0; i < 16; i++) { d = fmax(d, fabs(cam[i] - Mobj[i])); m = fmax(m, fabs(cam[i])); }
++                static u32 said;
++                if (d > 1e-3 * (m > 1 ? m : 1) && said < 40) {
++                    said++;
++                    fprintf(stderr, "[mv] frame %u: still object (vp %u,%u %ux%u, %u draws so far) moves unlike the camera "
++                            "by %.3g; matched to a previous object of %u draws, prev frame %u, prev objects %u\n",
++                            s_scn.frame + 1, o->vp[0], o->vp[1], o->vp[2], o->vp[3], o->draws, d, best->draws,
++                            s_mvo_prev_frame, s_mvo_prev_n);
++                }
++            }
++        }
++    } else {
++        const MvReg* r = NULL;
++        for (u32 q = 0; q < s_mvr_prev_n; q++) if (!memcmp(s_mvr_prev[q].vp, o->vp, sizeof o->vp)) r = &s_mvr_prev[q];
++        double vi[16];
++        if (!r || s_mvr_prev_frame != s_scn.frame || !mv_inv4(o->VP, vi)) { s_mv_st[8]++; return; }
++        mv_mul4(r->VP, vi, Mobj);
++        s_mv_st[7]++;
++    }
++    const double vx = o->vp[0], vy = o->vp[1], vw = o->vp[2] ? o->vp[2] : 1, vh = o->vp[3] ? o->vp[3] : 1;
++    memset(A, 0, sizeof A);
++    A[0] = 2.0 / vw;  A[3] = -2.0 * vx / vw - 1.0;
++    A[5] = -2.0 / vh; A[7] = 1.0 + 2.0 * vy / vh;
++    A[10] = 1.0 / o->vz[0]; A[11] = -(double)o->vz[1] / o->vz[0];
++    A[15] = 1.0;
++    mv_mul4(Mobj, A, MA);
++    const double px = pvp[0], py = pvp[1], pw = pvp[2], ph = pvp[3];
++    const double P[3][4] = { { pw / 2, 0, 0, px + pw / 2 }, { 0, -ph / 2, 0, py + ph / 2 }, { 0, 0, 0, 1 } };
++    for (int r = 0; r < 3; r++)
++        for (int c = 0; c < 4; c++) {
++            double t = 0;
++            for (int k = 0; k < 4; k++) t += P[r][k] * MA[k * 4 + c];
++            o->T[r * 4 + c] = (float)t;
++        }
++    o->t_ok = 1;
++}
+ static void scene_mv_note(const D3D12DrawRecord* dr, const rsx_state* st)
+ {
++    s_mv_draw_t = NULL;
+     if (!mv_on() || !dr->rt_off || dr->rt_off != s_scn.last_off || !dr->zeta_off || dr->is_clear) return;
+     const float* c = &st->vertex_constants[0][0];
+-    if (s_mvo_last >= 0 && !memcmp(s_mvo[s_mvo_last].C, c, sizeof s_mvo[0].C)) { s_mvo[s_mvo_last].draws++; return; }
+-    for (u32 i = 0; i < s_mvo_n; i++)
+-        if (!memcmp(s_mvo[i].C, c, sizeof s_mvo[0].C)) { s_mvo[i].draws++; s_mvo_last = (int)i; return; }
++    int idx = -1;
++    if (s_mvo_last >= 0 && !memcmp(s_mvo[s_mvo_last].C, c, sizeof s_mvo[0].C)) idx = s_mvo_last;
++    for (u32 i = 0; idx < 0 && i < s_mvo_n; i++)
++        if (!memcmp(s_mvo[i].C, c, sizeof s_mvo[0].C)) idx = (int)i;
++    if (idx >= 0) {
++        s_mvo[idx].draws++; s_mvo_last = idx;
++        if (s_mvo[idx].t_ok) s_mv_draw_t = s_mvo[idx].T;
++        return;
++    }
+     if (s_mvo_n == MV_OBJ_MAX) { s_mvo_full = 1; return; }
+     MvObj* o = &s_mvo[s_mvo_n];
+     memcpy(o->C, c, sizeof o->C);
++    memcpy(o->M, c + 16, sizeof o->M);
+     o->vp[0] = dr->vp_x; o->vp[1] = dr->vp_y; o->vp[2] = dr->vp_w; o->vp[3] = dr->vp_h;
+     const float vz0 = st->viewport_scale[2], vz1 = st->viewport_offset[2];
+     o->vz[0] = vz0 != 0.0f ? vz0 : 1.0f; o->vz[1] = vz0 != 0.0f ? vz1 : 0.0f;
+@@ -14948,6 +15352,9 @@ static void scene_mv_note(const D3D12DrawRecord* dr, const rsx_state* st)
+     M[12] = M[13] = M[14] = 0.0; M[15] = 1.0;
+     o->ok = mv_inv4(M, Mi);
+     if (o->ok) mv_mul4(Cd, Mi, o->VP);
++    o->t_ok = 0;
++    if (mv_on() >= 2) mv_object_t(o);
++    if (o->t_ok) s_mv_draw_t = o->T;
+     s_mvo_last = (int)s_mvo_n++;
+ }
+ /* At a judged frame's end (walker, FR still the frame's set). */
+@@ -15010,6 +15417,10 @@ static void scene_mv_frame(void)
+             }
+         }
+         if (consecutive && !any) s_mv_st[5]++;
++        { static u32 l6, l7, l8;
++          FR->mv.frame = s_scn.frame; FR->mv.nobj = s_mvo_n;
++          FR->mv.matched = s_mv_st[6] - l6; FR->mv.camera = s_mv_st[7] - l7; FR->mv.none = s_mv_st[8] - l8;
++          l6 = s_mv_st[6]; l7 = s_mv_st[7]; l8 = s_mv_st[8]; }
+         s_mv_st[0]++;
+         if (!consecutive) s_mv_st[1]++;
+     } else if (scene) s_mv_st[2]++;
+@@ -15034,6 +15445,31 @@ static void scene_mv_frame(void)
+         fprintf(stderr, "[mv] frames: %u with vectors, %u reset, %u scene frames with no object, %u object table full, "
+                 "%u viewports dropped, %u without a previous match\n",
+                 s_mv_st[0], s_mv_st[1], s_mv_st[2], s_mv_st[3], s_mv_st[4], s_mv_st[5]);
++    if (mv_log_on() && mv_on() >= 2 && s_scn.frame % 300 == 0)
++        fprintf(stderr, "[mv] objects: %u matched, %u by the camera, %u without a vector\n", s_mv_st[6], s_mv_st[7], s_mv_st[8]);
++    /* RSX_MV_LOG=4: every object of drawn area that matters, each frame:
++     * draws, what it matched (previous index and its draws), distances. */
++    if (mv_log_on() >= 4 && scene) {
++        for (u32 i = 0; i < s_mvo_n; i++) {
++            const MvObj* o = &s_mvo[i];
++            if (o->draws < 4) continue;
++            fprintf(stderr, "[mv] M frame %u obj %u: %u draws vp %u t %.2f %.2f %.2f -> prev %d (%u draws) dt %.4f dr %.4f dc %.3f T03 %.3f\n",
++                    s_scn.frame, i, o->draws, o->vp[0], o->M[3], o->M[7], o->M[11], o->m_idx,
++                    o->m_idx >= 0 ? s_mvo_prev[o->m_idx].draws : 0, o->m_dt, o->m_dr, o->m_dc, o->T[3]);
++        }
++    }
++    /* RSX_MV_LOG=3: the most-drawn object's T every frame. */
++    if (mv_log_on() >= 3 && scene && s_mvo_n) {
++        const MvObj* b = &s_mvo[0];
++        for (u32 i = 1; i < s_mvo_n; i++) if (s_mvo[i].draws > b->draws) b = &s_mvo[i];
++        fprintf(stderr, "[mv] T frame %u: %u draws vp %u,%u ok %d t_ok %d T %.4g %.4g %.4g %.5g | %.4g %.4g %.4g %.5g | %.4g %.4g %.4g %.5g"
++                " C3 %.5g prevframe %u\n", s_scn.frame, b->draws, b->vp[0], b->vp[2], b->ok, b->t_ok,
++                b->T[0], b->T[1], b->T[2], b->T[3], b->T[4], b->T[5], b->T[6], b->T[7], b->T[8], b->T[9], b->T[10], b->T[11],
++                b->C[15], s_mvo_prev_frame);
++    }
++    /* This frame's objects are the next one's previous objects. */
++    if (scene) { memcpy(s_mvo_prev, s_mvo, sizeof s_mvo[0] * s_mvo_n); s_mvo_prev_n = s_mvo_n; s_mvo_prev_frame = s_scn.frame; }
++    else s_mvo_prev_n = 0;
+     s_mvo_n = 0; s_mvo_last = -1; s_mvo_full = 0;
+ }
+ /* ---- [mv] walker end ---- */
+@@ -16222,7 +16658,7 @@ static void render_frame_body_inner(void)
+                                        dr_num_rts(dr),
+                                        dr->rt_off ? rsx_surface_dxgi(dr->rt_fmt)
+                                                   : DXGI_FORMAT_R8G8B8A8_UNORM,
+-                                       dr->fp_exp32, dr->zonly ? 0u : dr->cmask, dr->cull, dr_cube_mask(dr), dr->stencil,
++                                       dr->fp_exp32, (dr->zonly ? 0u : dr->cmask) | mv_draw_bits(dr), dr->cull, dr_cube_mask(dr), dr->stencil,
+                                        _un_mask, _un_dim, dr->samp_key);
+         if (perf_on()) s_perf_pso += perf_now() - _ps0;
+     }
+@@ -16443,6 +16879,7 @@ static void render_frame_body_inner(void)
+             if (hitch_on() && s_hitch_mark > 0) { s_hitch_mid_ms += (perf_now() - s_hitch_mark) * 1000.; s_hitch_mark = 0; }
+             int seen_small_vp = 0, captured = 0;
+             int mv_done = 0;                       /* [mv] this frame's vectors made */
++            mv_obj_prepare();                      /* [mv] RSX_MV=2 */
+             for (u32 d = 0; d < FR->draw_count && d < MAX_DRAWS; d++) {
+                 const D3D12DrawRecord* dr = &FR->draws[d];
+                 if (!dr->is_vp) continue;
+@@ -16522,7 +16959,7 @@ static void render_frame_body_inner(void)
+                     cur_rt = -1;
+                     for (int _m = 0; _m < 3; _m++) cur_m[_m] = -1;
+                   } else {
+-                    D3D12_CPU_DESCRIPTOR_HANDLE rh[4];
++                    D3D12_CPU_DESCRIPTOR_HANDLE rh[5];
+                     UINT nrt = 1;
+                     rh[0] = rtv_handle;
+                     /* The depth buffer is about to be cleared for the next
+@@ -16543,6 +16980,9 @@ static void render_frame_body_inner(void)
+                         off_rt_transition(wantm[_m], D3D12_RESOURCE_STATE_RENDER_TARGET);
+                         rh[nrt++] = off_rt_rtv(wantm[_m]);
+                     }
++                    /* [mv] The per-object vectors beside the scene's colour. */
++                    const int mv_bind = s_mv_obj_ready && want >= 0 && want == s_mv_obj_slot;
++                    if (mv_bind) rh[nrt++] = mv_obj_rtv();
+                     D3D12_RECT sc = {0, 0, (LONG)vp.Width, (LONG)vp.Height};
+                     vp_last_w = vp.Width; vp_last_h = vp.Height;
+                     /* The one depth buffer is window-sized. Binding it beside a
+@@ -16570,6 +17010,11 @@ static void render_frame_body_inner(void)
+                     }
+                     s_d3d.cmd_list->lpVtbl->OMSetRenderTargets(s_d3d.cmd_list, nrt, rh, FALSE,
+                                                                cur_has_dsv ? &dsv_handle : NULL);
++                    if (mv_bind && !s_mv_obj_cleared) {
++                        static const float none[4] = { 30000.0f, 30000.0f, 0.0f, 0.0f };
++                        s_d3d.cmd_list->lpVtbl->ClearRenderTargetView(s_d3d.cmd_list, mv_obj_rtv(), none, 0, NULL);
++                        s_mv_obj_cleared = 1;
++                    }
+                     s_d3d.cmd_list->lpVtbl->RSSetViewports(s_d3d.cmd_list, 1, &vp);
+                     s_d3d.cmd_list->lpVtbl->RSSetScissorRects(s_d3d.cmd_list, 1, &sc);
+                     if (cur_has_dsv && !same_depth) {
+@@ -16705,7 +17150,7 @@ static void render_frame_body_inner(void)
+                                                 dr_num_rts(dr), \
+                                                 dr->rt_off ? rsx_surface_dxgi(dr->rt_fmt) \
+                                                            : DXGI_FORMAT_R8G8B8A8_UNORM, \
+-                                                dr->fp_exp32, dr->zonly ? 0u : dr->cmask, dr->cull, \
++                                                dr->fp_exp32, (dr->zonly ? 0u : dr->cmask) | mv_draw_bits(dr), dr->cull, \
+                                                 /* bits 16-19: samples of the bound target */ \
+                                                 dr_cube_mask(dr) | \
+                                                     ((cur_rt >= 0 && s_d3d.off_rt[cur_rt].ms) \
+@@ -16873,6 +17318,9 @@ static void render_frame_body_inner(void)
+                  * draw out until it is ready. */
+                 if (sdbg) { skipdbg_n++; fprintf(stderr, "[skipdbg] d=%u dpso=%p fp_pending=%d vtx_mask=0x%X cur_rt=%d has_dsv=%d n=%u%c",
+                                                 d, (void*)dpso, (int)s_fp_pending, dr->vtx_mask, cur_rt, cur_has_dsv, dr->vertex_count, 10); }
++                /* [mv] what the frame's scene draws ran with (the check readback) */
++                { const u32 mb = mv_draw_bits(dr);
++                  if (mb) s_mvc[!dpso && s_fp_pending ? 3 : (!dpso || use_interp || use_vp) ? 1 : (mb & MV_CMASK_WR) ? 0 : 2]++; }
+                 if (!dpso && s_fp_pending) { FR->shader_pending = 1; interp_note_skip(1); if (!_ib) interp_budget_note_denied(); continue; }
+                 /* The fallback pipeline reads sixteen slots; a packed draw
+                  * would read garbage through it. */
