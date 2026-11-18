@@ -178,6 +178,11 @@ old). Reproduce: 2.11 Arcade car list with Right every 3 s for 10 minutes
 workload's passes, lane exits, joins and kicks in every stall dump. See
 progress-gt5.md.
 
+**2.11 race audio underruns (0.1.12).** The extended-range check runs only
+in the images named by `audio_extended_range_images` (2.11: the EQ
+`j0B07CA3D`): 482-511 underruns -> 1 per race, no NaN with scrubbing off
+(`-DGT5P_AUDIO_RANGE_ALL=ON` old). See audio.md.
+
 **Antivirus (release check).** Bitdefender `Gen:Variant.Lazy` scores the
 first 16 KB of `.text`: every PGO `gt5.exe` 0.1.4-0.1.10 was flagged because
 lld's call-graph sort and a cold `main()` moved `main.cpp` off the start.

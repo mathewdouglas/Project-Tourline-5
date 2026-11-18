@@ -14,6 +14,10 @@ versions follow [SemVer](https://semver.org/).
   on the Arcade car list (both test runs froze, after 8 minutes and 3 minutes
   of browsing); no freeze in 34 minutes with the fix.
   `SPURS_FLAG_KICK_KEEP=0` restores the old behaviour.
+- 2.11: crackling, cutting-out sound in races. A check that keeps 2.11's
+  audio EQ from producing invalid samples ran in all five audio stages instead
+  of only the EQ, doubling the sound work: 480-510 underruns and 40-50%
+  silent blocks in a race, now 1 underrun and none silent.
 - Freeze reports now record the last 256 job-system events for the car
   rendering work (`SPURS_KEVLOG=-1` turns this off).
 

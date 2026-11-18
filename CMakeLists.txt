@@ -372,6 +372,30 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
     if(NOT audio_range_err AND audio_range)
         set(audio_range_def "GT5P_AUDIO_EXTENDED_RANGE_BUILD=1")
     endif()
+    # audio_extended_range_images: only these images get the range check (2.11:
+    # the EQ, j0B07CA3D, which makes the extended values). In every image it
+    # doubled the audio job time and the chain underran (482-511 underruns,
+    # 39-53% silent in a race); EQ only: 1 underrun, no NaN with scrubbing off.
+    # -DGT5P_AUDIO_RANGE_ALL=ON: every audio_extended_zero_images entry, as 0.1.11.
+    option(GT5P_AUDIO_RANGE_ALL "Extended-range check in every audio math image" OFF)
+    string(JSON audio_range_images ERROR_VARIABLE audio_range_images_err GET "${GT5P_T}" audio_extended_range_images)
+    set(audio_range_list "")
+    if(NOT audio_range_images_err AND NOT GT5P_AUDIO_RANGE_ALL)
+        string(JSON range_count LENGTH "${audio_range_images}")
+        math(EXPR range_last "${range_count} - 1")
+        foreach(i RANGE ${range_last})
+            string(JSON image GET "${audio_range_images}" ${i})
+            list(APPEND audio_range_list "${image}")
+        endforeach()
+    endif()
+    # The range define for one image: the target's, narrowed to the list when one is given.
+    function(gt5p_audio_range_def image out)
+        set(def "${audio_range_def}")
+        if(audio_range_list AND NOT image IN_LIST audio_range_list)
+            set(def "GT5P_AUDIO_EXTENDED_RANGE_BUILD=0")
+        endif()
+        set(${out} "${def}" PARENT_SCOPE)
+    endfunction()
     if(NOT math_images_err)
         string(JSON math_count LENGTH "${math_images}")
         math(EXPR math_last "${math_count} - 1")
@@ -381,8 +405,9 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
             set_property(SOURCE "${GT5P_SPU_GENERATED_DIR}/${image}/spu_recomp.c"
                 APPEND PROPERTY COMPILE_OPTIONS
                 "/FI${CMAKE_SOURCE_DIR}/src/gt5p_spu_audio_math.h")
+            gt5p_audio_range_def("${image}" image_range_def)
             set_property(SOURCE "${GT5P_SPU_GENERATED_DIR}/${image}/spu_recomp.c"
-                APPEND PROPERTY COMPILE_DEFINITIONS "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>" "${audio_range_def}")
+                APPEND PROPERTY COMPILE_DEFINITIONS "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>" "${image_range_def}")
         endforeach()
     endif()
     set(audio_manifest "/* Target-specific identities; generated from targets.json. */\n")
@@ -449,8 +474,9 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
                 set_property(SOURCE "${native_source}"
                     APPEND PROPERTY COMPILE_OPTIONS
                     "/FI${CMAKE_SOURCE_DIR}/src/gt5p_spu_audio_math.h")
+                gt5p_audio_range_def("${image}" image_range_def)
                 set_property(SOURCE "${native_source}" APPEND PROPERTY COMPILE_DEFINITIONS
-                    "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>" "${audio_range_def}")
+                    "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>" "${image_range_def}")
             endif()
         endforeach()
         set_source_files_properties(src/gt5p_audio_native.cpp PROPERTIES
