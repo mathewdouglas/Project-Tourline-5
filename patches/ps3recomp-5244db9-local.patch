@@ -71511,3 +71511,110 @@ index 51d4836..6f618dd 100644
      if (rt_on() && (s_rt_thr || rt_start())) { rt_submit(); return; }
      render_frame_sync();
  }
+diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
+index 6f618dd..557e7cf 100644
+--- a/libs/video/rsx_d3d12_backend.c
++++ b/libs/video/rsx_d3d12_backend.c
+@@ -11106,11 +11106,13 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+  * class match the previous record of this frame binds that record's slot
+  * instead. RSX_VCB_REUSE=0: copy every time. */
+ static u32 s_vcb_copies, s_vcb_calls;   /* per 5 s, on the [present-thread] line */
++static void scene_consts_note(const D3D12DrawRecord* dr, const rsx_state* st);   /* [scene] RSX_SCENE_CONSTS */
+ static u32 vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+ {
+     s_vcb_calls++;
+     const rsx_state* st = s_d3d.current_rsx_state;
+     if (!s_d3d.vp_cb_mapped || !st || slot >= s_draw_cap) return slot;
++    if (dr) scene_consts_note(dr, st);
+     /* FP texcoord scale (b1): 1/size for UNnormalized textures (fmt bit
+      * 0x40 -- wave samples everything in texel space), 1.0 otherwise. */
+     if (s_d3d.vp_fpcb_mapped) {
+@@ -14341,8 +14343,69 @@ static int scene_log_level(void)
+     if (v < 0) { const char* e = getenv("RSX_SCENE_LOG"); v = e ? atoi(e) : 0; }
+     return v;
+ }
+-/* Anything that needs the boundary (only the log so far). */
+-static int scene_on(void) { return scene_log_level() > 0; }
++/* RSX_SCENE_CONSTS=<file>: one CSV row per draw into the scene target (the
++ * last judged one) with depth testing, for RSX_SCENE_CONSTS_FRAMES frames (2)
++ * from the RSX_SCENE_CONSTS_AT'th scene frame (300): record index, vertex
++ * count, programs, viewport, viewport transform and c[0..7]. For measuring
++ * how GT5's vertex programs form positions (DLSS step 2,
++ * scripts/diag/scene_consts.py). */
++static FILE* s_scn_cf;
++static u32 s_scn_scenes;          /* frames judged "scene" */
++static u32 s_scn_cf_from, s_scn_cf_n = 2;
++static int s_scn_cf_state;        /* 0 not asked, 1 waiting, 2 writing, 3 done */
++static int scene_consts_wanted(void)
++{
++    static int v = -1;
++    if (v < 0) {
++        const char* e = getenv("RSX_SCENE_CONSTS");
++        v = e && *e;
++        if (v) {
++            const char* a = getenv("RSX_SCENE_CONSTS_AT");
++            const char* f = getenv("RSX_SCENE_CONSTS_FRAMES");
++            s_scn_cf_from = a ? (u32)atoi(a) : 300u;
++            if (f) s_scn_cf_n = (u32)atoi(f);
++            s_scn_cf_state = 1;
++        }
++    }
++    return v;
++}
++static void scene_consts_note(const D3D12DrawRecord* dr, const rsx_state* st)
++{
++    if (s_scn_cf_state != 2 || !dr->rt_off || dr->rt_off != s_scn.last_off || !dr->zeta_off || dr->is_clear) return;
++    fprintf(s_scn_cf, "%u,%u,%u,%u,0x%X,%d,%u,%u,%u,%u,%u", s_scn.frame + 1, FR->draw_count, dr->vertex_count,
++            dr->topology, dr->fp_addr, dr->vs_idx, st->transform_program_start, dr->vp_x, dr->vp_y, dr->vp_w,
++            dr->vp_h);
++    for (int i = 0; i < 4; i++) fprintf(s_scn_cf, ",%.9g", (double)dr->vt[i]);
++    for (int c = 0; c < 8; c++)
++        for (int i = 0; i < 4; i++) fprintf(s_scn_cf, ",%.9g", (double)st->vertex_constants[c][i]);
++    fputc('\n', s_scn_cf);
++}
++/* At a judged frame's end: start or stop the RSX_SCENE_CONSTS window. */
++static void scene_consts_frame(void)
++{
++    if (s_scn.kind == SCN_SCENE) s_scn_scenes++;
++    if (s_scn_cf_state == 1 && s_scn.kind == SCN_SCENE && s_scn_scenes >= s_scn_cf_from) {
++        s_scn_cf = fopen(getenv("RSX_SCENE_CONSTS"), "w");
++        if (!s_scn_cf) {
++            fprintf(stderr, "[scene] cannot write %s\n", getenv("RSX_SCENE_CONSTS"));
++            s_scn_cf_state = 3; return;
++        }
++        fprintf(s_scn_cf, "frame,record,verts,topology,fp,vs_idx,vp_start,vp_x,vp_y,vp_w,vp_h,vt0,vt1,vt2,vt3");
++        for (int c = 0; c < 8; c++) for (int i = 0; i < 4; i++) fprintf(s_scn_cf, ",c%d_%d", c, i);
++        fputc('\n', s_scn_cf);
++        s_scn_cf_state = 2; s_scn_cf_from = s_scn.frame;
++        fprintf(stderr, "[scene] writing vertex constants of scene draws to %s\n", getenv("RSX_SCENE_CONSTS"));
++    } else if (s_scn_cf_state == 2 && s_scn.frame - s_scn_cf_from >= s_scn_cf_n) {
++        fclose(s_scn_cf); s_scn_cf = NULL; s_scn_cf_state = 3;
++        fprintf(stderr, "[scene] vertex constants written\n");
++    }
++}
++/* Anything that needs the boundary. */
++static int scene_on(void)
++{
++    const int consts = scene_consts_wanted();   /* read the switch even when the log is on */
++    return scene_log_level() > 0 || consts;
++}
+ /* The units a record's fragment program samples: bindings left over from
+  * earlier draws stay set and must not count (the first live run judged a
+  * menu frame "held" from a stale unit 10). */
+@@ -14410,7 +14473,7 @@ static void scene_frame_scan(void)
+     }
+     const int lv = scene_log_level();
+     const int changed = s_scn.kind != s_scn.last_kind || s_scn.why != s_scn.last_why;
+-    if (changed || (lv >= 2 && s_scn.frame - s_scn.last_logged >= 120)) {
++    if (lv > 0 && (changed || (lv >= 2 && s_scn.frame - s_scn.last_logged >= 120))) {
+         static unsigned lines;
+         if (lines < 5000) {
+             lines++;
+@@ -14440,6 +14503,7 @@ static void scene_frame_scan(void)
+         }
+     }
+     s_scn.last_kind = s_scn.kind; s_scn.last_why = s_scn.why;
++    scene_consts_frame();
+ }
+ /* ---- [scene] end ---- */
+ 

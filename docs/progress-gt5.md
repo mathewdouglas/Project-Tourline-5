@@ -4,6 +4,36 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.2.0 DLSS step 2 groundwork: how scene draws form positions (2026-11-18)
+
+`RSX_SCENE_CONSTS=<file>` (runtime, off by default; `RSX_SCENE_CONSTS_AT`
+scene frames to wait, default 300, `RSX_SCENE_CONSTS_FRAMES`, default 2)
+writes one CSV row per depth-tested draw into the scene target with its
+viewport and `c[0..7]`; `scripts/diag/scene_consts.py` reads it. Three
+consecutive 01.04 High Speed Ring race frames at 720p (about 580 scene draws
+and 48 distinct `c[0..3]` a frame):
+
+- **One view-projection per viewport.** Reading `c[0..3]` as the rows of
+  object-to-clip C and `c[4..6]` as the rows of object-to-world M, `C *
+  inverse(M)` agrees to 1e-4 for 554-557 of 570-576 draws. Read as columns:
+  292. So the other port's measurement holds on our build.
+- **Two viewports draw into the scene:** the main one (1280x720) and the rear
+  mirror (416,42 448x86), each with its own camera. Motion vectors must be
+  made per viewport.
+- **Exceptions:** 8-11 objects a frame have a singular `c[4..6]` (not world
+  geometry: sky, screen-space work), and a few 6-vertex quads and two
+  programs (`0xA6C8281` in the mirror, `0xA262581`, 6 draws/264 vertices)
+  have another view-projection: candidates for billboards or a camera-attached
+  object. They need the camera-only fallback or their own handling.
+- **World space, not camera-relative:** the track's world matrix is the same
+  every frame (identity); other cars' world matrices move about 0.5 units a
+  frame along the straight. Every object of a frame has one in the frame
+  before within 4 units, so matching by world matrix is workable; cars are
+  about 33 units apart, far more than they move in a frame.
+
+The scene-on check read only `RSX_SCENE_LOG` when it was set (short-circuit),
+so the first two capture runs wrote nothing; fixed before this run.
+
 ## 0.2.0 DLSS step 1: the scene/HUD boundary (2026-11-18)
 
 Plan: [plan-dlss.md](plan-dlss.md). `RSX_SCENE_LOG=1` (runtime,

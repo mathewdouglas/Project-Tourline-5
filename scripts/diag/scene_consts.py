@@ -20,7 +20,44 @@ import argparse
 import csv
 from collections import defaultdict
 
-import numpy as np
+
+
+# 4x4 matrices as lists of rows; no numpy in the repo's environment.
+def mat_mul(a, b):
+    return [[sum(a[i][k] * b[k][j] for k in range(4)) for j in range(4)] for i in range(4)]
+
+
+def transpose(a):
+    return [list(r) for r in zip(*a)]
+
+
+def det_inv(m):
+    """Determinant and inverse (Gauss-Jordan with partial pivoting)."""
+    a = [list(map(float, r)) + [1.0 if i == j else 0.0 for j in range(4)] for i, r in enumerate(m)]
+    det = 1.0
+    for c in range(4):
+        p = max(range(c, 4), key=lambda r: abs(a[r][c]))
+        if abs(a[p][c]) < 1e-12:
+            return 0.0, None
+        if p != c:
+            a[c], a[p] = a[p], a[c]
+            det = -det
+        det *= a[c][c]
+        pv = a[c][c]
+        a[c] = [v / pv for v in a[c]]
+        for r in range(4):
+            if r != c and a[r][c]:
+                f = a[r][c]
+                a[r] = [x - f * y for x, y in zip(a[r], a[c])]
+    return det, [r[4:] for r in a]
+
+
+def maxabs(m):
+    return max(abs(v) for r in m for v in r)
+
+
+def diff(a, b):
+    return [[x - y for x, y in zip(ra, rb)] for ra, rb in zip(a, b)]
 
 
 def load(path):
@@ -28,7 +65,7 @@ def load(path):
         rows = list(csv.DictReader(f))
     out = []
     for r in rows:
-        c = np.array([[float(r[f'c{i}_{j}']) for j in range(4)] for i in range(8)])
+        c = [[float(r[f'c{i}_{j}']) for j in range(4)] for i in range(8)]
         out.append(dict(frame=int(r['frame']), record=int(r['record']), verts=int(r['verts']),
                         fp=r['fp'], vs=int(r['vs_idx']), vps=int(r['vp_start']),
                         vp=(int(r['vp_x']), int(r['vp_y']), int(r['vp_w']), int(r['vp_h'])),
@@ -37,7 +74,7 @@ def load(path):
 
 
 def rel(a, b):
-    return float(np.max(np.abs(a - b)) / max(np.max(np.abs(b)), 1e-12))
+    return maxabs(diff(a, b)) / max(maxabs(b), 1e-12)
 
 
 def main():
@@ -55,7 +92,7 @@ def main():
         draws = frames[fno]
         objs = {}
         for r in draws:
-            key = r['c'][0:4].tobytes()
+            key = tuple(map(tuple, r['c'][0:4]))
             o = objs.setdefault(key, dict(C=r['c'][0:4], M=r['c'][4:7], vp=r['vp'], draws=0, verts=0,
                                           first=r['record'], fps=set(), vss=set()))
             o['draws'] += 1; o['verts'] += r['verts']; o['fps'].add(r['fp']); o['vss'].add(r['vps'])
@@ -65,12 +102,15 @@ def main():
             per_vp = defaultdict(list)
             bad = 0
             for o in objs.values():
-                C = o['C'] if mode == 'rows' else o['C'].T
-                M4 = np.vstack([o['M'], [0, 0, 0, 1]]) if mode == 'rows' else np.vstack([o['M'], [0, 0, 0, 1]]).T
-                if abs(np.linalg.det(M4)) < 1e-12:
+                M4 = o['M'] + [[0.0, 0.0, 0.0, 1.0]]
+                C = o['C'] if mode == 'rows' else transpose(o['C'])
+                if mode != 'rows':
+                    M4 = transpose(M4)
+                d, inv = det_inv(M4)
+                if inv is None or abs(d) < 1e-12:
                     bad += 1
                     continue
-                per_vp[o['vp']].append((o['draws'], C @ np.linalg.inv(M4), o))
+                per_vp[o['vp']].append((o['draws'], mat_mul(C, inv), o))
             worst = []
             agree = total = 0
             for vp, lst in per_vp.items():
@@ -92,12 +132,12 @@ def main():
                       f'fp {sorted(o["fps"])[:3]}, vp_start {sorted(o["vss"])[:4]}')
         if a.rows:
             for o in sorted(objs.values(), key=lambda o: o['first']):
-                print('   ', o['first'], o['draws'], o['vp'], np.round(o['M'][:, 3], 3))
+                print('   ', o['first'], o['draws'], o['vp'], [round(r[3], 3) for r in o['M']])
         if prev_objs is not None:
             same = near = none = 0
             pm = [p['M'] for p in prev_objs.values()]
             for o in objs.values():
-                d = min((np.max(np.abs(o['M'] - m)) for m in pm), default=1e9)
+                d = min((maxabs(diff(o['M'], m)) for m in pm), default=1e9)
                 if d < 1e-6:
                     same += 1
                 elif d < 4.0:
