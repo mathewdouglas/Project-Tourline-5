@@ -4,6 +4,36 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.2.0 DLSS step 1: the scene/HUD boundary (2026-11-18)
+
+Plan: [plan-dlss.md](plan-dlss.md). `RSX_SCENE_LOG=1` (runtime,
+`rsx_d3d12_backend.c`, `scene_frame_scan`, off by default) judges every
+rendered frame: the first draw into a display buffer, with depth test and
+blending off, that samples (among the units its fragment program reads) a
+target drawn with depth testing earlier in the frame. `=2` adds the frame's
+depth-tested targets and the boundary's units every 120 frames. Nothing
+drawn changes.
+
+Measured on 01.04 (0.1.11 release objects relinked with the change, High
+Speed Ring Arcade race, `gt5boot.ps1 -Route race`):
+
+| | 720p | 1080p |
+| --- | --- | --- |
+| Scene target | `0x1980000`, clip 1280x720, format `0x5148` (sampled as 2560x1440: 4 samples) | `0x1980000`, clip 1280x1080, format `0x3148` (sampled as 2560x1080: 2 samples across) |
+| Scene zeta | `0x2880000` | `0x2420000` |
+| Boundary | fp `0x581D681`, about 110 records before the frame ends (the HUD) | fp `0x581E641`, likewise |
+| Boundary units | 0 the scene, 1-3 the bloom chain (512x256, 256x128, 128x64) | the same |
+
+So GT5's boundary draw is its own resolve: it averages the scene's samples,
+adds bloom and, at 1080p, widens 1280 to 1920. Every race frame is judged
+`scene`; the grid preview too. Menus and the car list are `bypass` (first
+display draw blended, or sampling no depth-tested target); a still 3D picture
+behind a menu is `held`. Other depth-tested targets in a race frame: six
+256x256 and one 256x128 (reflection/env passes) and the 512x128 mirror.
+The first run judged a menu frame `held` from a unit its program never reads;
+only units in `rsx_fp_texture_mask` count now. Not yet checked: 2.11,
+cockpit view, replays, Photo Mode, 21:9.
+
 ## 0.1.12: the 2.11 picture freeze is a lost workload-flag kick (2026-11-18)
 
 Issues #28, #36, #38, #39, #47 (and probably #46): 2.11's picture stops while

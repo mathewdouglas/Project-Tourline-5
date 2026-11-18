@@ -1,0 +1,162 @@
+diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
+index 51d4836..6f618dd 100644
+--- a/libs/video/rsx_d3d12_backend.c
++++ b/libs/video/rsx_d3d12_backend.c
+@@ -14296,9 +14296,157 @@ static void gpu_time_end(void)
+     dt_frame_end();
+     s_gt_pending = 1;
+ }
++/* ---- [scene] The 3D scene, the HUD and the line between them (DLSS step 1) ----
++ * A temporal upscaler works on the finished 3D picture before any HUD is
++ * drawn over it, with that picture's depth. GT5 is expected to draw its 3D
++ * view into a target of its own and then copy it into the display buffer,
++ * where the HUD follows. That copy is the line (docs/plan-dlss.md):
++ *
++ *   the first draw of a frame into a display buffer, with depth test and
++ *   blending off, that samples a target drawn with depth testing earlier in
++ *   the same frame. That target is the scene; its zeta is the scene's depth.
++ *
++ * Judged once per rendered frame, on the walker thread, before submission.
++ *   scene    the line was found;
++ *   held     the first display draw samples the last scene's target, which
++ *            was not drawn again this frame (a still picture behind a menu);
++ *   bypass   anything else (menus, movies, a frame drawing HUD first), with
++ *            the reason.
++ * Nothing here changes what is drawn. Off unless asked for:
++ *   RSX_SCENE_LOG=1  a "[scene]" line whenever the judgement changes
++ *   RSX_SCENE_LOG=2  ...and one every 120 frames with the frame's depth-tested
++ *                    targets, for finding why a frame is judged as it is.
++ * The scan reads every record of the frame (about 3 MB in a race), so it
++ * runs only while a consumer asks for it. */
++enum { SCN_NONE = 0, SCN_SCENE, SCN_HELD, SCN_BYPASS };
++enum { SCN_R_OK = 0, SCN_R_NO_DISPLAY, SCN_R_BLENDED, SCN_R_DEPTH, SCN_R_NO_SOURCE };
++static const char* const s_scn_kind[] = { "none", "scene", "held", "bypass" };
++static const char* const s_scn_why[] = { "", "no display draw", "first display draw is blended",
++                                         "first display draw tests depth",
++                                         "first display draw samples no depth-tested target" };
++typedef struct { u32 off, zeta, draws, w, h, fmt; } ScnRt;
++static struct {
++    u32 frame;                    /* frames judged */
++    int kind, why;                /* this frame's judgement */
++    u32 off, zeta, w, h, fmt;     /* the scene target, its zeta, its clip and format */
++    u32 disp_i, disp_n, unit;     /* the boundary draw's record index, records, and its unit */
++    u32 fp;                       /* the boundary draw's fragment program */
++    u32 last_off;                 /* the scene target of the last "scene" frame */
++    int last_kind, last_why;
++    u32 last_logged;
++} s_scn;
++static int scene_log_level(void)
++{
++    static int v = -1;
++    if (v < 0) { const char* e = getenv("RSX_SCENE_LOG"); v = e ? atoi(e) : 0; }
++    return v;
++}
++/* Anything that needs the boundary (only the log so far). */
++static int scene_on(void) { return scene_log_level() > 0; }
++/* The units a record's fragment program samples: bindings left over from
++ * earlier draws stay set and must not count (the first live run judged a
++ * menu frame "held" from a stale unit 10). */
++static u32 scene_fp_units(const D3D12DrawRecord* dr)
++{
++    extern uint8_t* vm_base;
++    extern u32 cellGcmResolveLocated(int local, u32 offset);
++    if (!dr->fp_addr || !vm_base) return 0xFFFFu;
++    static struct { u32 fp, mask; } fpm[256];
++    const u32 k = (dr->fp_addr >> 4) & 255u;
++    if (fpm[k].fp != dr->fp_addr) {
++        const u32 off = cellGcmResolveLocated((dr->fp_addr & 0x3u) == 1, dr->fp_addr & ~0x3u);
++        fpm[k].mask = off == 0xFFFFFFFFu ? 0xFFFFu : rsx_fp_texture_mask(vm_base + off, FP_UCODE_MAX);
++        fpm[k].fp = dr->fp_addr;
++    }
++    return fpm[k].mask;
++}
++static void scene_frame_scan(void)
++{
++    if (!scene_on()) return;
++    ScnRt rts[48]; u32 nrt = 0;
++    const u32 n = FR->draw_count < MAX_DRAWS ? FR->draw_count : MAX_DRAWS;
++    s_scn.frame++;
++    s_scn.kind = SCN_BYPASS; s_scn.why = SCN_R_NO_DISPLAY;
++    s_scn.disp_n = n; s_scn.disp_i = ~0u; s_scn.unit = ~0u; s_scn.fp = 0;
++    for (u32 i = 0; i < n; i++) {
++        const D3D12DrawRecord* dr = &FR->draws[i];
++        if (dr->is_clear || dr->readback || dr->zonly) continue;
++        if (dr->rt_off) {
++            if (!dr->zeta_off) continue;
++            u32 k = 0;
++            while (k < nrt && rts[k].off != dr->rt_off) k++;
++            if (k == nrt) {
++                if (nrt == sizeof rts / sizeof rts[0]) continue;
++                memset(&rts[nrt], 0, sizeof rts[0]);
++                rts[nrt++].off = dr->rt_off;
++            }
++            rts[k].draws++; rts[k].zeta = dr->zeta_off;
++            rts[k].w = dr->rt_w; rts[k].h = dr->rt_h; rts[k].fmt = dr->rt_fmt;
++            continue;
++        }
++        /* The frame's first draw into a display buffer. */
++        s_scn.disp_i = i; s_scn.fp = dr->fp_addr;
++        if (dr->blend) { s_scn.why = SCN_R_BLENDED; break; }
++        if (dr->zeta_off) { s_scn.why = SCN_R_DEPTH; break; }
++        int best = -1; u32 best_u = ~0u, held_u = ~0u;
++        const u32 used = scene_fp_units(dr);
++        for (u32 u = 0; u < RSX_TEX_UNITS; u++) {
++            if (!(used & (1u << u)) || !dr->tex[u].set || !dr->tex[u].local) continue;
++            for (u32 k = 0; k < nrt; k++)
++                if (rts[k].off == dr->tex[u].raw && (best < 0 || rts[k].draws > rts[best].draws)) {
++                    best = (int)k; best_u = u;
++                }
++            if (s_scn.last_off && dr->tex[u].raw == s_scn.last_off && held_u == ~0u) held_u = u;
++        }
++        if (best >= 0) {
++            s_scn.kind = SCN_SCENE; s_scn.why = SCN_R_OK; s_scn.unit = best_u;
++            s_scn.off = rts[best].off; s_scn.zeta = rts[best].zeta;
++            s_scn.w = rts[best].w; s_scn.h = rts[best].h; s_scn.fmt = rts[best].fmt;
++            s_scn.last_off = s_scn.off;
++        } else if (held_u != ~0u) {
++            s_scn.kind = SCN_HELD; s_scn.why = SCN_R_OK; s_scn.unit = held_u;
++        } else s_scn.why = SCN_R_NO_SOURCE;
++        break;
++    }
++    const int lv = scene_log_level();
++    const int changed = s_scn.kind != s_scn.last_kind || s_scn.why != s_scn.last_why;
++    if (changed || (lv >= 2 && s_scn.frame - s_scn.last_logged >= 120)) {
++        static unsigned lines;
++        if (lines < 5000) {
++            lines++;
++            s_scn.last_logged = s_scn.frame;
++            if (s_scn.kind == SCN_SCENE)
++                fprintf(stderr, "[scene] frame %u: scene 0x%X %ux%u fmt 0x%X zeta 0x%X, line at record %u of %u "
++                        "(unit %u, fp 0x%X)\n", s_scn.frame, s_scn.off, s_scn.w, s_scn.h, s_scn.fmt, s_scn.zeta,
++                        s_scn.disp_i, s_scn.disp_n, s_scn.unit, s_scn.fp);
++            else
++                fprintf(stderr, "[scene] frame %u: %s%s%s (first display record %d of %u, fp 0x%X)\n",
++                        s_scn.frame, s_scn_kind[s_scn.kind], s_scn.why ? ": " : "", s_scn_why[s_scn.why],
++                        s_scn.disp_i == ~0u ? -1 : (int)s_scn.disp_i, s_scn.disp_n, s_scn.fp);
++            if (lv >= 2) {
++                for (u32 k = 0; k < nrt; k++)
++                    fprintf(stderr, "[scene]   depth-tested target 0x%X %ux%u fmt 0x%X zeta 0x%X: %u draws\n",
++                            rts[k].off, rts[k].w, rts[k].h, rts[k].fmt, rts[k].zeta, rts[k].draws);
++                if (s_scn.disp_i != ~0u) {
++                    const D3D12DrawRecord* dr = &FR->draws[s_scn.disp_i];
++                    const u32 used = scene_fp_units(dr);
++                    for (u32 u = 0; u < RSX_TEX_UNITS; u++)
++                        if (dr->tex[u].set && (used & (1u << u)))
++                            fprintf(stderr, "[scene]   boundary unit %u: raw 0x%X %ux%u fmt 0x%X %s\n", u,
++                                    dr->tex[u].raw, dr->tex[u].w, dr->tex[u].h, dr->tex[u].fmt,
++                                    dr->tex[u].local ? "local" : "main");
++                }
++            }
++        }
++    }
++    s_scn.last_kind = s_scn.kind; s_scn.last_why = s_scn.why;
++}
++/* ---- [scene] end ---- */
++
+ static void render_frame(void)
+ {
+     if (s_device_lost) return;
++    scene_frame_scan();
+     if (rt_on() && (s_rt_thr || rt_start())) { rt_submit(); return; }
+     render_frame_sync();
+ }

@@ -1,7 +1,10 @@
 # Plan: NVIDIA DLSS / DLAA (0.2.0), frame generation later
 
-Status: plan only (2026-11-18). Nothing here is built or measured yet. Every
-statement about GT5's rendering below is a hypothesis until a step that
+Status (2026-11-18): step 1 is done for 01.04 races at 720p and 1080p
+(`RSX_SCENE_LOG`, see "0.2.0 DLSS step 1" in [progress-gt5.md](progress-gt5.md)).
+GT5's boundary is its own resolve draw: unit 0 is the multisampled scene
+(4 samples at 720p, 2 across at 1080p), units 1-3 the bloom chain. Every
+other statement about GT5's rendering below is a hypothesis until a step that
 measures it says otherwise.
 
 ## Goal
