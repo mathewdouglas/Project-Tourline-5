@@ -170,6 +170,14 @@ instead); `RSX_IO_UNMAPPED=0` off, `=2` check mode. None at High Speed Ring.
 See progress-gt5.md, 2026-11-12.
 
 
+**Steering wheels (in progress, `feat/wheel`).** GT5 drives Logitech wheels
+with its own `cellUsbd` driver; the runtime now shows it an emulated G27
+whatever wheel the PC has (DirectInput, force feedback), plus `cellPadLdd*`.
+Adapted from gt5-recomp (MIT, `docs/licenses/`). F1 WHEEL and `[wheel]`;
+`PS3_WHEEL=off` turns it off. No game addresses. Built and tested offline only
+(`scripts/test/wheel_g27.py`); the G29 live check is owed. See
+[docs/wheels.md](docs/wheels.md).
+
 **Game sound fixed (2026-11-14).** Menus and races were silent: the DSP
 image `j9804ABA8` produced NaN PCM from two SPU arithmetic differences (0 x
 extended-range is 0; single precision truncates). Audio images force-include

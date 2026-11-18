@@ -33,8 +33,10 @@ BRAND_ICONS = {
 }
 # The ps3recomp local-changes patch (patches/*.patch) is our own source diff and
 # passed 1 MB in Phase 60. Text diffs there get a larger limit; anything else
-# keeps MAX_BYTES.
-MAX_PATCH_BYTES = 4_000_000
+# keeps MAX_BYTES. Raised from 4 MB to 6 MB (2026-11-18): the main patch reached
+# 3.87 MB on main and the steering wheel emulation (feat/wheel, 137 KB) took it
+# past 4 MB. Still text only: the binary rule below applies unchanged.
+MAX_PATCH_BYTES = 6_000_000
 
 # Lower-cased. Extensions of game data, licences, keys, and analysis databases.
 EXTENSIONS = {

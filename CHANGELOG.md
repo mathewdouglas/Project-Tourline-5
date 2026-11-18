@@ -3,6 +3,18 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Steering wheels with force feedback (not yet tried with a wheel).** GT5
+  has its own Logitech wheel driver; the port now shows it a Logitech G27
+  whatever wheel is plugged in (Logitech, Thrustmaster, Fanatec and others
+  through DirectInput), with the game's own force feedback. F1 > WHEEL sets
+  the rotation, force strength and direction, centring and damping, a
+  minimum force for gear and belt wheels, and pausing forces while F1 is open
+  or the game is in the background. `PS3_WHEEL=off` turns it off. Adapted
+  from gt5-recomp (MIT). See docs/wheels.md.
+
 ## [0.1.10] - 2026-11-17
 
 A game copy check, a startup status window, and fixes for a 2.11 main-menu

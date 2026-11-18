@@ -70951,3 +70951,3042 @@ index 4f298408..b9d0b4f9 100644
            /* Dump the words at EVERY plausible object register, not just r29.
             * Which register holds the object is per-title -- r29 was right for
             * the title this was written for and is a spin COUNTER in Guitar
+diff --git a/libs/hardware/cellUsbd.c b/libs/hardware/cellUsbd.c
+index c359680f..6876693d 100644
+--- a/libs/hardware/cellUsbd.c
++++ b/libs/hardware/cellUsbd.c
+@@ -1,106 +1,782 @@
+ /*
+  * ps3recomp - cellUsbd HLE implementation
+  *
+- * Stub. Init/term work, no USB devices are enumerated.
+- * Games that require specific USB peripherals will need
+- * proper device emulation.
++ * See cellUsbd.h. With no steering wheel on the PC (or PS3_WHEEL=off) this is
++ * what it always was: Init/End succeed and the bus stays empty.
++ *
++ * With a wheel, one emulated Logitech G27 (dev_id 1) sits on the bus. A worker
++ * thread plays libusbd's part: once a game driver is registered for 046D:C29B
++ * it calls the driver's probe and attach, answers its control transfers
++ * (standard requests; HID SET_REPORT goes to the force-feedback decoder),
++ * takes its interrupt OUT writes (force feedback), and completes its interrupt
++ * IN reads with the wheel's current report -- when the report changes, at most
++ * every 2 ms (the G27's bInterval), and every 8 ms regardless. Unplugging the
++ * PC wheel detaches the G27 and plugging it back attaches it again.
++ *
++ * Every callback into the game runs on the worker, never inside the call that
++ * queued the transfer: GT5's attach queues SET_CONFIGURATION and expects to
++ * finish attaching before the completion arrives, as on the console.
++ *
++ * GT5's callbacks only post an event to its USB thread's queue (40 events),
++ * and that thread queues the next read once it has handled a report. On a
++ * small PC at full load the thread falls behind, the queue fills with
++ * force-feedback completions, and a report's event can be dropped: the game
++ * then never asks for another and keeps the last one, the car steering and
++ * accelerating (or braking) on its own. So only one report at a time waits
++ * to be taken, and one not taken in 1.5 s goes again (a player's laptop at
++ * 20 fps, 15 Nov 2026; seen here with PS3_WHEEL=virtual, jitter=1 on four
++ * E-cores). PS3_WHEEL_TRACE=1 logs counts every 10 s.
++ *
++ * GT5 (BCES00569) walk-through, for the next person: probe 0xC21588 checks the
++ * device descriptor's VID:PID; attach 0xC21878 scans config/interface/endpoint
++ * descriptors, opens the control and both interrupt pipes, registers a custom
++ * pad (cellPadLddRegisterController) and sends SET_CONFIGURATION; its USB
++ * event thread (0xC20DC0) then starts the IN reads, decodes each report
++ * (0xC1EA58) into the custom pad and the game's wheel state, and sends force
++ * feedback through 0xC208E0 / 0xC20890. Those addresses are the EU build's;
++ * GT5 01.04 (BCUS98114) checks 046D:C298-C29B in func_00C5E154.
++ *
++ * Adapted from gt5-recomp (https://github.com/MormonFTP-hub/gt5-recomp),
++ * MIT License, Copyright (c) 2026 MormonFTP-hub.
++ * Here the descriptor page comes from the runtime's scratch allocator instead
++ * of a fixed page of the HLE inject window.
+  */
+ 
+ #include "cellUsbd.h"
++#include "wheel.h"
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+-#include "../../runtime/ppu/ppu_memory.h"   /* GUEST_PTR, vm_read/vm_write: guest EA -> host */
++#include "../../runtime/ppu/ppu_memory.h"   /* vm_read*, vm_write*, vm_memcpy_*: guest EA -> host */
++
++#ifdef _WIN32
++  #ifndef WIN32_LEAN_AND_MEAN
++    #define WIN32_LEAN_AND_MEAN
++  #endif
++  #include <windows.h>
++  typedef SRWLOCK usbd_lock_t;
++  #define USBD_LOCK_INIT SRWLOCK_INIT
++  static void usbd_lock(usbd_lock_t* l)   { AcquireSRWLockExclusive(l); }
++  static void usbd_unlock(usbd_lock_t* l) { ReleaseSRWLockExclusive(l); }
++  static unsigned long long usbd_now_us(void)
++  {
++      static LARGE_INTEGER f;
++      LARGE_INTEGER c;
++      if (!f.QuadPart) QueryPerformanceFrequency(&f);
++      QueryPerformanceCounter(&c);
++      return (unsigned long long)(c.QuadPart / f.QuadPart) * 1000000ull
++           + (unsigned long long)(c.QuadPart % f.QuadPart) * 1000000ull / (unsigned long long)f.QuadPart;
++  }
++  static void usbd_sleep_ms(unsigned ms) { Sleep(ms); }
++#else
++  #include <pthread.h>
++  #include <time.h>
++  #include <unistd.h>
++  typedef pthread_mutex_t usbd_lock_t;
++  #define USBD_LOCK_INIT PTHREAD_MUTEX_INITIALIZER
++  static void usbd_lock(usbd_lock_t* l)   { pthread_mutex_lock(l); }
++  static void usbd_unlock(usbd_lock_t* l) { pthread_mutex_unlock(l); }
++  static unsigned long long usbd_now_us(void)
++  {
++      struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
++      return (unsigned long long)ts.tv_sec * 1000000ull + (unsigned long long)ts.tv_nsec / 1000ull;
++  }
++  static void usbd_sleep_ms(unsigned ms) { usleep(ms * 1000u); }
++#endif
++
++/* HLE -> guest call (ppu_loader.cpp); returns the guest's r3. */
++extern uint64_t ppu_guest_call(uint32_t opd, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
++                               uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7);
++/* Guest memory for the runtime's own use (ppu_loader.cpp); returns the base, 0 on failure. */
++extern uint32_t ppu_alloc_scratch_stack(uint32_t size);
++
++/* ---------------------------------------------------------------------------
++ * State
++ * -------------------------------------------------------------------------*/
++#define USBD_DEV_ID     1
++#define USBD_VID        0x046D
++#define USBD_PID        0xC29B
++#define USBD_REPORT_LEN 11
++
++/* The descriptor blob lives in guest memory: ScanStaticDescriptor hands the
++ * game pointers into it. One page from the runtime's scratch allocator, taken
++ * once (desc_prepare). */
++static u32 s_desc_ea;
++#define USBD_DESC_EA    s_desc_ea
++
++typedef struct { u32 ops; u16 vid, pmin, pmax; int any; } UsbdLdd;
++typedef struct { int used; u8 ep; u8 attr; } UsbdPipe;
++typedef struct {
++    int pipe;
++    u8  ep;
++    u8  setup[8];       /* bmRequestType, bRequest, wValue, wIndex, wLength (wValue.. big-endian) */
++    u32 buf;
++    s32 len;
++    u32 cb, arg;
++} UsbdXfer;
++
++#define MAX_LDD   8
++#define QCAP      64
++#define INCAP     8
++
++static usbd_lock_t s_lock = USBD_LOCK_INIT;
++static int       s_initialized;
++static int       s_wheel_on;                 /* the wheel feature is on (host thread runs) */
++static UsbdLdd   s_ldd[MAX_LDD];
++static int       s_ldd_count;
++static UsbdPipe  s_pipe[CELL_USBD_MAX_PIPES];
++static UsbdXfer  s_q[QCAP];                  /* control and OUT transfers, FIFO */
++static int       s_q_head, s_q_n;
++static UsbdXfer  s_in[INCAP];                /* pending IN reads */
++static int       s_in_n;
++static int       s_in_peak;                  /* most IN reads pending at once (trace stats) */
++static unsigned  s_in_asks;                  /* IN reads the game has queued, ever */
++static unsigned  s_in_asks_at_done;          /* ... when the last report went to the game */
++static UsbdXfer  s_in_last;                  /* the read that last report completed */
++static int       s_in_last_ok;
++static unsigned  s_done_ctl, s_done_out;     /* control / OUT transfers completed (trace stats) */
++
++static volatile int s_present;               /* the G27 is on the bus (between probe and detach) */
++static int       s_attached;                 /* a driver attached to it */
++static u32       s_bound_ops;                /* that driver */
++static u32       s_priv;
++static u32       s_desc_len;
++static int       s_desc_ready;
++
++#ifdef _WIN32
++static HANDLE    s_worker;
++#else
++static pthread_t s_worker;
++static int       s_worker_started;
++#endif
++static volatile int s_stop;
++
++static int trace(void) { return wheel_trace_on(); }
++
++/* ---------------------------------------------------------------------------
++ * Descriptors
++ * -------------------------------------------------------------------------*/
++static int desc_prepare(void)
++{
++    if (s_desc_ready) return 1;
++    u8 blob[128];
++    s_desc_len = wheel_g27_descriptors(blob, sizeof blob);
++    if (!s_desc_ea) s_desc_ea = ppu_alloc_scratch_stack(0x1000);
++    if (!s_desc_ea) {
++        fprintf(stderr, "[cellUsbd] no guest memory for the wheel's descriptors\n");
++        return 0;
++    }
++    vm_memcpy_to(USBD_DESC_EA, blob, s_desc_len);
++    s_desc_ready = 1;
++    return 1;
++}
++
++/* String descriptors 0 (languages), 1 (manufacturer), 2 (product). */
++static u32 string_desc(int idx, u8* out, u32 cap)
++{
++    const char* s = idx == 1 ? "Logitech" : idx == 2 ? "G27 Racing Wheel" : NULL;
++    if (idx == 0) {
++        static const u8 langs[4] = { 4, 3, 0x09, 0x04 };
++        u32 n = cap < 4 ? cap : 4;
++        memcpy(out, langs, n);
++        return n;
++    }
++    if (!s) return 0;
++    u8 d[64];
++    u32 n = 2;
++    for (const char* p = s; *p && n + 2 <= sizeof d; p++) { d[n++] = (u8)*p; d[n++] = 0; }
++    d[0] = (u8)n; d[1] = 3;
++    if (n > cap) n = cap;
++    memcpy(out, d, n);
++    return n;
++}
++
++/* ---------------------------------------------------------------------------
++ * Driver registration
++ * -------------------------------------------------------------------------*/
++static s32 add_ldd(u32 ops, u16 vid, u16 pmin, u16 pmax, int any, const char* how)
++{
++    if (!s_initialized) return (s32)CELL_USBD_ERROR_NOT_INITIALIZED;
++    if (!ops) return (s32)CELL_USBD_ERROR_INVALID_PARAM;
++    const u32 name_ea = vm_read32(ops);
++    char name[40] = "?";
++    if (name_ea) { int i = 0; for (; i < 39; i++) { name[i] = (char)vm_read8(name_ea + i); if (!name[i]) break; } name[39] = 0; }
++    if (any) printf("[cellUsbd] %s(ops=0x%08X \"%s\")\n", how, ops, name);
++    else     printf("[cellUsbd] %s(ops=0x%08X \"%s\", %04X:%04X-%04X)\n", how, ops, name, vid, pmin, pmax);
++    usbd_lock(&s_lock);
++    if (s_ldd_count >= MAX_LDD) { usbd_unlock(&s_lock); return (s32)CELL_USBD_ERROR_LDD_NOT_ALLOCATED; }
++    UsbdLdd* l = &s_ldd[s_ldd_count++];
++    l->ops = ops; l->vid = vid; l->pmin = pmin; l->pmax = pmax; l->any = any;
++    usbd_unlock(&s_lock);
++    return CELL_OK;
++}
++
++/* The driver that wants our G27, or 0. Called with the lock held. */
++static u32 ldd_for_wheel(void)
++{
++    for (int i = 0; i < s_ldd_count; i++) {
++        const UsbdLdd* l = &s_ldd[i];
++        if (l->any || (l->vid == USBD_VID && USBD_PID >= l->pmin && USBD_PID <= l->pmax))
++            return l->ops;
++    }
++    return 0;
++}
+ 
+-/* Internal state */
++/* ---------------------------------------------------------------------------
++ * Transfers
++ * -------------------------------------------------------------------------*/
++static void complete(const UsbdXfer* x, s32 result, s32 count)
++{
++    if (!x->cb) return;
++    const unsigned long long t0 = usbd_now_us();
++    ppu_guest_call(x->cb, (uint64_t)(int64_t)result, (uint64_t)(int64_t)count, x->arg, 0, 0, 0, 0, 0);
++    /* A callback should only post an event to the driver's thread; a slow one holds up every
++     * report behind it (the wheel looks stuck in the game). */
++    const unsigned long long took = usbd_now_us() - t0;
++    static unsigned said;
++    if (took >= 100000 && said < 20) {
++        said++;
++        fprintf(stderr, "[cellUsbd] the game's %s callback took %llu ms\n",
++                x->ep == 0 ? "control" : (x->ep & 0x80) ? "report" : "force-feedback", took / 1000);
++    }
++}
+ 
+-static int s_initialized = 0;
++static s32 do_control(const UsbdXfer* x, s32* count)
++{
++    const u8 bm = x->setup[0], req = x->setup[1];
++    const u16 wValue = (u16)((x->setup[2] << 8) | x->setup[3]);
++    const u16 wLength = (u16)((x->setup[6] << 8) | x->setup[7]);
++    u8 out[256];
++    u32 n = 0;
++    *count = 0;
++    if (trace())
++        fprintf(stderr, "[cellUsbd] control %02X %02X value=%04X index=%02X%02X length=%u\n",
++                bm, req, wValue, x->setup[4], x->setup[5], wLength);
++    if (bm == 0x80 && req == 0x06) {                 /* GET_DESCRIPTOR */
++        const int type = wValue >> 8;
++        u8 blob[128];
++        const u32 len = wheel_g27_descriptors(blob, sizeof blob);
++        if (type == 1)      { n = 18; memcpy(out, blob, n); }
++        else if (type == 2) { n = len - 18; memcpy(out, blob + 18, n); }
++        else if (type == 3) { n = string_desc(wValue & 0xFF, out, sizeof out); if (!n) return CELL_USBD_EHCI_CC_HALTED; }
++        else return CELL_USBD_EHCI_CC_HALTED;
++    } else if (bm == 0x00 && req == 0x09) {          /* SET_CONFIGURATION */
++    } else if (bm == 0x01 && req == 0x0B) {          /* SET_INTERFACE */
++    } else if (bm == 0x21 && req == 0x0A) {          /* HID SET_IDLE */
++    } else if (bm == 0x21 && req == 0x09) {          /* HID SET_REPORT: an output report */
++        u8 data[64];
++        u32 len = wLength < sizeof data ? wLength : sizeof data;
++        if (x->buf && len) { vm_memcpy_from(data, x->buf, len); wheel_g27_output(data, len); }
++        *count = (s32)wLength;
++        return CELL_USBD_HC_CC_NOERR;
++    } else if (bm == 0xA1 && req == 0x01) {          /* HID GET_REPORT */
++        WheelInput in; wheel_host_read(&in);
++        n = (u32)wheel_g27_report(&in, out);
++    } else if (bm == 0x80 && req == 0x00) {          /* GET_STATUS */
++        out[0] = out[1] = 0; n = 2;
++    } else if (bm == 0x80 && req == 0x08) {          /* GET_CONFIGURATION */
++        out[0] = 1; n = 1;
++    } else {
++        if (trace()) fprintf(stderr, "[cellUsbd]   -> stall (not a request a G27 answers)\n");
++        return CELL_USBD_EHCI_CC_HALTED;
++    }
++    if (n > wLength) n = wLength;
++    if (n && x->buf) vm_memcpy_to(x->buf, out, n);
++    *count = (s32)n;
++    return CELL_USBD_HC_CC_NOERR;
++}
+ 
+-#define MAX_LDD_OPS 8
+-static const CellUsbdLddOps* s_ldd_ops[MAX_LDD_OPS];
+-static int s_ldd_count = 0;
++static s32 queue_xfer(s32 pipe_id, const u8* setup, u32 buf, s32 len, u32 cb, u32 arg, int want_ctrl)
++{
++    if (!s_initialized) return (s32)CELL_USBD_ERROR_NOT_INITIALIZED;
++    usbd_lock(&s_lock);
++    if (pipe_id < 0 || pipe_id >= CELL_USBD_MAX_PIPES || !s_pipe[pipe_id].used || !s_present) {
++        usbd_unlock(&s_lock);
++        return (s32)CELL_USBD_ERROR_PIPE_NOT_FOUND;
++    }
++    const UsbdPipe* p = &s_pipe[pipe_id];
++    if (want_ctrl != (p->ep == 0)) { usbd_unlock(&s_lock); return (s32)CELL_USBD_ERROR_INVALID_TRANSFER_TYPE; }
++    UsbdXfer x; memset(&x, 0, sizeof x);
++    x.pipe = pipe_id; x.ep = p->ep; x.buf = buf; x.len = len; x.cb = cb; x.arg = arg;
++    if (setup) memcpy(x.setup, setup, 8);
++    s32 rc = CELL_OK;
++    if (p->ep & 0x80) {
++        if (s_in_n < INCAP) { s_in[s_in_n++] = x; s_in_asks++; }
++        else rc = (s32)CELL_USBD_ERROR_IOREQ_NOT_ALLOCATED;
++        if (s_in_n > s_in_peak) s_in_peak = s_in_n;
++    } else {
++        if (s_q_n < QCAP) { s_q[(s_q_head + s_q_n) % QCAP] = x; s_q_n++; }
++        else rc = (s32)CELL_USBD_ERROR_IOREQ_NOT_ALLOCATED;
++    }
++    usbd_unlock(&s_lock);
++    return rc;
++}
+ 
+-/* API */
++/* ---------------------------------------------------------------------------
++ * Worker: libusbd's own thread
++ * -------------------------------------------------------------------------*/
++static void drop_device_state(void)
++{
++    usbd_lock(&s_lock);
++    s_present = 0;
++    s_attached = 0;
++    s_bound_ops = 0;
++    s_priv = 0;
++    memset(s_pipe, 0, sizeof s_pipe);
++    s_q_head = s_q_n = 0;   /* a gone device's transfers are not completed: the driver is gone too */
++    s_in_n = 0;
++    s_in_last_ok = 0;
++    usbd_unlock(&s_lock);
++}
++
++static void try_attach(void)
++{
++    usbd_lock(&s_lock);
++    const u32 ops = ldd_for_wheel();
++    usbd_unlock(&s_lock);
++    if (!ops || !desc_prepare()) return;
++    const u32 probe = vm_read32(ops + 4), attach = vm_read32(ops + 8);
++    static int refusals;   /* retried every few seconds: say so a few times, not forever */
++    s_present = 1;
++    s32 r = probe ? (s32)ppu_guest_call(probe, USBD_DEV_ID, 0, 0, 0, 0, 0, 0, 0) : 0;
++    if (r != 0) {
++        if (refusals++ < 3) fprintf(stderr, "[cellUsbd] the game's driver turned the G27 down (probe -> %d)\n", r);
++        drop_device_state();
++        return;
++    }
++    usbd_lock(&s_lock);
++    s_bound_ops = ops;
++    usbd_unlock(&s_lock);
++    r = attach ? (s32)ppu_guest_call(attach, USBD_DEV_ID, 0, 0, 0, 0, 0, 0, 0) : -1;
++    if (r != 0) {
++        if (refusals++ < 3) fprintf(stderr, "[cellUsbd] the game's driver failed to attach the G27 (attach -> %d)\n", r);
++        drop_device_state();
++        return;
++    }
++    usbd_lock(&s_lock);
++    s_attached = 1;
++    usbd_unlock(&s_lock);
++    fprintf(stderr, "[cellUsbd] Logitech G27 (emulated) attached to the game's driver\n");
++    fflush(stdout);
++}
++
++static void do_detach(void)
++{
++    usbd_lock(&s_lock);
++    const u32 ops = s_bound_ops;
++    /* Pending reads die with the device; the driver hears about it in detach. */
++    s_in_n = 0;
++    s_q_head = s_q_n = 0;
++    usbd_unlock(&s_lock);
++    const u32 detach = ops ? vm_read32(ops + 12) : 0;
++    if (detach) ppu_guest_call(detach, USBD_DEV_ID, 0, 0, 0, 0, 0, 0, 0);
++    drop_device_state();
++    fprintf(stderr, "[cellUsbd] Logitech G27 (emulated) detached: the PC wheel went away\n");
++    fflush(stdout);
++}
++
++static void worker_step(unsigned long long* next_attach_us, unsigned long long* last_in_us,
++                        u8* last_report, int* have_last)
++{
++    WheelInput in;
++    const int conn = wheel_host_read(&in);
++    const unsigned long long now = usbd_now_us();
++
++    usbd_lock(&s_lock);
++    const int attached = s_attached, present = s_present, have_ldd = s_ldd_count > 0;
++    usbd_unlock(&s_lock);
++    if (conn && !present && have_ldd && now >= *next_attach_us) {
++        *next_attach_us = now + 3000000ull;   /* if it fails, try again in a while */
++        try_attach();
++        *have_last = 0;
++        return;
++    }
++    if (!conn && attached) { do_detach(); return; }
++    if (!present) return;
++
++    /* Control and OUT transfers, in order. The lock is never held across a
++     * call into the game: its callbacks queue the next transfer. */
++    for (;;) {
++        UsbdXfer x;
++        usbd_lock(&s_lock);
++        if (!s_q_n) { usbd_unlock(&s_lock); break; }
++        x = s_q[s_q_head];
++        s_q_head = (s_q_head + 1) % QCAP;
++        s_q_n--;
++        usbd_unlock(&s_lock);
++        if (x.ep == 0) {
++            s32 count = 0;
++            const s32 res = do_control(&x, &count);
++            complete(&x, res, count);
++            s_done_ctl++;
++        } else {
++            s_done_out++;
++            u8 data[64];
++            const u32 len = (u32)(x.len < 0 ? 0 : (x.len > 64 ? 64 : x.len));
++            if (x.buf && len) { vm_memcpy_from(data, x.buf, len); wheel_g27_output(data, len); }
++            complete(&x, CELL_USBD_HC_CC_NOERR, x.len);
++        }
++    }
++
++    /* IN reads: a new report as soon as it changes (2 ms apart at most, the
++     * G27's polling interval), and the same one again every 8 ms. */
++    u8 rep[USBD_REPORT_LEN];
++    wheel_g27_report(&in, rep);
++    const int changed = !*have_last || memcmp(rep, last_report, USBD_REPORT_LEN) != 0;
++    const unsigned long long since = now - *last_in_us;
++    if (!((changed && since >= 2000) || since >= 8000)) return;
++    /* The game asks for the next report once its USB thread has taken the last one's "done"
++     * event from its queue; until then it keeps the last report, the rim and pedals where they
++     * were. When that event is lost (its queue was full) it never asks again and the wheel is
++     * stuck for good, so after 1.5 s the report goes again: on a read the game had queued
++     * besides, or on the last one once more. Only one report at a time waits to be taken, so
++     * one sent again can't double the rate. Both are said in the log. */
++    static int waiting_said;
++    static unsigned waits, resends;
++    UsbdXfer x;
++    int resend = 0;
++    usbd_lock(&s_lock);
++    const int taken = !s_in_last_ok || s_in_asks != s_in_asks_at_done;
++    if (!taken || !s_in_n) {
++        if (!taken && attached && since >= 1500000) {
++            resend = 1;
++            if (s_in_n) {
++                x = s_in[0];
++                memmove(&s_in[0], &s_in[1], (size_t)(s_in_n - 1) * sizeof s_in[0]);
++                s_in_n--;
++            } else x = s_in_last;
++        }
++        usbd_unlock(&s_lock);
++        if (!resend) {
++            if (*have_last && attached && since >= 400000 && !waiting_said && waits < 20) {
++                waiting_said = 1; waits++;
++                fprintf(stderr, "[cellUsbd] the game has not asked for a wheel report for %llu ms: it keeps the last "
++                                "one (rim and pedals stuck there) until it does\n", since / 1000);
++            }
++            return;
++        }
++        if (resends++ < 20)
++            fprintf(stderr, "[cellUsbd] the game's USB thread never took the last wheel report (%llu ms): sending "
++                            "it again\n", since / 1000);
++    } else {
++        if (waiting_said) {
++            waiting_said = 0;
++            fprintf(stderr, "[cellUsbd] the game asks for wheel reports again, after %llu ms\n", since / 1000);
++        }
++        x = s_in[0];
++        memmove(&s_in[0], &s_in[1], (size_t)(s_in_n - 1) * sizeof s_in[0]);
++        s_in_n--;
++        usbd_unlock(&s_lock);
++    }
++    usbd_lock(&s_lock);
++    s_in_last = x;
++    s_in_last_ok = 1;
++    s_in_asks_at_done = s_in_asks;
++    usbd_unlock(&s_lock);
++    s32 n = x.len < USBD_REPORT_LEN ? x.len : USBD_REPORT_LEN;
++    if (n < 0) n = 0;
++    if (x.buf && n) vm_memcpy_to(x.buf, rep, (size_t)n);
++    memcpy(last_report, rep, USBD_REPORT_LEN);
++    *have_last = 1;
++    *last_in_us = now;
++    if (trace()) {
++        static unsigned lines;
++        if (lines++ < 40)
++            fprintf(stderr, "[cellUsbd] report %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n",
++                    rep[0], rep[1], rep[2], rep[3], rep[4], rep[5], rep[6], rep[7], rep[8], rep[9], rep[10]);
++        /* Every 10 s: how many reports the game took, and how many of them were new. */
++        static unsigned long long stat_from;
++        static unsigned taken, fresh, stat_lines;
++        taken++; fresh += changed;
++        if (!stat_from) stat_from = now;
++        if (now - stat_from >= 10000000ull) {
++            usbd_lock(&s_lock);
++            const int peak = s_in_peak;
++            s_in_peak = s_in_n;
++            usbd_unlock(&s_lock);
++            if (stat_lines++ < 360)
++                fprintf(stderr, "[cellUsbd] the game took %u wheel reports in %llu s, %u of them new; up to %d reads "
++                                "asked for at once; %u force-feedback writes, %u control transfers\n",
++                        taken, (now - stat_from) / 1000000ull, fresh, peak, s_done_out, s_done_ctl);
++            stat_from = now; taken = fresh = 0; s_done_out = s_done_ctl = 0;
++        }
++    }
++    /* PS3_WHEEL_TEST_LOSE=N (tests): every Nth report's "done" never reaches the game, as when
++     * its event queue is full, to check that the wheel comes back by itself. */
++    static long lose_every = -1;
++    static unsigned long reports;
++    if (lose_every < 0) { const char* e = getenv("PS3_WHEEL_TEST_LOSE"); lose_every = e ? atol(e) : 0; }
++    if (lose_every > 0 && !resend && ++reports % (unsigned long)lose_every == 0) {
++        fprintf(stderr, "[cellUsbd] test: report %lu's \"done\" left out (PS3_WHEEL_TEST_LOSE)\n", reports);
++        return;
++    }
++    complete(&x, CELL_USBD_HC_CC_NOERR, n);
++}
++
++#ifdef _WIN32
++static DWORD WINAPI usbd_worker(LPVOID unused)
++#else
++static void* usbd_worker(void* unused)
++#endif
++{
++    (void)unused;
++    unsigned long long next_attach = 0, last_in = 0;
++    u8 last_report[USBD_REPORT_LEN];
++    int have_last = 0;
++    unsigned long long prev = 0;
++    unsigned held_said = 0;
++    while (!s_stop) {
++        /* This thread steps every millisecond; a long gap (the PC too busy to run it, or a
++         * call into the game that took long) leaves the game the last report meanwhile. */
++        const unsigned long long t = usbd_now_us();
++        if (prev && s_attached && t - prev >= 250000 && held_said < 20) {
++            held_said++;
++            fprintf(stderr, "[cellUsbd] the wheel thread was held up for %llu ms\n", (t - prev) / 1000);
++        }
++        worker_step(&next_attach, &last_in, last_report, &have_last);
++        prev = usbd_now_us();
++        usbd_sleep_ms(s_present ? 1 : 20);
++    }
++    return 0;
++}
++
++/* ---------------------------------------------------------------------------
++ * API
++ * -------------------------------------------------------------------------*/
+ 
+ s32 cellUsbdInit(void)
+ {
+     printf("[cellUsbd] Init()\n");
+     if (s_initialized)
+         return (s32)CELL_USBD_ERROR_ALREADY_INITIALIZED;
++    usbd_lock(&s_lock);
+     s_ldd_count = 0;
+-    memset(s_ldd_ops, 0, sizeof(s_ldd_ops));
++    memset(s_ldd, 0, sizeof s_ldd);
++    usbd_unlock(&s_lock);
++    drop_device_state();
+     s_initialized = 1;
++    s_wheel_on = wheel_host_start();
++    if (s_wheel_on) {
++        s_stop = 0;
++#ifdef _WIN32
++        s_worker = CreateThread(NULL, 256 * 1024, usbd_worker, NULL, 0, NULL);
++        if (!s_worker) s_wheel_on = 0;
++        /* Like a real USB stack, ahead of the game's threads, which keep every core of a
++         * small PC busy (some above normal priority). It sleeps between its short steps. */
++        else SetThreadPriority(s_worker, THREAD_PRIORITY_HIGHEST);
++#else
++        s_worker_started = pthread_create(&s_worker, NULL, usbd_worker, NULL) == 0;
++        if (!s_worker_started) s_wheel_on = 0;
++#endif
++        if (s_wheel_on) fprintf(stderr, "[cellUsbd] looking for a steering wheel to present as a Logitech G27 (PS3_WHEEL=off: don't)\n");
++    }
+     return CELL_OK;
+ }
+ 
+ s32 cellUsbdEnd(void)
+ {
+     printf("[cellUsbd] End()\n");
++    if (!s_initialized) return (s32)CELL_USBD_ERROR_NOT_INITIALIZED;
++    if (s_wheel_on) {
++        s_stop = 1;
++#ifdef _WIN32
++        WaitForSingleObject(s_worker, 3000);
++        CloseHandle(s_worker);
++        s_worker = NULL;
++#else
++        if (s_worker_started) pthread_join(s_worker, NULL);
++        s_worker_started = 0;
++#endif
++        wheel_host_stop();
++        s_wheel_on = 0;
++    }
++    drop_device_state();
+     s_initialized = 0;
+     return CELL_OK;
+ }
+ 
+-s32 cellUsbdRegisterLdd(const CellUsbdLddOps* ops)
++s32 cellUsbdSetThreadPriority(s32 event_prio, s32 usbd_prio, s32 callback_prio)
+ {
+-    /* CellUsbdLddOps leads with a char* -- a 4-byte EA to the guest. */
+-    u32 name_ea = ops ? vm_read32((u32)(uintptr_t)ops) : 0;
+-    printf("[cellUsbd] RegisterLdd(%s)\n",
+-           name_ea ? (const char*)(vm_base + name_ea) : (ops ? "?" : "null"));
++    (void)event_prio; (void)usbd_prio; (void)callback_prio;
++    return s_initialized ? CELL_OK : (s32)CELL_USBD_ERROR_NOT_INITIALIZED;
++}
++
++s32 cellUsbdSetThreadPriority2(s32 event_prio, s32 usbd_prio, s32 callback_prio)
++{
++    return cellUsbdSetThreadPriority(event_prio, usbd_prio, callback_prio);
++}
++
++s32 cellUsbdGetThreadPriority(u32 prio_type, u32 prio_ea)
++{
++    (void)prio_type;
+     if (!s_initialized) return (s32)CELL_USBD_ERROR_NOT_INITIALIZED;
+-    if (!ops) return (s32)CELL_USBD_ERROR_INVALID_ARGUMENT;
+-    if (s_ldd_count >= MAX_LDD_OPS) return (s32)CELL_USBD_ERROR_INVALID_ARGUMENT;
+-    s_ldd_ops[s_ldd_count++] = ops;
++    if (prio_ea) vm_write32(prio_ea, 1000);
+     return CELL_OK;
+ }
+ 
+-s32 cellUsbdUnregisterLdd(const CellUsbdLddOps* ops)
++s32 cellUsbdRegisterLdd(u32 ops_ea)
++{
++    return add_ldd(ops_ea, 0, 0, 0, 1, "RegisterLdd");
++}
++
++s32 cellUsbdRegisterExtraLdd(u32 ops_ea, u16 vendor_id, u16 product_id)
++{
++    return add_ldd(ops_ea, vendor_id, product_id, product_id, 0, "RegisterExtraLdd");
++}
++
++s32 cellUsbdRegisterExtraLdd2(u32 ops_ea, u16 vendor_id, u16 product_min, u16 product_max)
++{
++    return add_ldd(ops_ea, vendor_id, product_min, product_max, 0, "RegisterExtraLdd2");
++}
++
++static s32 remove_ldd(u32 ops_ea)
+ {
+     if (!s_initialized) return (s32)CELL_USBD_ERROR_NOT_INITIALIZED;
+-    for (int i = 0; i < s_ldd_count; i++) {
+-        if (s_ldd_ops[i] == ops) {
+-            for (int j = i; j < s_ldd_count - 1; j++)
+-                s_ldd_ops[j] = s_ldd_ops[j + 1];
++    int found = 0;
++    usbd_lock(&s_lock);
++    for (int i = 0; i < s_ldd_count; ) {
++        if (s_ldd[i].ops == ops_ea) {
++            memmove(&s_ldd[i], &s_ldd[i + 1], (size_t)(s_ldd_count - i - 1) * sizeof s_ldd[0]);
+             s_ldd_count--;
+-            return CELL_OK;
+-        }
++            found = 1;
++        } else i++;
+     }
++    /* The game tears its devices down before it unregisters (GT5 0xC21490),
++     * so the binding just goes, without a detach call into a dead driver. */
++    const int unbind = found && s_bound_ops == ops_ea;
++    usbd_unlock(&s_lock);
++    if (unbind) drop_device_state();
++    return found ? CELL_OK : (s32)CELL_USBD_ERROR_LDD_NOT_FOUND;
++}
++
++s32 cellUsbdUnregisterLdd(u32 ops_ea)      { return remove_ldd(ops_ea); }
++s32 cellUsbdUnregisterExtraLdd(u32 ops_ea) { return remove_ldd(ops_ea); }
++
++/* The next descriptor of `type` after the one at ptr_ea (from the start when
++ * ptr_ea is 0), or 0. */
++u32 cellUsbdScanStaticDescriptor(s32 dev_id, u32 ptr_ea, u8 type)
++{
++    if (dev_id != USBD_DEV_ID || !s_present || !s_desc_ready) return 0;
++    const u32 begin = USBD_DESC_EA, end = USBD_DESC_EA + s_desc_len;
++    u32 p = begin;
++    if (ptr_ea) {
++        if (ptr_ea < begin || ptr_ea >= end) return 0;
++        const u8 len = vm_read8(ptr_ea);
++        if (!len) return 0;
++        p = ptr_ea + len;
++    }
++    while (p + 2 <= end) {
++        const u8 len = vm_read8(p);
++        if (len < 2) break;
++        if (vm_read8(p + 1) == type) return p;
++        p += len;
++    }
++    return 0;
++}
++
++s32 cellUsbdGetDeviceSpeed(s32 dev_id, u32 speed_ea)
++{
++    if (dev_id != USBD_DEV_ID || !s_present) return (s32)CELL_USBD_ERROR_DEVICE_NOT_FOUND;
++    if (speed_ea) vm_write8(speed_ea, 1);   /* full speed */
+     return CELL_OK;
+ }
+ 
+-s32 cellUsbdGetDeviceList(CellUsbdDeviceInfo* list, u32 maxDevices,
+-                            u32* numDevices)
++s32 cellUsbdGetDeviceLocation(s32 dev_id, u32 location_ea)
+ {
+-    (void)list; (void)maxDevices;
+-    if (!s_initialized) return (s32)CELL_USBD_ERROR_NOT_INITIALIZED;
+-    if (!numDevices) return (s32)CELL_USBD_ERROR_INVALID_ARGUMENT;
+-    vm_write32((u32)(uintptr_t)numDevices, 0); /* no devices */
++    if (dev_id != USBD_DEV_ID || !s_present) return (s32)CELL_USBD_ERROR_DEVICE_NOT_FOUND;
++    if (location_ea) {   /* root port 1, no hubs */
++        vm_write8(location_ea + 0, 1);
++        vm_write8(location_ea + 1, 0);
++        vm_write8(location_ea + 2, 0);
++        vm_write8(location_ea + 3, 0);
++    }
+     return CELL_OK;
+ }
+ 
+-s32 cellUsbdOpenPipe(CellUsbdDeviceId deviceId, u32 endpoint,
+-                       CellUsbdPipeId* pipeId)
++s32 cellUsbdSetPrivateData(s32 dev_id, u32 priv_ea)
++{
++    if (dev_id != USBD_DEV_ID || !s_present) return (s32)CELL_USBD_ERROR_DEVICE_NOT_FOUND;
++    s_priv = priv_ea;
++    return CELL_OK;
++}
++
++u32 cellUsbdGetPrivateData(s32 dev_id)
++{
++    return (dev_id == USBD_DEV_ID && s_present) ? s_priv : 0;
++}
++
++s32 cellUsbdOpenPipe(s32 dev_id, u32 endpoint_desc_ea)
++{
++    if (!s_initialized) return (s32)CELL_USBD_ERROR_NOT_INITIALIZED;
++    if (dev_id != USBD_DEV_ID || !s_present) return (s32)CELL_USBD_ERROR_DEVICE_NOT_FOUND;
++    u8 ep = 0, attr = 0;
++    if (endpoint_desc_ea) {
++        ep = vm_read8(endpoint_desc_ea + 2);
++        attr = vm_read8(endpoint_desc_ea + 3);
++        if (ep != 0x81 && ep != 0x01) return (s32)CELL_USBD_ERROR_INVALID_PARAM;
++    }
++    usbd_lock(&s_lock);
++    s32 id = (s32)CELL_USBD_ERROR_PIPE_NOT_ALLOCATED;
++    for (int i = 1; i < CELL_USBD_MAX_PIPES; i++) {
++        if (!s_pipe[i].used) {
++            s_pipe[i].used = 1; s_pipe[i].ep = ep; s_pipe[i].attr = attr;
++            id = i;
++            break;
++        }
++    }
++    usbd_unlock(&s_lock);
++    if (trace()) fprintf(stderr, "[cellUsbd] OpenPipe(ep=0x%02X) -> %d\n", ep, id);
++    return id;
++}
++
++s32 cellUsbdClosePipe(s32 pipe_id)
++{
++    if (!s_initialized) return (s32)CELL_USBD_ERROR_NOT_INITIALIZED;
++    usbd_lock(&s_lock);
++    s32 rc = (s32)CELL_USBD_ERROR_PIPE_NOT_FOUND;
++    if (pipe_id > 0 && pipe_id < CELL_USBD_MAX_PIPES && s_pipe[pipe_id].used) {
++        s_pipe[pipe_id].used = 0;
++        /* Its pending reads go with it. */
++        for (int i = 0; i < s_in_n; ) {
++            if (s_in[i].pipe == pipe_id) {
++                memmove(&s_in[i], &s_in[i + 1], (size_t)(s_in_n - i - 1) * sizeof s_in[0]);
++                s_in_n--;
++            } else i++;
++        }
++        if (s_in_last.pipe == pipe_id) s_in_last_ok = 0;   /* nothing to send again on it */
++        rc = CELL_OK;
++    }
++    usbd_unlock(&s_lock);
++    return rc;
++}
++
++s32 cellUsbdControlTransfer(s32 pipe_id, u32 request_ea, u32 buf_ea, u32 done_opd, u32 arg)
+ {
+-    (void)deviceId; (void)endpoint; (void)pipeId;
+-    return (s32)CELL_USBD_ERROR_NO_DEVICE;
++    if (!request_ea) return (s32)CELL_USBD_ERROR_INVALID_PARAM;
++    u8 setup[8];
++    vm_memcpy_from(setup, request_ea, 8);
++    return queue_xfer(pipe_id, setup, buf_ea, (s32)((setup[6] << 8) | setup[7]), done_opd, arg, 1);
+ }
+ 
+-s32 cellUsbdClosePipe(CellUsbdPipeId pipeId)
++s32 cellUsbdInterruptTransfer(s32 pipe_id, u32 buf_ea, s32 len, u32 done_opd, u32 arg)
+ {
+-    (void)pipeId;
+-    return (s32)CELL_USBD_ERROR_PIPE_NOT_FOUND;
++    return queue_xfer(pipe_id, NULL, buf_ea, len, done_opd, arg, 0);
+ }
+ 
+-s32 cellUsbdBulkTransfer(CellUsbdPipeId pipeId, void* data,
+-                           u32 length, u32* transferred)
++s32 cellUsbdBulkTransfer(s32 pipe_id, u32 buf_ea, s32 len, u32 done_opd, u32 arg)
+ {
+-    (void)pipeId; (void)data; (void)length; (void)transferred;
+-    return (s32)CELL_USBD_ERROR_PIPE_NOT_FOUND;
++    (void)pipe_id; (void)buf_ea; (void)len; (void)done_opd; (void)arg;
++    return s_initialized ? (s32)CELL_USBD_ERROR_INVALID_TRANSFER_TYPE : (s32)CELL_USBD_ERROR_NOT_INITIALIZED;
+ }
+ 
+-s32 cellUsbdControlTransfer(CellUsbdPipeId pipeId, u8 requestType,
+-                              u8 request, u16 value, u16 index,
+-                              void* data, u32 length, u32* transferred)
++s32 cellUsbdIsochronousTransfer(s32 pipe_id, u32 req_ea, u32 done_opd, u32 arg)
+ {
+-    (void)pipeId; (void)requestType; (void)request;
+-    (void)value; (void)index; (void)data; (void)length; (void)transferred;
+-    return (s32)CELL_USBD_ERROR_PIPE_NOT_FOUND;
++    (void)pipe_id; (void)req_ea; (void)done_opd; (void)arg;
++    return s_initialized ? (s32)CELL_USBD_ERROR_INVALID_TRANSFER_TYPE : (s32)CELL_USBD_ERROR_NOT_INITIALIZED;
++}
++
++s32 cellUsbdResetDevice(s32 dev_id)
++{
++    if (dev_id != USBD_DEV_ID || !s_present) return (s32)CELL_USBD_ERROR_DEVICE_NOT_FOUND;
++    return CELL_OK;
+ }
+diff --git a/libs/hardware/cellUsbd.h b/libs/hardware/cellUsbd.h
+index 6d8dd233..f2f478fc 100644
+--- a/libs/hardware/cellUsbd.h
++++ b/libs/hardware/cellUsbd.h
+@@ -1,8 +1,19 @@
+ /*
+  * ps3recomp - cellUsbd HLE
+  *
+- * USB device access. Stub — init/term work, device enumeration
+- * returns empty, transfers return NOT_FOUND.
++ * USB device access for a game's own device drivers (LDDs). A game registers
++ * a CellUsbdLddOps {name, probe, attach, detach}; libusbd calls probe and then
++ * attach for each device that matches, on a thread of its own, and the driver
++ * then opens pipes and runs control / interrupt transfers whose completion
++ * callbacks also come from that thread.
++ *
++ * The only device here is an emulated Logitech G27 racing wheel, and only
++ * when a steering wheel is found on the PC (see wheel.h). Otherwise the bus
++ * is empty, as before.
++ *
++ * Every pointer argument is a guest effective address. Callbacks are guest
++ * OPDs: probe/attach/detach(int32 dev_id) -> int, and transfer completion
++ * done(int32 result, int32 count, void* arg).
+  */
+ 
+ #ifndef PS3RECOMP_CELL_USBD_H
+@@ -15,65 +26,63 @@
+ extern "C" {
+ #endif
+ 
+-/* Error codes */
+-#define CELL_USBD_ERROR_NOT_INITIALIZED     0x80110001
+-#define CELL_USBD_ERROR_ALREADY_INITIALIZED 0x80110002
+-#define CELL_USBD_ERROR_INVALID_ARGUMENT    0x80110003
+-#define CELL_USBD_ERROR_NO_DEVICE           0x80110004
+-#define CELL_USBD_ERROR_PIPE_NOT_FOUND      0x80110005
+-#define CELL_USBD_ERROR_TRANSFER            0x80110006
+-
+-/* Constants */
+-#define CELL_USBD_MAX_PIPES    16
+-
+-/* Transfer types */
+-#define CELL_USBD_TRANSFER_CONTROL     0
+-#define CELL_USBD_TRANSFER_ISOCHRONOUS 1
+-#define CELL_USBD_TRANSFER_BULK        2
+-#define CELL_USBD_TRANSFER_INTERRUPT   3
+-
+-/* Types */
+-typedef u32 CellUsbdDeviceId;
+-typedef u32 CellUsbdPipeId;
+-
+-typedef struct CellUsbdDeviceInfo {
+-    CellUsbdDeviceId deviceId;
+-    u16 vendorId;
+-    u16 productId;
+-    u8  deviceClass;
+-    u8  deviceSubClass;
+-    u8  deviceProtocol;
+-    u8  reserved;
+-} CellUsbdDeviceInfo;
++/* Error codes (cell/usbd/error.h) */
++#define CELL_USBD_ERROR_NOT_INITIALIZED        0x80110001
++#define CELL_USBD_ERROR_ALREADY_INITIALIZED    0x80110002
++#define CELL_USBD_ERROR_NO_MEMORY              0x80110003
++#define CELL_USBD_ERROR_INVALID_PARAM          0x80110004
++#define CELL_USBD_ERROR_INVALID_TRANSFER_TYPE  0x80110005
++#define CELL_USBD_ERROR_LDD_ALREADY_REGISTERED 0x80110006
++#define CELL_USBD_ERROR_LDD_NOT_ALLOCATED      0x80110007
++#define CELL_USBD_ERROR_LDD_NOT_RELEASED       0x80110008
++#define CELL_USBD_ERROR_LDD_NOT_FOUND          0x80110009
++#define CELL_USBD_ERROR_DEVICE_NOT_FOUND       0x8011000A
++#define CELL_USBD_ERROR_PIPE_NOT_ALLOCATED     0x8011000B
++#define CELL_USBD_ERROR_PIPE_NOT_RELEASED      0x8011000C
++#define CELL_USBD_ERROR_PIPE_NOT_FOUND         0x8011000D
++#define CELL_USBD_ERROR_IOREQ_NOT_ALLOCATED    0x8011000E
++#define CELL_USBD_ERROR_IOREQ_NOT_RELEASED     0x8011000F
++#define CELL_USBD_ERROR_IOREQ_NOT_FOUND        0x80110010
++#define CELL_USBD_ERROR_CANNOT_GET_DESCRIPTOR  0x80110011
++#define CELL_USBD_ERROR_FATAL                  0x801100FF
++
++/* Transfer completion results handed to the done callback */
++#define CELL_USBD_HC_CC_NOERR    0x00
++#define CELL_USBD_EHCI_CC_HALTED 0x50   /* the endpoint stalled */
++
++#define CELL_USBD_MAX_PIPES     16
++
++/* Guest structs (big-endian, 32-bit pointers):
++ *   CellUsbdLddOps     { u32 name; u32 probe; u32 attach; u32 detach; }
++ *   UsbDeviceRequest   { u8 bmRequestType; u8 bRequest; u16 wValue; u16 wIndex; u16 wLength; }
++ *                      (the u16s in the PPU's own byte order: GT5 stores them with sth)
++ *   UsbEndpointDescriptor: USB byte layout (bEndpointAddress at +2, bmAttributes at +3) */
+ 
+-typedef void (*CellUsbdLddOpsAttachCb)(CellUsbdDeviceId deviceId);
+-typedef void (*CellUsbdLddOpsDetachCb)(CellUsbdDeviceId deviceId);
+-
+-typedef struct CellUsbdLddOps {
+-    const char* name;
+-    CellUsbdLddOpsAttachCb attach;
+-    CellUsbdLddOpsDetachCb detach;
+-} CellUsbdLddOps;
+-
+-/* Functions */
+ s32 cellUsbdInit(void);
+ s32 cellUsbdEnd(void);
+-
+-s32 cellUsbdRegisterLdd(const CellUsbdLddOps* ops);
+-s32 cellUsbdUnregisterLdd(const CellUsbdLddOps* ops);
+-
+-s32 cellUsbdGetDeviceList(CellUsbdDeviceInfo* list, u32 maxDevices,
+-                            u32* numDevices);
+-
+-s32 cellUsbdOpenPipe(CellUsbdDeviceId deviceId, u32 endpoint,
+-                       CellUsbdPipeId* pipeId);
+-s32 cellUsbdClosePipe(CellUsbdPipeId pipeId);
+-
+-s32 cellUsbdBulkTransfer(CellUsbdPipeId pipeId, void* data,
+-                           u32 length, u32* transferred);
+-s32 cellUsbdControlTransfer(CellUsbdPipeId pipeId, u8 requestType,
+-                              u8 request, u16 value, u16 index,
+-                              void* data, u32 length, u32* transferred);
++s32 cellUsbdSetThreadPriority(s32 event_prio, s32 usbd_prio, s32 callback_prio);
++s32 cellUsbdSetThreadPriority2(s32 event_prio, s32 usbd_prio, s32 callback_prio);
++s32 cellUsbdGetThreadPriority(u32 prio_type, u32 prio_ea);
++
++s32 cellUsbdRegisterLdd(u32 ops_ea);
++s32 cellUsbdRegisterExtraLdd(u32 ops_ea, u16 vendor_id, u16 product_id);
++s32 cellUsbdRegisterExtraLdd2(u32 ops_ea, u16 vendor_id, u16 product_min, u16 product_max);
++s32 cellUsbdUnregisterLdd(u32 ops_ea);
++s32 cellUsbdUnregisterExtraLdd(u32 ops_ea);
++
++u32 cellUsbdScanStaticDescriptor(s32 dev_id, u32 ptr_ea, u8 type);
++s32 cellUsbdGetDeviceSpeed(s32 dev_id, u32 speed_ea);
++s32 cellUsbdGetDeviceLocation(s32 dev_id, u32 location_ea);
++s32 cellUsbdSetPrivateData(s32 dev_id, u32 priv_ea);
++u32 cellUsbdGetPrivateData(s32 dev_id);
++
++s32 cellUsbdOpenPipe(s32 dev_id, u32 endpoint_desc_ea);
++s32 cellUsbdClosePipe(s32 pipe_id);
++s32 cellUsbdControlTransfer(s32 pipe_id, u32 request_ea, u32 buf_ea, u32 done_opd, u32 arg);
++s32 cellUsbdBulkTransfer(s32 pipe_id, u32 buf_ea, s32 len, u32 done_opd, u32 arg);
++s32 cellUsbdInterruptTransfer(s32 pipe_id, u32 buf_ea, s32 len, u32 done_opd, u32 arg);
++s32 cellUsbdIsochronousTransfer(s32 pipe_id, u32 req_ea, u32 done_opd, u32 arg);
++s32 cellUsbdResetDevice(s32 dev_id);
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/libs/hardware/wheel.h b/libs/hardware/wheel.h
+new file mode 100644
+index 00000000..420e9451
+--- /dev/null
++++ b/libs/hardware/wheel.h
+@@ -0,0 +1,132 @@
++/*
++ * ps3recomp - steering wheel emulation (Logitech G27 on cellUsbd)
++ *
++ * Gran Turismo 5 and 6 drive their Logitech wheels themselves: the game
++ * registers a USB device driver with cellUsbd, reads the wheel's HID reports
++ * off its interrupt IN endpoint and writes Logitech force-feedback commands to
++ * its interrupt OUT endpoint. cellUsbd.c presents one emulated G27 to the
++ * game; this header joins it to the two halves behind it:
++ *
++ *   wheel_g27.c       the G27 itself: USB descriptors, the 11-byte input
++ *                     report, and the force-feedback command decoder, which
++ *                     keeps four effect slots plus the default spring.
++ *   wheel_host_win.c  the PC wheel: DirectInput (Windows), polled on a thread
++ *                     of its own, whose effects follow the decoder's slots.
++ *
++ * Nothing reaches the game unless a wheel is found on the host (PS3_WHEEL=off
++ * turns the search off), so a player with a pad sees no change.
++ *
++ * Adapted from gt5-recomp (https://github.com/MormonFTP-hub/gt5-recomp),
++ * MIT License, Copyright (c) 2026 MormonFTP-hub.
++ */
++#ifndef PS3RECOMP_WHEEL_H
++#define PS3RECOMP_WHEEL_H
++
++#include "ps3emu/ps3types.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* G27 buttons, by the PS3 function each one has (bit = 1 << index). The order
++ * is the G27's own report order, which a G29/G923 also uses for DirectInput
++ * button numbers 0-22, so "host button i -> WHEEL_BTN i" is the default map. */
++enum {
++    WHEEL_BTN_CROSS = 0, WHEEL_BTN_SQUARE, WHEEL_BTN_CIRCLE, WHEEL_BTN_TRIANGLE,
++    WHEEL_BTN_R1, WHEEL_BTN_L1, WHEEL_BTN_R2, WHEEL_BTN_L2,
++    WHEEL_BTN_SELECT, WHEEL_BTN_START, WHEEL_BTN_R3, WHEEL_BTN_L3,
++    WHEEL_BTN_GEAR1, WHEEL_BTN_GEAR2, WHEEL_BTN_GEAR3, WHEEL_BTN_GEAR4,
++    WHEEL_BTN_GEAR5, WHEEL_BTN_GEAR6, WHEEL_BTN_GEAR_R,
++    WHEEL_BTN_PLUS, WHEEL_BTN_MINUS, WHEEL_BTN_DIAL_CW, WHEEL_BTN_DIAL_CCW,
++    WHEEL_BTN_COUNT
++};
++
++typedef struct WheelInput {
++    int   connected;
++    float steer;        /* -1 (full left) .. +1 (full right) over the host wheel's range */
++    float throttle;     /* 0 released .. 1 floored */
++    float brake;
++    float clutch;
++    int   hat;          /* 0 = up, 1 = up-right ... 7 = up-left, -1 = centred */
++    u32   buttons;      /* 1 << WHEEL_BTN_* */
++    int   shifter;      /* an H-shifter is attached (or PS3_WHEEL_SHIFTER=1) */
++    int   steer_g27;    /* steer is the G27's own position, not a PC wheel's (mouse steering) */
++} WheelInput;
++
++/* ---- the force-feedback model the decoder keeps (wheel_g27.c) ---- */
++
++enum {
++    WHEEL_FX_NONE = 0,
++    WHEEL_FX_CONSTANT,  /* level */
++    WHEEL_FX_SPRING,    /* condition: center, deadband, k_neg/k_pos, sat */
++    WHEEL_FX_DAMPER,    /* condition: k_neg/k_pos, sat */
++    WHEEL_FX_FRICTION,  /* condition: k_neg/k_pos, sat */
++    WHEEL_FX_SQUARE,    /* periodic: magnitude, offset, period_ms */
++    WHEEL_FX_SAW_UP,
++    WHEEL_FX_SAW_DOWN,
++    WHEEL_FX_TRIANGLE,
++};
++
++typedef struct WheelEffect {
++    int   type;         /* WHEEL_FX_* */
++    int   playing;
++    float level;        /* constant: -1..+1 (byte 0x80 = 0). + pushes the rim LEFT on a
++                         * G27: GT5 sends 0x90-0xF0 to pull a wheel held right back to
++                         * the centre, below 0x80 for one held left. It goes to
++                         * DirectInput with the same sign (a force from the right). */
++    float center;       /* condition: -1..+1 (rim position) */
++    float deadband;     /* condition: half width, 0..1 */
++    float k_neg, k_pos; /* condition: -1..+1 left / right of the dead band */
++    float sat;          /* condition: 0..1 */
++    float magnitude;    /* periodic: 0..1 */
++    float offset;       /* periodic: -1..+1 */
++    u32   period_ms;    /* periodic */
++} WheelEffect;
++
++#define WHEEL_FFB_SLOTS 4
++
++typedef struct WheelFfb {
++    u32         gen;            /* bumped on every change */
++    WheelEffect slot[WHEEL_FFB_SLOTS];
++    WheelEffect def_spring;     /* the wheel's own centring spring (cmd 0x0E) */
++    int         def_spring_on;  /* cmd 0x04 / 0x05 */
++    int         range_deg;      /* rotation the game asked for (0xF8 0x81 ...), 0 = never */
++} WheelFfb;
++
++/* ---- wheel_g27.c ---- */
++u32  wheel_g27_descriptors(u8* out, u32 cap);          /* device + config blob, USB byte order */
++int  wheel_g27_report(const WheelInput* in, u8 out[11]); /* -> 11 */
++void wheel_g27_output(const u8* data, u32 len);        /* an OUT report from the game */
++void wheel_g27_ffb_snapshot(WheelFfb* out);            /* consistent copy, under the lock */
++void wheel_g27_reset(void);                            /* back to power-on state */
++int  wheel_g27_in_menus(void);                         /* the game plays its menu centring spring */
++
++/* ---- wheel_host_win.c (stubs elsewhere) ---- */
++int  wheel_host_start(void);              /* 1 if the feature is on and the thread runs */
++void wheel_host_stop(void);
++int  wheel_host_read(WheelInput* out);    /* latest state; returns out->connected */
++void wheel_host_ffb_changed(void);        /* the decoder's slots changed: resync soon */
++int  wheel_trace_on(void);                /* PS3_WHEEL_TRACE */
++
++/* What the PC wheel itself reports, for a settings page to show live. */
++typedef struct WheelRaw {
++    int   connected;
++    char  name[128];
++    u16   vid, pid;
++    int   ffb;          /* force feedback in use */
++    float axis[8];      /* X Y Z RX RY RZ S0 S1, 0..1 */
++    u32   buttons;      /* first 32 buttons, bit i = button i + 1 */
++    int   pov;          /* hundredths of a degree, -1 centred */
++} WheelRaw;
++int  wheel_host_raw(WheelRaw* out);       /* returns out->connected */
++
++/* Force-feedback tuning, live: strength 0..100 %, invert 0/1, springs (spring,
++ * damper, friction) 0..200 %, minimum steering force 0..50 %. Overrides the
++ * PS3_WHEEL_FFB* environment values from the first call on. */
++void wheel_host_set_ffb(int gain, int invert, int spring, int min_force);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* PS3RECOMP_WHEEL_H */
+diff --git a/libs/hardware/wheel_g27.c b/libs/hardware/wheel_g27.c
+new file mode 100644
+index 00000000..71b8264a
+--- /dev/null
++++ b/libs/hardware/wheel_g27.c
+@@ -0,0 +1,414 @@
++/*
++ * ps3recomp - the emulated Logitech G27 (see wheel.h)
++ *
++ * Descriptors: a G27 in its native mode (046D:C29B, bcdDevice 0x1350), as GT5
++ * expects to find one. GT5's attach (0xC21878) reads them through
++ * cellUsbdScanStaticDescriptor and opens the interrupt pipes it finds; its
++ * "genuine device" check after SET_CONFIGURATION wants bMaxPacketSize0 > 8.
++ *
++ * Input report, 11 bytes, as GT5's decoder (0xC1FCE8) reads it:
++ *   0  bits 0-3 hat (8 = centred), 4 cross, 5 square, 6 circle, 7 triangle
++ *   1  R1, L1, R2, L2, select, start, R3, L3 (bits 0-7)
++ *   2  bits 0-5 gears 1-6, 6 dial clockwise, 7 dial anticlockwise
++ *   3  bit 0 plus, bit 1 minus, bits 2-7 steering bits 0-5
++ *   4  steering bits 6-13 (0 = full left, 0x2000 centre, 0x3FFF full right)
++ *   5  throttle, 6 brake, 7 clutch (0xFF released, 0x00 floored)
++ *   8  shifter X, 9 shifter Y
++ *   10 bit 0 reverse, 1 pedals detached, 2 powered, 3 shifter attached,
++ *      4 always set, 6 shifter pressed down, 7 range above 360 degrees
++ *
++ * Output: Logitech's "classic" force-feedback protocol, 7-byte commands. The
++ * high nibble of byte 0 picks force slots 0-3, the low nibble is the command;
++ * 0xF8 starts an extended command (byte 1). The decoder keeps the four slots
++ * and the default spring in a WheelFfb, which the host side mirrors onto the
++ * PC wheel's own effects.
++ *
++ * Adapted from gt5-recomp (https://github.com/MormonFTP-hub/gt5-recomp),
++ * MIT License, Copyright (c) 2026 MormonFTP-hub.
++ */
++#include "wheel.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++
++/* ---------------------------------------------------------------------------
++ * A small lock: the game's USB event thread writes commands, the host wheel
++ * thread takes snapshots.
++ * -------------------------------------------------------------------------*/
++static volatile char s_lock;
++static void g27_lock(void)   { while (__atomic_test_and_set(&s_lock, __ATOMIC_ACQUIRE)) { } }
++static void g27_unlock(void) { __atomic_clear(&s_lock, __ATOMIC_RELEASE); }
++
++static WheelFfb s_ffb;
++
++/* ---------------------------------------------------------------------------
++ * Descriptors
++ * -------------------------------------------------------------------------*/
++static const u8 k_g27_desc[] = {
++    /* device */
++    18, 0x01, 0x00, 0x02,       /* USB 2.0 */
++    0x00, 0x00, 0x00,           /* class per interface */
++    16,                         /* bMaxPacketSize0 */
++    0x6D, 0x04, 0x9B, 0xC2,     /* 046D:C29B */
++    0x50, 0x13,                 /* bcdDevice 13.50 */
++    1, 2, 0,                    /* manufacturer, product, no serial */
++    1,                          /* one configuration */
++    /* configuration */
++    9, 0x02, 41, 0x00, 1, 1, 4, 0x80, 0x31,
++    /* interface 0: HID, two endpoints */
++    9, 0x04, 0, 0, 2, 0x03, 0x00, 0x00, 0,
++    /* HID 1.11, report descriptor 133 bytes */
++    9, 0x21, 0x11, 0x01, 0x21, 1, 0x22, 0x85, 0x00,
++    /* interrupt IN 0x81 and OUT 0x01, 16 bytes, every 2 ms */
++    7, 0x05, 0x81, 0x03, 16, 0, 2,
++    7, 0x05, 0x01, 0x03, 16, 0, 2,
++};
++
++u32 wheel_g27_descriptors(u8* out, u32 cap)
++{
++    u32 n = (u32)sizeof(k_g27_desc);
++    if (n > cap) n = cap;
++    memcpy(out, k_g27_desc, n);
++    return n;
++}
++
++/* ---------------------------------------------------------------------------
++ * Input report
++ * -------------------------------------------------------------------------*/
++static int env_int(const char* name, int def)
++{
++    const char* e = getenv(name);
++    return (e && *e) ? atoi(e) : def;
++}
++
++/* Lever position per gear, as a G27 shifter reports it. */
++static const u8 k_shift_xy[8][2] = {
++    { 0x80, 0x80 },                 /* neutral */
++    { 0x30, 0xB7 }, { 0x30, 0x32 }, /* 1, 2 */
++    { 0x80, 0xB7 }, { 0x80, 0x32 }, /* 3, 4 */
++    { 0xB3, 0xB7 }, { 0xB3, 0x32 }, /* 5, 6 */
++    { 0xAA, 0x32 },                 /* reverse */
++};
++
++static u8 pedal_byte(float v)
++{
++    if (v < 0.f) v = 0.f;
++    if (v > 1.f) v = 1.f;
++    return (u8)(255 - (int)(v * 255.f + 0.5f));
++}
++
++int wheel_g27_report(const WheelInput* in, u8 r[11])
++{
++    static int host_range = -1;
++    if (host_range < 0) {
++        host_range = env_int("PS3_WHEEL_RANGE", 900);
++        if (host_range < 90 || host_range > 3600) host_range = 900;
++    }
++    memset(r, 0, 11);
++    const u32 b = in->buttons;
++    const int hat = (in->hat >= 0 && in->hat < 8) ? in->hat : 8;
++    r[0] = (u8)(hat | ((b & 0xF) << 4));                       /* cross..triangle */
++    r[1] = (u8)((b >> WHEEL_BTN_R1) & 0xFF);                   /* R1..L3 */
++    r[2] = (u8)(((b >> WHEEL_BTN_GEAR1) & 0x3F)
++              | (((b >> WHEEL_BTN_DIAL_CW) & 1) << 6)
++              | (((b >> WHEEL_BTN_DIAL_CCW) & 1) << 7));
++
++    /* The game's rotation, if it set one: the G27 reports full lock at half its
++     * range, so a 900-degree PC wheel driving a 200-degree G27 reaches the stop
++     * at 100 degrees and saturates past it, as the real wheel would. */
++    int game_range = __atomic_load_n(&s_ffb.range_deg, __ATOMIC_RELAXED);
++    if (game_range < 40 || game_range > 3600) game_range = host_range;
++    float s = in->steer_g27 ? in->steer : in->steer * (float)host_range / (float)game_range;
++    if (s < -1.f) s = -1.f;
++    if (s > 1.f) s = 1.f;
++    int st = 0x2000 + (int)(s * 8192.f);
++    if (st < 0) st = 0;
++    if (st > 0x3FFF) st = 0x3FFF;
++    r[3] = (u8)(((b >> WHEEL_BTN_PLUS) & 1) | (((b >> WHEEL_BTN_MINUS) & 1) << 1) | ((st & 0x3F) << 2));
++    r[4] = (u8)(st >> 6);
++
++    r[5] = pedal_byte(in->throttle);
++    r[6] = pedal_byte(in->brake);
++    r[7] = pedal_byte(in->clutch);
++
++    int gear = 0;
++    for (int g = 0; g < 6; g++) if (b & (1u << (WHEEL_BTN_GEAR1 + g))) gear = g + 1;
++    const int rev = (b >> WHEEL_BTN_GEAR_R) & 1;
++    if (rev) gear = 7;
++    r[8] = k_shift_xy[gear][0];
++    r[9] = k_shift_xy[gear][1];
++    r[10] = (u8)(rev | 0x04 | (in->shifter ? 0x08 : 0) | 0x10 | (rev ? 0x40 : 0)
++               | (game_range > 360 ? 0x80 : 0));
++    return 11;
++}
++
++/* ---------------------------------------------------------------------------
++ * Force feedback
++ * -------------------------------------------------------------------------*/
++static float f_level(u8 v)     /* 0x80 is no force; 0x7F counts as none too */
++{
++    if (v == 0x7F || v == 0x80) return 0.f;
++    float f = ((float)v - 128.f) / 127.f;
++    return f < -1.f ? -1.f : (f > 1.f ? 1.f : f);
++}
++static float f_pos8(u8 v)      { return ((float)v - 127.5f) / 127.5f; }
++static float f_pos11(int v)    { return ((float)v - 1023.5f) / 1023.5f; }
++static float f_k(int k, int sign, int bits)
++{
++    const float max = (float)((1 << bits) - 1);
++    float f = (float)k / max;
++    return sign ? -f : f;
++}
++
++static void spring_from(WheelEffect* e, float d1, float d2, float k1, float k2, float sat)
++{
++    e->type = WHEEL_FX_SPRING;
++    if (d2 < d1) { float t = d1; d1 = d2; d2 = t; }
++    e->center = (d1 + d2) * 0.5f;
++    e->deadband = (d2 - d1) * 0.5f;
++    e->k_neg = k1;
++    e->k_pos = k2;
++    e->sat = sat;
++}
++
++/* Byte 1 is the force type, bytes 2-6 its parameters. `slot` matters for the
++ * constant force (each slot has its own level byte) and the variable force. */
++static int decode_effect(const u8* c, int slot, WheelEffect* e)
++{
++    const int playing = e->playing;
++    memset(e, 0, sizeof(*e));
++    e->playing = playing;
++    switch (c[1]) {
++    case 0x00:  /* constant: level per slot in bytes 2-5 */
++        e->type = WHEEL_FX_CONSTANT;
++        e->level = f_level(c[2 + (slot & 3)]);
++        return 1;
++    case 0x01:  /* spring: dead band D1/D2, K1/K2 (3 bits), S1/S2, clip */
++        spring_from(e, f_pos8(c[2]), f_pos8(c[3]),
++                    f_k(c[4] & 7, c[5] & 1, 3), f_k((c[4] >> 4) & 7, (c[5] >> 4) & 1, 3),
++                    (float)c[6] / 255.f);
++        return 1;
++    case 0x0B: { /* high-resolution spring: 11-bit dead band, 4-bit K */
++        const int d1 = (c[2] << 3) | ((c[5] >> 1) & 7);
++        const int d2 = (c[3] << 3) | ((c[5] >> 5) & 7);
++        spring_from(e, f_pos11(d1), f_pos11(d2),
++                    f_k(c[4] & 15, c[5] & 1, 4), f_k((c[4] >> 4) & 15, (c[5] >> 4) & 1, 4),
++                    (float)c[6] / 255.f);
++        return 1; }
++    case 0x03:  /* auto-centre spring: K1/K2 (3 bits), clip */
++        spring_from(e, 0.f, 0.f, f_k(c[2] & 7, 0, 3), f_k(c[3] & 7, 0, 3), (float)c[4] / 255.f);
++        return 1;
++    case 0x0D:  /* high-resolution auto-centre spring */
++        spring_from(e, 0.f, 0.f, f_k(c[2] & 15, 0, 4), f_k(c[3] & 15, 0, 4), (float)c[4] / 255.f);
++        return 1;
++    case 0x02:  /* damper: K1, S1, K2, S2 (3 bits), no clip */
++        e->type = WHEEL_FX_DAMPER;
++        e->k_neg = f_k(c[2] & 7, c[3] & 1, 3);
++        e->k_pos = f_k(c[4] & 7, c[5] & 1, 3);
++        e->sat = 1.f;
++        return 1;
++    case 0x0C:  /* high-resolution damper: 4-bit K, clip */
++        e->type = WHEEL_FX_DAMPER;
++        e->k_neg = f_k(c[2] & 15, c[3] & 1, 4);
++        e->k_pos = f_k(c[4] & 15, c[5] & 1, 4);
++        e->sat = (float)c[6] / 255.f;
++        return 1;
++    case 0x0E:  /* friction: K1, K2 (8 bits), clip, S1/S2 */
++        e->type = WHEEL_FX_FRICTION;
++        e->k_neg = f_k(c[2], c[5] & 1, 8);
++        e->k_pos = f_k(c[3], (c[5] >> 4) & 1, 8);
++        e->sat = (float)c[4] / 255.f;
++        return 1;
++    case 0x04:  /* sawtooth up / down: L1 high, L2 low, L0 start, T/I in byte 6 */
++    case 0x05: {
++        const int hi = c[2], lo = c[3];
++        const int t = (c[6] >> 4) & 15, inc = c[6] & 15;
++        e->type = c[1] == 0x04 ? WHEEL_FX_SAW_UP : WHEEL_FX_SAW_DOWN;
++        e->magnitude = (float)abs(hi - lo) / 255.f;
++        e->offset = f_level((u8)((hi + lo) / 2));
++        e->period_ms = (u32)(abs(hi - lo) / (inc ? inc : 1) * (t ? t : 1) * 2);
++        return 1; }
++    case 0x06:  /* trapezoid: L1, L2, T1 at L1, T2 at L2, slope in byte 6 */
++    case 0x07: { /* rectangle: L1, L2, T1, T2, phase */
++        const int hi = c[2], lo = c[3];
++        e->type = c[1] == 0x06 ? WHEEL_FX_TRIANGLE : WHEEL_FX_SQUARE;
++        e->magnitude = (float)abs(hi - lo) / 255.f;
++        e->offset = f_level((u8)((hi + lo) / 2));
++        e->period_ms = (u32)((c[4] + c[5]) * 2);
++        return 1; }
++    case 0x0A:  /* square: amplitude, 16-bit half period, count */
++        e->type = WHEEL_FX_SQUARE;
++        e->magnitude = (float)c[2] / 255.f;
++        e->period_ms = (u32)((c[3] | (c[4] << 8)) * 2);
++        return 1;
++    case 0x08:  /* variable force: slots 0 and 2 only, level L1 / L2 */
++    case 0x09:  /* ramp: start from L1 */
++        e->type = WHEEL_FX_CONSTANT;
++        e->level = f_level((slot & 2) ? c[3] : c[2]);
++        return 1;
++    default:
++        return 0;
++    }
++}
++
++/* Logging, so a player's logs\play.err says what the game asked of the wheel:
++ * every command once it is decoded, except the two the game repeats many times
++ * a second in a race (the steering force and the rev lights), which are summed
++ * up every 30 s instead. PS3_WHEEL_TRACE=1 logs those one by one as well. */
++static unsigned s_trace_lines;
++static struct { unsigned n, leds; float lo, hi; time_t t0; } s_sum;
++
++static void sum_flush(int force)
++{
++    const time_t now = time(NULL);
++    if (!s_sum.t0) s_sum.t0 = now;
++    if (!force && now - s_sum.t0 < 30) return;
++    if (s_sum.n || s_sum.leds)
++        fprintf(stderr, "[wheel] ffb last %lds: %u steering-force updates (level %+.2f..%+.2f), %u rev-light updates\n",
++                (long)(now - s_sum.t0), s_sum.n, s_sum.n ? s_sum.lo : 0.f, s_sum.n ? s_sum.hi : 0.f, s_sum.leds);
++    memset(&s_sum, 0, sizeof s_sum);
++    s_sum.t0 = now;
++}
++
++static void trace_cmd(const char* what, const u8* c)
++{
++    if (s_trace_lines >= (wheel_trace_on() ? 20000u : 400u)) return;
++    s_trace_lines++;
++    fprintf(stderr, "[wheel] ffb %-10s %02X %02X %02X %02X %02X %02X %02X\n",
++            what, c[0], c[1], c[2], c[3], c[4], c[5], c[6]);
++}
++
++/* The steering force and rev lights: one by one only with PS3_WHEEL_TRACE. */
++static void note_frequent(const char* what, const u8* c, int is_force, float level)
++{
++    if (is_force) {
++        if (!s_sum.n || level < s_sum.lo) s_sum.lo = level;
++        if (!s_sum.n || level > s_sum.hi) s_sum.hi = level;
++        s_sum.n++;
++    } else {
++        s_sum.leds++;
++    }
++    if (wheel_trace_on()) trace_cmd(what, c);
++    sum_flush(0);
++}
++
++/* One 7-byte command. Returns 1 if the effect state changed. */
++static int g27_command(const u8* c)
++{
++    if (c[0] == 0xF8) {   /* extended */
++        switch (c[1]) {
++        case 0x02: s_ffb.range_deg = 200; trace_cmd("range200", c); return 1;
++        case 0x03: s_ffb.range_deg = 900; trace_cmd("range900", c); return 1;
++        case 0x81: s_ffb.range_deg = c[2] | (c[3] << 8); trace_cmd("range", c); return 1;
++        case 0x12: note_frequent("leds", c, 0, 0.f); return 0;   /* rev lights */
++        default:   trace_cmd("ext", c); return 0;           /* mode switches: already native */
++        }
++    }
++    const int cmd = c[0] & 0x0F, mask = c[0] >> 4;
++    int changed = 0;
++    switch (cmd) {
++    case 0x0:   /* download */
++    case 0x1:   /* download and play */
++    case 0xC:   /* refresh */
++        for (int s = 0; s < WHEEL_FFB_SLOTS; s++) {
++            if (!(mask & (1 << s))) continue;
++            WheelEffect* e = &s_ffb.slot[s];
++            const int was = e->type;
++            if (!decode_effect(c, s, e)) { trace_cmd("type?", c); continue; }
++            if (cmd == 0x0) e->playing = 0;
++            if (cmd == 0x1) e->playing = 1;
++            if (cmd == 0xC && was == WHEEL_FX_NONE) e->playing = 1;  /* refresh of an empty slot starts it */
++            changed = 1;
++        }
++        if (changed) {
++            const char* what = cmd == 0 ? "download" : cmd == 1 ? "dl+play" : "refresh";
++            /* Constant / variable / ramp: the race's steering force, many a second. */
++            if (c[1] == 0x00 || c[1] == 0x08 || c[1] == 0x09) {
++                int s = 0;
++                while (s < WHEEL_FFB_SLOTS - 1 && !(mask & (1 << s))) s++;
++                note_frequent(what, c, 1, s_ffb.slot[s].level);
++            } else {
++                trace_cmd(what, c);
++            }
++        }
++        break;
++    case 0x2:   /* play */
++    case 0x3:   /* stop */
++        for (int s = 0; s < WHEEL_FFB_SLOTS; s++)
++            if (mask & (1 << s)) { s_ffb.slot[s].playing = cmd == 0x2; changed = 1; }
++        trace_cmd(cmd == 2 ? "play" : "stop", c);
++        break;
++    case 0x4:   /* default spring on */
++    case 0x5:   /* default spring off */
++        s_ffb.def_spring_on = cmd == 0x4;
++        changed = 1;
++        trace_cmd(cmd == 4 ? "defspr on" : "defspr off", c);
++        break;
++    case 0xE:   /* set default spring: K1, K2 (3 bits), clip */
++        spring_from(&s_ffb.def_spring, 0.f, 0.f, f_k(c[2] & 7, 0, 3), f_k(c[3] & 7, 0, 3),
++                    (float)c[4] / 255.f);
++        changed = 1;
++        trace_cmd("defspr set", c);
++        break;
++    default:    /* 0x8 normal mode, 0x9 LED, 0xA watchdog, 0xB raw, 0xD loop, 0xF dead band */
++        trace_cmd("other", c);
++        break;
++    }
++    return changed;
++}
++
++void wheel_g27_output(const u8* data, u32 len)
++{
++    if (!data || len < 7) return;
++    /* Refreshes of the constant force are most of the traffic in a race;
++     * trace the first few and then only every 64th, so the log stays small. */
++    static unsigned n;
++    if (wheel_trace_on() && (n++ < 64 || (n & 63) == 0) && s_trace_lines < 4000) {
++        s_trace_lines++;
++        fprintf(stderr, "[wheel] out len=%u:", len);
++        for (u32 i = 0; i < len && i < 16; i++) fprintf(stderr, " %02X", data[i]);
++        fprintf(stderr, "\n");
++    }
++    g27_lock();
++    int changed = g27_command(data);
++    if (changed) s_ffb.gen++;
++    g27_unlock();
++    if (changed) wheel_host_ffb_changed();
++}
++
++/* Is the game at its menus? GT5 keeps a centring spring playing in a slot there
++ * (`21 0B 7F 7F 77 00 80`, from the moment its driver takes the wheel) and stops it as a race
++ * loads (`23 0B ...`); in the race it only plays the steering force (`11 08 xx 80`), which it
++ * also stops and restarts now and then, and through the start countdown. So the spring, not
++ * the steering force, tells menus from driving. The host side uses this to let a wheel with
++ * no d-pad move through menus without touching the race (wheel_host_win.c). */
++int wheel_g27_in_menus(void)
++{
++    int on = 0;
++    g27_lock();
++    for (int s = 0; s < WHEEL_FFB_SLOTS; s++)
++        if (s_ffb.slot[s].playing && s_ffb.slot[s].type == WHEEL_FX_SPRING) on = 1;
++    g27_unlock();
++    return on;
++}
++
++void wheel_g27_ffb_snapshot(WheelFfb* out)
++{
++    g27_lock();
++    *out = s_ffb;
++    g27_unlock();
++}
++
++void wheel_g27_reset(void)
++{
++    g27_lock();
++    const u32 gen = s_ffb.gen;
++    memset(&s_ffb, 0, sizeof(s_ffb));
++    /* Power-on: the wheel's own centring spring is on until a game turns it off. */
++    spring_from(&s_ffb.def_spring, 0.f, 0.f, f_k(3, 0, 3), f_k(3, 0, 3), 1.f);
++    s_ffb.def_spring_on = 1;
++    s_ffb.gen = gen + 1;
++    g27_unlock();
++    wheel_host_ffb_changed();
++}
+diff --git a/libs/hardware/wheel_host_win.c b/libs/hardware/wheel_host_win.c
+new file mode 100644
+index 00000000..003cd227
+--- /dev/null
++++ b/libs/hardware/wheel_host_win.c
+@@ -0,0 +1,1189 @@
++/*
++ * ps3recomp - the PC steering wheel behind the emulated G27 (see wheel.h)
++ *
++ * Windows: DirectInput 8, which every wheel driver (Logitech G HUB / LGS,
++ * Thrustmaster, Fanatec) serves, force feedback included. One thread owns the
++ * device: it looks for a wheel every few seconds until one is there, polls it
++ * every millisecond, publishes a WheelInput, and keeps the wheel's effects in
++ * step with the four force slots and default spring the G27 decoder holds.
++ *
++ * Settings (environment):
++ *   PS3_WHEEL            unset/auto: use the first wheel found.  off: never.
++ *                        (The game controllers seen are listed once in the log.)
++ *                        virtual: a G27 with no PC device behind it, for testing
++ *                        the game side; PS3_WHEEL_VIRTUAL=steer=-1,throttle=1,delay=190
++ *                        holds the rim and pedals there from that second on.
++ *                        anything else: a wheel whose name or VID:PID contains it.
++ *   PS3_WHEEL_RANGE      degrees of rotation the PC wheel is set to (900).
++ *   PS3_WHEEL_FFB        force feedback strength in percent (100; 0 = off).
++ *   PS3_WHEEL_FFB_INVERT 1 = the game's constant forces push the other way.
++ *   PS3_WHEEL_PEDALS     e.g. throttle=Y,brake=RZ,clutch=Z (axes X Y Z RX RY RZ S0 S1);
++ *                        add inv to a pedal (brake=RZinv) if it reads backwards.
++ *                        Throttle and brake on one axis (older wheels: it rests in the
++ *                        middle and there's no brake axis; or throttle=Y,brake=Y) are
++ *                        split where it rests: below is throttle, throttle=Yinv swaps.
++ *   PS3_WHEEL_STEER      steering axis (X).
++ *   PS3_WHEEL_BUTTONS    e.g. cross=1,circle=3,start=10, by the numbers Windows'
++ *                        Game Controllers panel shows (1 = first button);
++ *                        up/down/left/right put the d-pad on buttons, and
++ *                        throttle/brake/clutch a pedal (brake=4: button 4 brakes fully).
++ *   PS3_WHEEL_MENU       how a wheel with no d-pad moves through menus. Unset: at the
++ *                        game's menus (it plays its menu centring spring there),
++ *                        turning the rim is d-pad left/right and the throttle / brake
++ *                        are down / up. off: never. on: also on a wheel with a d-pad.
++ *   PS3_WHEEL_SHIFTER    1/0: report an H-shifter attached or not (default: once
++ *                        a gear is engaged).
++ *   PS3_WHEEL_TRACE      1 = log what the wheel and the game exchange.
++ *   PS3_WHEEL_FFB_SPRING percent for the game's spring, damper and friction effects (100).
++ *   PS3_WHEEL_FFB_MIN    minimum force in percent for the game's steering force (0): lifts
++ *                        small forces past a gear or belt wheel's own friction.
++ *   PS3_WHEEL_FFB_MUTE   0 = keep forces while the settings page (F1) has the input or the
++ *                        game window is in the background; default 1 stops them then.
++ *
++ * Adapted from gt5-recomp (https://github.com/MormonFTP-hub/gt5-recomp, MIT,
++ * (c) 2026 MormonFTP-hub): its mouse steering and in-game menu hooks are left
++ * out; the settings page's input block (g_pad_input_blocked) and the force
++ * feedback tuning and muting are this port's.
++ */
++#include "wheel.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <ctype.h>
++#include <math.h>
++
++static int s_trace = -1;
++int wheel_trace_on(void)
++{
++    if (s_trace < 0) { const char* e = getenv("PS3_WHEEL_TRACE"); s_trace = (e && *e && *e != '0') ? 1 : 0; }
++    return s_trace;
++}
++
++#ifdef _WIN32
++
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#define DIRECTINPUT_VERSION 0x0800
++#include <windows.h>
++#include <dinput.h>
++#pragma comment(lib, "dinput8.lib")
++#pragma comment(lib, "dxguid.lib")
++
++/* ---------------------------------------------------------------------------
++ * Settings
++ * -------------------------------------------------------------------------*/
++enum { AX_X, AX_Y, AX_Z, AX_RX, AX_RY, AX_RZ, AX_S0, AX_S1, AX_COUNT, AX_NONE = -1 };
++static const char* const k_axis_name[AX_COUNT] = { "X", "Y", "Z", "RX", "RY", "RZ", "S0", "S1" };
++
++static const char* const k_btn_name[WHEEL_BTN_COUNT] = {
++    "cross", "square", "circle", "triangle", "r1", "l1", "r2", "l2",
++    "select", "start", "r3", "l3", "gear1", "gear2", "gear3", "gear4",
++    "gear5", "gear6", "gearr", "plus", "minus", "dialcw", "dialccw",
++};
++/* The d-pad on buttons, for wheels without one: hat directions 0, 2, 4, 6. */
++static const char* const k_dpad_name[4] = { "up", "right", "down", "left" };
++
++enum { MODE_OFF, MODE_AUTO, MODE_MATCH, MODE_VIRTUAL };
++
++typedef struct {
++    int  steer;
++    int  pedal[3];          /* throttle, brake, clutch: AX_* or AX_NONE */
++    int  pedal_inv[3];      /* -1 = released where it rests (see pedal()), 2 = the other end */
++    int  btn[WHEEL_BTN_COUNT];  /* host button index (0-based) per G27 button, -1 = none */
++    int  dpad[4];               /* host button per d-pad direction (up right down left), -1 = none */
++    int  pbtn[3];               /* host button that floors throttle, brake, clutch, -1 = none */
++} WheelMap;
++
++static int   s_mode = -1;
++static char  s_match[128];
++static int   s_list = 1;      /* print every game controller on the first look */
++static int   s_gain = 100;
++static float s_ffb_sign = 1.f;
++static float s_spring_scale = 1.f;   /* PS3_WHEEL_FFB_SPRING / 100 */
++static float s_min_force;            /* PS3_WHEEL_FFB_MIN / 100 */
++static int   s_mute_cfg = 1;         /* PS3_WHEEL_FFB_MUTE */
++static int   s_shifter_cfg = -1;
++static int   s_menu_cfg = -1;  /* PS3_WHEEL_MENU: -1 = wheels with no d-pad, 0 = off, 1 = all */
++static int   s_has_hat = 1;    /* the wheel has a d-pad (a POV hat) */
++static int   s_vbtn;           /* virtual wheel: host button held (1-based), 0 = none */
++
++static void lower(char* s) { for (; *s; s++) *s = (char)tolower((unsigned char)*s); }
++
++static void read_settings(void)
++{
++    if (s_mode >= 0) return;
++    const char* e = getenv("PS3_WHEEL");
++    char v[128] = "";
++    if (e) { snprintf(v, sizeof v, "%s", e); lower(v); }
++    if (!*v || !strcmp(v, "auto") || !strcmp(v, "1") || !strcmp(v, "on")) s_mode = MODE_AUTO;
++    else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "no")) s_mode = MODE_OFF;
++    else if (!strcmp(v, "list")) s_mode = MODE_AUTO;   /* kept: the list is always printed once now */
++    else if (!strcmp(v, "virtual")) s_mode = MODE_VIRTUAL;
++    else { s_mode = MODE_MATCH; snprintf(s_match, sizeof s_match, "%s", v); }
++    e = getenv("PS3_WHEEL_FFB");
++    if (e && *e) { s_gain = atoi(e); if (s_gain < 0) s_gain = 0; if (s_gain > 100) s_gain = 100; }
++    e = getenv("PS3_WHEEL_FFB_INVERT");
++    if (e && *e == '1') s_ffb_sign = -1.f;
++    e = getenv("PS3_WHEEL_FFB_SPRING");
++    if (e && *e) { int v = atoi(e); if (v < 0) v = 0; if (v > 200) v = 200; s_spring_scale = (float)v / 100.f; }
++    e = getenv("PS3_WHEEL_FFB_MIN");
++    if (e && *e) { int v = atoi(e); if (v < 0) v = 0; if (v > 50) v = 50; s_min_force = (float)v / 100.f; }
++    e = getenv("PS3_WHEEL_FFB_MUTE");
++    if (e && *e == '0') s_mute_cfg = 0;
++    e = getenv("PS3_WHEEL_SHIFTER");
++    if (e && *e) s_shifter_cfg = (*e == '1');
++    e = getenv("PS3_WHEEL_MENU");
++    if (e && *e) {
++        char m[16]; snprintf(m, sizeof m, "%s", e); lower(m);
++        if (!strcmp(m, "off") || !strcmp(m, "0") || !strcmp(m, "no")) s_menu_cfg = 0;
++        else if (!strcmp(m, "on") || !strcmp(m, "1") || !strcmp(m, "yes")) s_menu_cfg = 1;
++    }
++}
++
++static int axis_by_name(const char* s, int* inv)
++{
++    char n[16]; int i = 0;
++    while (s[i] && s[i] != ',' && i < 15) { n[i] = (char)toupper((unsigned char)s[i]); i++; }
++    n[i] = 0;
++    *inv = -1;
++    char* p = strstr(n, "INV");
++    if (p) { *p = 0; *inv = 2; }   /* 2 = flip whatever the default is */
++    for (int a = 0; a < AX_COUNT; a++) if (!strcmp(n, k_axis_name[a])) return a;
++    if (!strcmp(n, "SLIDER") || !strcmp(n, "SLIDER0")) return AX_S0;
++    if (!strcmp(n, "NONE")) return AX_NONE;
++    return -2;
++}
++
++/* Defaults by model, then the PS3_WHEEL_* overrides. */
++static void build_map(WheelMap* m, u16 vid, u16 pid)
++{
++    m->steer = AX_X;
++    for (int i = 0; i < WHEEL_BTN_COUNT; i++) m->btn[i] = i;   /* G29/G923 order */
++    for (int d = 0; d < 4; d++) m->dpad[d] = -1;
++    for (int p = 0; p < 3; p++) m->pbtn[p] = -1;
++    /* Pedals rest at the top of their range on Logitech wheels. Axis usage
++     * differs: G29 / G923 (PlayStation) put the clutch on Z and the brake on
++     * Rz, the G920 / G923 (Xbox) the other way round. */
++    m->pedal[0] = AX_Y; m->pedal[1] = AX_RZ; m->pedal[2] = AX_Z;
++    m->pedal_inv[0] = m->pedal_inv[1] = m->pedal_inv[2] = -1;
++    if (vid == 0x044F) {
++        /* Thrustmaster, pedals "separate" (their control panel's normal mode): accelerator on
++         * Rz, brake on Y, clutch on the first slider, as Thrustmaster's manuals list them. A
++         * T-GT under the Logitech layout had the throttle and the brake swapped (a player, 15
++         * Nov 2026). In "combined" mode both share Y: see the rest-point check in dev_poll. */
++        m->pedal[0] = AX_RZ; m->pedal[1] = AX_Y; m->pedal[2] = AX_S0;
++    }
++    if (vid == 0x046D) {
++        if (pid == 0xC262 || pid == 0xC26D || pid == 0xC26E) {   /* G920, G923 Xbox */
++            static const int xb[] = {
++                WHEEL_BTN_CROSS, WHEEL_BTN_CIRCLE, WHEEL_BTN_SQUARE, WHEEL_BTN_TRIANGLE,
++                WHEEL_BTN_R1, WHEEL_BTN_L1, WHEEL_BTN_START, WHEEL_BTN_SELECT,
++                WHEEL_BTN_R3, WHEEL_BTN_L3 };
++            for (int i = 0; i < WHEEL_BTN_COUNT; i++)
++                if (i < WHEEL_BTN_GEAR1) m->btn[i] = -1;
++            for (int h = 0; h < 10; h++) m->btn[xb[h]] = h;
++            m->pedal[1] = AX_Z; m->pedal[2] = AX_RZ;
++        } else if (pid == 0xC299 || pid == 0xC29A || pid == 0xC29B || pid == 0xC298 || pid == 0xC294) {
++            m->pedal[1] = AX_Z; m->pedal[2] = AX_RZ;              /* G25 / DFGT / G27 / DFP */
++        }
++    }
++    const char* e = getenv("PS3_WHEEL_STEER");
++    int inv;
++    if (e && *e) { int a = axis_by_name(e, &inv); if (a >= 0) m->steer = a; }
++    e = getenv("PS3_WHEEL_PEDALS");
++    if (e && *e) {
++        static const char* const pn[3] = { "throttle", "brake", "clutch" };
++        char buf[256]; snprintf(buf, sizeof buf, "%s", e); lower(buf);
++        for (int p = 0; p < 3; p++) {
++            const char* at = strstr(buf, pn[p]);
++            if (!at || at[strlen(pn[p])] != '=') continue;
++            int a = axis_by_name(at + strlen(pn[p]) + 1, &inv);
++            if (a == -2) continue;
++            m->pedal[p] = a;
++            if (inv == 2) m->pedal_inv[p] = 2;
++        }
++    }
++    e = getenv("PS3_WHEEL_BUTTONS");
++    if (e && *e) {
++        char buf[512]; snprintf(buf, sizeof buf, "%s", e); lower(buf);
++        int set[WHEEL_BTN_COUNT] = { 0 };
++        for (char* tok = strtok(buf, ",; "); tok; tok = strtok(NULL, ",; ")) {
++            char* eq = strchr(tok, '=');
++            if (!eq) continue;
++            *eq = 0;
++            for (int i = 0; i < WHEEL_BTN_COUNT; i++)
++                if (!strcmp(tok, k_btn_name[i])) { m->btn[i] = atoi(eq + 1) - 1; set[i] = 1; }   /* 1-based, 0 = none */
++            for (int d = 0; d < 4; d++)
++                if (!strcmp(tok, k_dpad_name[d])) m->dpad[d] = atoi(eq + 1) - 1;
++            /* A pedal on a button, for a wheel whose pedals are missing or broken. */
++            static const char* const pn[3] = { "throttle", "brake", "clutch" };
++            for (int p = 0; p < 3; p++)
++                if (!strcmp(tok, pn[p])) m->pbtn[p] = atoi(eq + 1) - 1;
++        }
++        /* A button given a job here leaves the one it had by default only: start=8 on an
++         * eight-button wheel makes button 8 Start, not Start and L2. */
++        for (int i = 0; i < WHEEL_BTN_COUNT; i++) {
++            if (set[i] || m->btn[i] < 0) continue;
++            int taken = 0;
++            for (int j = 0; j < WHEEL_BTN_COUNT; j++) if (set[j] && m->btn[j] == m->btn[i]) taken = 1;
++            for (int d = 0; d < 4; d++) if (m->dpad[d] == m->btn[i]) taken = 1;
++            for (int p = 0; p < 3; p++) if (m->pbtn[p] == m->btn[i]) taken = 1;
++            if (taken) m->btn[i] = -1;
++        }
++    }
++}
++
++/* ---------------------------------------------------------------------------
++ * Published state
++ * -------------------------------------------------------------------------*/
++/* cellPad.c: set while the settings page (F1) has the input; the game then sees every pad
++ * at rest, and the wheel too. */
++extern volatile int g_pad_input_blocked;
++
++static SRWLOCK      s_pub_lock = SRWLOCK_INIT;
++static WheelInput   s_pub;
++static ULONGLONG    s_pub_ms;   /* when the device thread last published (GetTickCount64) */
++static HANDLE       s_thread;
++static volatile LONG s_stop;
++static volatile LONG s_ffb_dirty = 1;
++static int          s_started;
++
++/* Called on the USB worker thread only (cellUsbd.c). */
++int wheel_host_read(WheelInput* out)
++{
++    AcquireSRWLockShared(&s_pub_lock);
++    *out = s_pub;
++    const ULONGLONG at = s_pub_ms;
++    ReleaseSRWLockShared(&s_pub_lock);
++    /* The device thread publishes every millisecond or two. When it stops (stuck in the
++     * wheel's driver, or the PC too busy to run it) the game must not keep the last rim and
++     * pedal positions, which steers the car into a wall with the throttle held: the rim is
++     * centred and the pedals released until the thread is back. */
++    static int stale;
++    static unsigned said;
++    if (out->connected && at) {
++        const ULONGLONG age = GetTickCount64() - at;
++        if (age >= 250) {
++            const int shifter = out->shifter;
++            memset(out, 0, sizeof *out);
++            out->connected = 1; out->hat = -1; out->shifter = shifter;
++            if (!stale && said < 20) {
++                said++;
++                fprintf(stderr, "[wheel] no reading from the PC wheel for %llu ms: rim centred, pedals released "
++                                "until it answers\n", age);
++            }
++            stale = 1;
++        } else if (stale) {
++            stale = 0;
++            if (said < 20) { said++; fprintf(stderr, "[wheel] reading the PC wheel again\n"); }
++        }
++    }
++    /* The settings page has the input: the game gets a centred rim and released pedals, as it
++     * gets a controller at rest. */
++    if (out->connected && g_pad_input_blocked) {
++        const int shifter = out->shifter;
++        memset(out, 0, sizeof *out);
++        out->connected = 1; out->hat = -1; out->shifter = shifter;
++    }
++    return out->connected;
++}
++
++void wheel_host_ffb_changed(void) { InterlockedExchange(&s_ffb_dirty, 1); }
++
++static WheelRaw s_raw;
++
++int wheel_host_raw(WheelRaw* out)
++{
++    AcquireSRWLockShared(&s_pub_lock);
++    *out = s_raw;
++    ReleaseSRWLockShared(&s_pub_lock);
++    return out->connected;
++}
++
++static void publish(const WheelInput* in)
++{
++    AcquireSRWLockExclusive(&s_pub_lock);
++    s_pub = *in;
++    s_pub_ms = GetTickCount64();
++    ReleaseSRWLockExclusive(&s_pub_lock);
++}
++
++/* ---------------------------------------------------------------------------
++ * Device
++ * -------------------------------------------------------------------------*/
++static LPDIRECTINPUT8W       s_di;
++static LPDIRECTINPUTDEVICE8W s_dev;
++static HWND                  s_hwnd;
++static int                   s_has_ffb;
++static u16                   s_vid, s_pid;
++static char                  s_name[260];
++static WheelMap              s_map;
++static int                   s_rest_known;
++static ULONGLONG             s_rest_wait;    /* when the wait for the wheel's first report began */
++static LONG                  s_rest[AX_COUNT];
++/* Rest points survive the same wheel dropping out and coming back: measured again then, a pedal
++ * or the rim held at that moment would become "rest" (a held throttle staying on afterwards). */
++static int                   s_rest_have;
++static u16                   s_rest_vid, s_rest_pid;
++static ULONGLONG             s_lost_at;      /* when the wheel last stopped answering for good, 0 = never */
++static int                   s_axis_present[AX_COUNT];
++static int                   s_shifter_seen;
++static ULONGLONG             s_ffb_retry_at;
++/* Throttle and brake on one axis (see pedal()), decided once its rest point is known. */
++static int                   s_split;
++static LONG                  s_split_at;
++static int                   s_split_swap;   /* 1 = above the rest point is the throttle */
++
++typedef struct {
++    GUID inst;
++    char name[260];
++    u16  vid, pid;
++    int  score;
++} Cand;
++
++static void utf8(const WCHAR* w, char* out, int cap)
++{
++    if (!WideCharToMultiByte(CP_UTF8, 0, w, -1, out, cap, NULL, NULL)) out[0] = 0;
++}
++
++static int contains_ci(const char* hay, const char* needle)
++{
++    char h[300]; snprintf(h, sizeof h, "%s", hay); lower(h);
++    return strstr(h, needle) != NULL;
++}
++
++static int s_enum_count;
++
++static BOOL CALLBACK enum_cb(LPCDIDEVICEINSTANCEW di, LPVOID ctx)
++{
++    Cand* best = (Cand*)ctx;
++    s_enum_count++;
++    Cand c; memset(&c, 0, sizeof c);
++    c.inst = di->guidInstance;
++    utf8(di->tszProductName, c.name, sizeof c.name);
++    c.vid = LOWORD(di->guidProduct.Data1);
++    c.pid = HIWORD(di->guidProduct.Data1);
++    static const u8 zero[sizeof(GUID)];
++    const int ff = memcmp(&di->guidFFDriver, zero, sizeof(GUID)) != 0;
++    const int driving = GET_DIDEVICE_TYPE(di->dwDevType) == DI8DEVTYPE_DRIVING;
++    char vp[16]; snprintf(vp, sizeof vp, "%04x:%04x", c.vid, c.pid);
++    if (s_list)
++        fprintf(stderr, "[wheel] found %s \"%s\"%s%s\n", vp, c.name,
++                driving ? " (wheel)" : "", ff ? " (force feedback)" : "");
++    if (s_mode == MODE_MATCH) {
++        c.score = (contains_ci(c.name, s_match) || strstr(vp, s_match)) ? 10 : 0;
++    } else {
++        if (driving) c.score += 4;
++        if (ff) c.score += 1;
++        /* Some wheels call themselves a joystick and have no force feedback (the
++         * Genius Speed Wheel 3 Vibration): "wheel" in the name is enough. */
++        if (contains_ci(c.name, "wheel") || contains_ci(c.name, "driving force"))
++            c.score += 3;
++        else if (contains_ci(c.name, "racing"))
++            c.score += 2;
++        if (c.score < 3) c.score = 0;   /* a pad with rumble is not a wheel */
++    }
++    if (c.score > best->score) *best = c;
++    return DIENUM_CONTINUE;
++}
++
++static void set_prop_dword(REFGUID prop, DWORD how, DWORD obj, DWORD value)
++{
++    DIPROPDWORD p;
++    p.diph.dwSize = sizeof(DIPROPDWORD);
++    p.diph.dwHeaderSize = sizeof(DIPROPHEADER);
++    p.diph.dwObj = obj;
++    p.diph.dwHow = how;
++    p.dwData = value;
++    IDirectInputDevice8_SetProperty(s_dev, prop, &p.diph);
++}
++
++static void fx_release_all(void);
++
++static void dev_close(const char* why)
++{
++    if (!s_dev) return;
++    fx_release_all();
++    if (s_has_ffb) IDirectInputDevice8_SendForceFeedbackCommand(s_dev, DISFFC_RESET);
++    IDirectInputDevice8_Unacquire(s_dev);
++    IDirectInputDevice8_Release(s_dev);
++    s_dev = NULL;
++    fprintf(stderr, "[wheel] %s: \"%s\" closed\n", why, s_name);
++    WheelInput none; memset(&none, 0, sizeof none); none.hat = -1;
++    publish(&none);
++    AcquireSRWLockExclusive(&s_pub_lock);
++    memset(&s_raw, 0, sizeof s_raw);
++    ReleaseSRWLockExclusive(&s_pub_lock);
++}
++
++static int dev_open(void)
++{
++    Cand best; memset(&best, 0, sizeof best);
++    best.score = 0;
++    s_enum_count = 0;
++    if (FAILED(IDirectInput8_EnumDevices(s_di, DI8DEVCLASS_GAMECTRL, enum_cb, &best, DIEDFL_ATTACHEDONLY)))
++        return 0;
++    if (s_list && !s_enum_count) fprintf(stderr, "[wheel] DirectInput sees no game controllers\n");
++    s_list = 0;   /* list once */
++    if (!best.score) return 0;
++    if (FAILED(IDirectInput8_CreateDevice(s_di, &best.inst, &s_dev, NULL))) { s_dev = NULL; return 0; }
++    snprintf(s_name, sizeof s_name, "%s", best.name);
++    s_vid = best.vid; s_pid = best.pid;
++    IDirectInputDevice8_SetDataFormat(s_dev, &c_dfDIJoystick2);
++
++    DIDEVCAPS caps; memset(&caps, 0, sizeof caps); caps.dwSize = sizeof caps;
++    IDirectInputDevice8_GetCapabilities(s_dev, &caps);
++    s_has_ffb = (caps.dwFlags & DIDC_FORCEFEEDBACK) && s_gain > 0;
++    s_has_hat = caps.dwPOVs > 0;
++    /* Effects need exclusive access; a helper window that is never shown is
++     * enough with background access. */
++    if (FAILED(IDirectInputDevice8_SetCooperativeLevel(s_dev, s_hwnd,
++            (s_has_ffb ? DISCL_EXCLUSIVE : DISCL_NONEXCLUSIVE) | DISCL_BACKGROUND))) {
++        s_has_ffb = 0;
++        IDirectInputDevice8_SetCooperativeLevel(s_dev, s_hwnd, DISCL_NONEXCLUSIVE | DISCL_BACKGROUND);
++    }
++    DIPROPRANGE r;
++    r.diph.dwSize = sizeof(DIPROPRANGE);
++    r.diph.dwHeaderSize = sizeof(DIPROPHEADER);
++    r.diph.dwObj = 0;
++    r.diph.dwHow = DIPH_DEVICE;
++    r.lMin = 0; r.lMax = 65535;
++    IDirectInputDevice8_SetProperty(s_dev, DIPROP_RANGE, &r.diph);
++    set_prop_dword(DIPROP_DEADZONE, DIPH_DEVICE, 0, 0);
++    set_prop_dword(DIPROP_SATURATION, DIPH_DEVICE, 0, 10000);
++    if (s_has_ffb) {
++        /* The game centres the wheel itself (the G27's default spring). */
++        set_prop_dword(DIPROP_AUTOCENTER, DIPH_DEVICE, 0, DIPROPAUTOCENTER_OFF);
++        set_prop_dword(DIPROP_FFGAIN, DIPH_DEVICE, 0, (DWORD)s_gain * 100);
++    }
++    IDirectInputDevice8_Acquire(s_dev);
++    if (s_has_ffb) IDirectInputDevice8_SendForceFeedbackCommand(s_dev, DISFFC_RESET);
++
++    /* An axis the wheel doesn't have reads 0, which for a pedal that rests at
++     * the top would be "floored": a two-pedal wheel's missing clutch would hold
++     * the clutch down. Map only what is there. */
++    {
++        static const DWORD ofs[AX_COUNT] = {
++            DIJOFS_X, DIJOFS_Y, DIJOFS_Z, DIJOFS_RX, DIJOFS_RY, DIJOFS_RZ, DIJOFS_SLIDER(0), DIJOFS_SLIDER(1) };
++        for (int a = 0; a < AX_COUNT; a++) {
++            DIDEVICEOBJECTINSTANCEW oi; memset(&oi, 0, sizeof oi); oi.dwSize = sizeof oi;
++            s_axis_present[a] = SUCCEEDED(IDirectInputDevice8_GetObjectInfo(s_dev, &oi, ofs[a], DIPH_BYOFFSET));
++        }
++    }
++    build_map(&s_map, s_vid, s_pid);
++    for (int p = 0; p < 3; p++)
++        if (s_map.pedal[p] >= 0 && !s_axis_present[s_map.pedal[p]]) s_map.pedal[p] = AX_NONE;
++    s_rest_known = 0;
++    s_rest_wait = 0;
++    s_split = 0;
++    s_ffb_dirty = 1;
++    {
++        const char* e = getenv("PS3_WHEEL_RANGE");
++        fprintf(stderr, "[wheel] using \"%s\" (%04X:%04X), force feedback %s, range %s degrees; "
++                        "steer %s, throttle %s, brake %s, clutch %s; %lu buttons, %s\n",
++                s_name, s_vid, s_pid, s_has_ffb ? "on" : "off", (e && *e) ? e : "900",
++                k_axis_name[s_map.steer],
++                s_map.pedal[0] >= 0 ? k_axis_name[s_map.pedal[0]] : "none",
++                s_map.pedal[1] >= 0 ? k_axis_name[s_map.pedal[1]] : "none",
++                s_map.pedal[2] >= 0 ? k_axis_name[s_map.pedal[2]] : "none",
++                (unsigned long)caps.dwButtons, s_has_hat ? "a d-pad" : "no d-pad");
++        static const char* const pn[3] = { "throttle", "brake", "clutch" };
++        for (int p = 0; p < 3; p++)
++            if (s_map.pbtn[p] >= 0)
++                fprintf(stderr, "[wheel] button %d floors the %s\n", s_map.pbtn[p] + 1, pn[p]);
++        int dpad_btns = 0;
++        for (int d = 0; d < 4; d++) dpad_btns += s_map.dpad[d] >= 0;
++        if (s_menu_cfg == 1 || (s_menu_cfg < 0 && !s_has_hat))
++            fprintf(stderr, "[wheel] no d-pad: at the game's menus, turn the rim for left / right and press "
++                            "the throttle / brake for down / up (PS3_WHEEL_MENU=off stops this)%s\n",
++                    dpad_btns ? "" : "; PS3_WHEEL_BUTTONS=up=7,down=8 puts the d-pad on buttons instead");
++    }
++    return 1;
++}
++
++static LONG axis_val(const DIJOYSTATE2* js, int a)
++{
++    switch (a) {
++    case AX_X:  return js->lX;
++    case AX_Y:  return js->lY;
++    case AX_Z:  return js->lZ;
++    case AX_RX: return js->lRx;
++    case AX_RY: return js->lRy;
++    case AX_RZ: return js->lRz;
++    case AX_S0: return js->rglSlider[0];
++    case AX_S1: return js->rglSlider[1];
++    default:    return 0;
++    }
++}
++
++static float pedal(const DIJOYSTATE2* js, int p)
++{
++    const int a = s_map.pedal[p];
++    if (a < 0 || !s_rest_known) return 0.f;   /* released until the wheel's first report */
++    const LONG v = axis_val(js, a);
++    if (s_split && p < 2) {
++        /* One axis, two pedals: each reads from the rest point to its own end,
++         * past a small dead zone, so an older wheel's jitter at rest is no pedal. */
++        const int below = (p == 0) != s_split_swap;
++        float f = below ? (float)(s_split_at - v) / (float)s_split_at
++                        : (float)(v - s_split_at) / (float)(65535 - s_split_at);
++        f = (f - 0.02f) / 0.98f;
++        return f < 0.f ? 0.f : (f > 1.f ? 1.f : f);
++    }
++    /* Which end is "released": where the pedal rested when the wheel was
++     * opened, if that was clearly one end; otherwise the model's default
++     * (the top, as on Logitech wheels). PS3_WHEEL_PEDALS ...inv flips it. */
++    int high = s_map.pedal_inv[p];
++    const int flip = high == 2;
++    if (high < 0 || flip) {
++        if (s_rest[a] > 58981)     high = 1;
++        else if (s_rest[a] < 6554) high = 0;
++        else                       high = 1;
++        if (flip) high = !high;
++    }
++    float f = high ? (65535.f - (float)v) / 65535.f : (float)v / 65535.f;
++    return f < 0.f ? 0.f : (f > 1.f ? 1.f : f);
++}
++
++/* Hat direction from -1/0/+1 steps (dy +1 = down), -1 = centred. */
++static int hat_from(int dx, int dy)
++{
++    static const int k[3][3] = { { 7, 0, 1 }, { 6, -1, 2 }, { 5, 4, 3 } };
++    return k[dy + 1][dx + 1];
++}
++
++/* GT5's menus move only with the d-pad (a G27 has one on its shifter). A wheel without one,
++ * as most cheap wheels are (a player's Genius Speed Wheel 3 has eight buttons and no d-pad),
++ * left the keyboard as the only way through them. At the menus (see wheel_g27_in_menus), the
++ * rim turned past a quarter of its travel holds d-pad left or right, and the throttle and the
++ * brake hold down and up; the game's own repeat scrolls while they're held. A d-pad or d-pad
++ * buttons pressed win. In a race nothing changes. */
++static void menu_dpad(WheelInput* in)
++{
++    static int dx, dy, was;   /* not at the menus until the game's driver says so */
++    static unsigned said;
++    if (!(s_menu_cfg == 1 || (s_menu_cfg < 0 && !s_has_hat))) return;
++    const int menus = wheel_g27_in_menus();
++    if (menus != was) {
++        if (said < 100) {
++            said++;
++            fprintf(stderr, menus ? "[wheel] the game is at its menus: the rim and pedals move through them\n"
++                                  : "[wheel] the game left its menus: the rim and pedals drive\n");
++        }
++        was = menus;
++        dx = dy = 0;
++    }
++    if (!menus) return;
++    /* Hysteresis, so a rim held near the threshold doesn't flicker. */
++    const float s = in->steer;
++    if ((dx > 0 && s < 0.15f) || (dx < 0 && s > -0.15f)) dx = 0;
++    if (!dx) dx = s > 0.25f ? 1 : s < -0.25f ? -1 : 0;
++    if ((dy > 0 && in->throttle < 0.3f) || (dy < 0 && in->brake < 0.3f)) dy = 0;
++    if (!dy) dy = in->throttle > 0.5f ? 1 : in->brake > 0.5f ? -1 : 0;
++    /* One direction at a time: a diagonal moves some menus nowhere. */
++    if (in->hat < 0 && (dx || dy)) in->hat = dy ? hat_from(0, dy) : hat_from(dx, 0);
++}
++
++static void dev_poll(void)
++{
++    /* A wheel that stops answering (a USB hiccup, a loose cable) must not leave its last state
++     * with the game: that held the throttle and the steering where they were, with no control,
++     * for a second or more before the wheel was dropped (a player's Genius wheel, 14 Nov). After
++     * 50 ms without an answer the rim is centred and the pedals released, the wheel still
++     * attached; after a second it is closed and looked for again every half second. */
++    static ULONGLONG fail_since;
++    static int neutral, said;
++    DIJOYSTATE2 js;
++    HRESULT hr = IDirectInputDevice8_Poll(s_dev);
++    if (FAILED(hr)) {
++        hr = IDirectInputDevice8_Acquire(s_dev);
++        if (SUCCEEDED(hr)) s_ffb_dirty = 2;   /* effects were dropped with the device */
++    }
++    hr = IDirectInputDevice8_GetDeviceState(s_dev, sizeof js, &js);
++    if (FAILED(hr)) {
++        const ULONGLONG now = GetTickCount64();
++        if (!fail_since) fail_since = now;
++        if (!neutral && now - fail_since >= 50) {
++            WheelInput in; memset(&in, 0, sizeof in);
++            in.connected = 1; in.hat = -1;
++            in.shifter = s_shifter_cfg >= 0 ? s_shifter_cfg : s_shifter_seen;
++            publish(&in);
++            neutral = 1;
++            if (said < 20) { said++; fprintf(stderr, "[wheel] not answering (0x%08lX): rim centred, pedals released until it's back\n", (unsigned long)hr); }
++        }
++        if (now - fail_since >= 1000) {
++            fail_since = 0; neutral = 0;
++            s_lost_at = now;
++            dev_close("lost");
++        }
++        return;
++    }
++    if (fail_since) {
++        if (neutral && said < 20) { said++; fprintf(stderr, "[wheel] answering again after %llu ms\n", (unsigned long long)(GetTickCount64() - fail_since)); }
++        fail_since = 0; neutral = 0;
++    }
++    int fresh = s_rest_have && s_rest_vid == s_vid && s_rest_pid == s_pid;
++    if (!s_rest_known && !fresh) {
++        /* Until the wheel's first report arrives, DirectInput hands back the middle of every
++         * axis: a Thrustmaster T-GT read 32768 on all eight, its released pedals too, so it looked
++         * like a wheel with every pedal half down. Rest points come from the first read that
++         * isn't that; the pedals read released until then. */
++        for (int a = 0; a < AX_COUNT; a++) {
++            const LONG v = axis_val(&js, a);
++            if (s_axis_present[a] && v != 32767 && v != 32768) fresh = 1;
++        }
++        const ULONGLONG now = GetTickCount64();
++        if (!s_rest_wait) s_rest_wait = now;
++        static unsigned said_wait;
++        if (!fresh && now - s_rest_wait >= 3000 && s_rest_wait != 1) {
++            s_rest_wait = 1;   /* said once per opening */
++            if (said_wait++ < 5)
++                fprintf(stderr, "[wheel] every axis still reads the middle: the pedals count as released "
++                                "until the wheel sends a reading (turn the rim a little)\n");
++        }
++    }
++    if (!s_rest_known && fresh) {
++        const int reuse = s_rest_have && s_rest_vid == s_vid && s_rest_pid == s_pid;
++        char line[256]; int n = 0;
++        for (int a = 0; a < AX_COUNT; a++) {
++            if (!reuse) s_rest[a] = axis_val(&js, a);
++            if (s_axis_present[a] && n < (int)sizeof line - 24)
++                n += snprintf(line + n, sizeof line - (size_t)n, " %s=%ld", k_axis_name[a], s_rest[a]);
++        }
++        s_rest_known = 1;
++        s_rest_have = 1; s_rest_vid = s_vid; s_rest_pid = s_pid;
++        fprintf(stderr, reuse ? "[wheel] back: keeping the rest points measured before (0-65535):%s\n"
++                              : "[wheel] axes at rest (0-65535):%s\n", n ? line : " none");
++        /* Older wheels (the Genius Speed Wheel 3, for one) put both pedals on one
++         * axis that rests in the middle, one pedal moving it down and the other up,
++         * with no brake axis. Read as one pedal, resting there would be half
++         * throttle: split it where it rests instead. */
++#define REST_MID(a) ((a) >= 0 && s_rest[a] >= 6554 && s_rest[a] <= 58981)
++        const int ta = s_map.pedal[0], ba = s_map.pedal[1], ca = s_map.pedal[2];
++        int sa = AX_NONE;
++        if (ta >= 0 && (ba == ta || (ba == AX_NONE && REST_MID(ta)))) sa = ta;
++        /* A pedal rests at one end of its axis, so a throttle axis and a brake axis that both
++         * rest in the middle aren't two pedals: Thrustmaster's "combined" mode puts both on Y
++         * (the other axis sits in the middle unused; read as a pedal it was a brake held half
++         * down, a player's T-GT, 15 Nov 2026). Split Y, as for the older wheels. */
++        else if (REST_MID(ta) && REST_MID(ba)) sa = (ta == AX_Y || ba == AX_Y) ? AX_Y : ta;
++        if (sa >= 0) {
++            s_split = 1;
++            /* Where it rests, unless that is far from the middle: the first reading can come
++             * with a pedal already moving. */
++            s_split_at = labs(s_rest[sa] - 32768) <= 6554 ? s_rest[sa] : 32768;
++            s_split_swap = (s_map.pedal_inv[0] == 2) != (s_map.pedal_inv[1] == 2);
++            s_map.pedal[0] = s_map.pedal[1] = sa;
++            fprintf(stderr, "[wheel] throttle and brake share the %s axis, split at %ld: throttle %s it, "
++                            "brake %s (PS3_WHEEL_PEDALS=throttle=%s%s,brake=%s swaps them)\n",
++                    k_axis_name[sa], s_split_at, s_split_swap ? "above" : "below",
++                    s_split_swap ? "below" : "above", k_axis_name[sa], s_split_swap ? "" : "inv",
++                    k_axis_name[sa]);
++        }
++        /* The same for the clutch: an axis resting in the middle is no clutch pedal (half down
++         * would slip it in a manual car). */
++        if (REST_MID(ca) && ca != sa) {
++            fprintf(stderr, "[wheel] %s rests in the middle, so it is no clutch pedal: no clutch "
++                            "(PS3_WHEEL_PEDALS=clutch=<axis> names the clutch's axis)\n", k_axis_name[ca]);
++            s_map.pedal[2] = AX_NONE;
++        }
++#undef REST_MID
++        if (!wheel_trace_on())
++            fprintf(stderr, "[wheel] if a pedal or button is wrong, PS3_WHEEL_TRACE=1 logs them as they move\n");
++    }
++    WheelInput in; memset(&in, 0, sizeof in);
++    in.connected = 1;
++    {   /* For the settings page: the raw axes and buttons, so it can show them live. */
++        WheelRaw raw; memset(&raw, 0, sizeof raw);
++        raw.connected = 1;
++        snprintf(raw.name, sizeof raw.name, "%s", s_name);
++        raw.vid = s_vid; raw.pid = s_pid; raw.ffb = s_has_ffb;
++        for (int a = 0; a < AX_COUNT && a < 8; a++) raw.axis[a] = (float)axis_val(&js, a) / 65535.f;
++        for (int i = 0; i < 32; i++) if (js.rgbButtons[i] & 0x80) raw.buttons |= 1u << i;
++        raw.pov = (LOWORD(js.rgdwPOV[0]) == 0xFFFF) ? -1 : (int)js.rgdwPOV[0];
++        AcquireSRWLockExclusive(&s_pub_lock);
++        s_raw = raw;
++        ReleaseSRWLockExclusive(&s_pub_lock);
++    }
++    in.steer = ((float)axis_val(&js, s_map.steer) - 32767.5f) / 32767.5f;
++    in.throttle = pedal(&js, 0);
++    in.brake = pedal(&js, 1);
++    in.clutch = pedal(&js, 2);
++    const DWORD pov = js.rgdwPOV[0];
++    in.hat = (LOWORD(pov) == 0xFFFF) ? -1 : (int)(((pov + 2250) / 4500) % 8);
++    for (int i = 0; i < WHEEL_BTN_COUNT; i++) {
++        const int h = s_map.btn[i];
++        if (h >= 0 && h < 128 && (js.rgbButtons[h] & 0x80)) in.buttons |= 1u << i;
++    }
++    if (in.hat < 0) {   /* the d-pad on buttons (PS3_WHEEL_BUTTONS=up=7,...) */
++        int on[4];
++        for (int d = 0; d < 4; d++) {
++            const int h = s_map.dpad[d];
++            on[d] = h >= 0 && h < 128 && (js.rgbButtons[h] & 0x80);
++        }
++        in.hat = hat_from(on[1] - on[3], on[2] - on[0]);
++    }
++    {   /* pedals on buttons (PS3_WHEEL_BUTTONS=brake=4) */
++        float* const pv[3] = { &in.throttle, &in.brake, &in.clutch };
++        for (int p = 0; p < 3; p++) {
++            const int h = s_map.pbtn[p];
++            if (h >= 0 && h < 128 && (js.rgbButtons[h] & 0x80)) *pv[p] = 1.f;
++        }
++    }
++    menu_dpad(&in);
++    if (in.buttons & (0x7Fu << WHEEL_BTN_GEAR1)) s_shifter_seen = 1;
++    in.shifter = s_shifter_cfg >= 0 ? s_shifter_cfg : s_shifter_seen;
++    publish(&in);
++
++    if (wheel_trace_on()) {
++        static LONG last[AX_COUNT]; static DWORD last_b; static unsigned lines;
++        int moved = 0;
++        for (int a = 0; a < AX_COUNT; a++) if (labs(axis_val(&js, a) - last[a]) > 2000) moved = 1;
++        if ((moved || in.buttons != last_b) && lines < 3000) {
++            lines++;
++            for (int a = 0; a < AX_COUNT; a++) last[a] = axis_val(&js, a);
++            last_b = in.buttons;
++            fprintf(stderr, "[wheel] axes X=%ld Y=%ld Z=%ld RX=%ld RY=%ld RZ=%ld S0=%ld S1=%ld"
++                            " -> steer %.2f thr %.2f brk %.2f clu %.2f btn %06X hat %d\n",
++                    js.lX, js.lY, js.lZ, js.lRx, js.lRy, js.lRz, js.rglSlider[0], js.rglSlider[1],
++                    in.steer, in.throttle, in.brake, in.clutch, (unsigned)in.buttons, in.hat);
++        }
++        /* Every 10 s: what the PC wheel did, so a log shows whether it kept moving when the
++         * game's car didn't. */
++        static ULONGLONG from; static unsigned polls, stat_lines;
++        static float lo, hi, thr, brk;
++        const ULONGLONG now = GetTickCount64();
++        if (!from || !polls) { from = from ? from : now; lo = hi = in.steer; thr = brk = 0.f; }
++        polls++;
++        if (in.steer < lo) lo = in.steer;
++        if (in.steer > hi) hi = in.steer;
++        if (in.throttle > thr) thr = in.throttle;
++        if (in.brake > brk) brk = in.brake;
++        if (now - from >= 10000) {
++            if (stat_lines++ < 360)
++                fprintf(stderr, "[wheel] in %llu s: %u reads of the PC wheel, steer %.2f to %.2f, throttle up to %.2f, "
++                                "brake up to %.2f\n", (now - from) / 1000, polls, lo, hi, thr, brk);
++            from = now; polls = 0;
++        }
++    }
++}
++
++/* ---------------------------------------------------------------------------
++ * Force feedback: one DirectInput effect per G27 slot, plus the default spring
++ * -------------------------------------------------------------------------*/
++typedef struct {
++    LPDIRECTINPUTEFFECT fx;
++    int         type;
++    int         running;
++    WheelEffect applied;
++} HostFx;
++
++static HostFx s_fx[WHEEL_FFB_SLOTS + 1];
++static int    s_fx_bad[16];   /* a type this wheel refused */
++
++static void fx_release_all(void)
++{
++    for (int i = 0; i <= WHEEL_FFB_SLOTS; i++) {
++        if (s_fx[i].fx) {
++            IDirectInputEffect_Stop(s_fx[i].fx);
++            IDirectInputEffect_Unload(s_fx[i].fx);
++            IDirectInputEffect_Release(s_fx[i].fx);
++        }
++        memset(&s_fx[i], 0, sizeof s_fx[i]);
++    }
++    memset(s_fx_bad, 0, sizeof s_fx_bad);
++}
++
++static const GUID* fx_guid(int type)
++{
++    switch (type) {
++    case WHEEL_FX_CONSTANT: return &GUID_ConstantForce;
++    case WHEEL_FX_SPRING:   return &GUID_Spring;
++    case WHEEL_FX_DAMPER:   return &GUID_Damper;
++    case WHEEL_FX_FRICTION: return &GUID_Friction;
++    case WHEEL_FX_SQUARE:   return &GUID_Square;
++    case WHEEL_FX_SAW_UP:   return &GUID_SawtoothUp;
++    case WHEEL_FX_SAW_DOWN: return &GUID_SawtoothDown;
++    case WHEEL_FX_TRIANGLE: return &GUID_Triangle;
++    default:                return NULL;
++    }
++}
++
++static LONG di_signed(float f) { if (f < -1.f) f = -1.f; if (f > 1.f) f = 1.f; return (LONG)(f * 10000.f); }
++static DWORD di_unsigned(float f) { if (f < 0.f) f = 0.f; if (f > 1.f) f = 1.f; return (DWORD)(f * 10000.f); }
++
++typedef union { DICONSTANTFORCE c; DICONDITION cond; DIPERIODIC p; } FxParams;
++
++static void fx_describe(const WheelEffect* w, DIEFFECT* eff, FxParams* prm, DWORD* axes, LONG* dir)
++{
++    memset(eff, 0, sizeof *eff);
++    memset(prm, 0, sizeof *prm);
++    axes[0] = DIJOFS_X;
++    dir[0] = 0;   /* one axis: the sign of the force is the direction */
++    eff->dwSize = sizeof(DIEFFECT);
++    eff->dwFlags = DIEFF_CARTESIAN | DIEFF_OBJECTOFFSETS;
++    eff->dwDuration = INFINITE;
++    eff->dwGain = DI_FFNOMINALMAX;
++    eff->dwTriggerButton = DIEB_NOTRIGGER;
++    eff->cAxes = 1;
++    eff->rgdwAxes = axes;
++    eff->rglDirection = dir;
++    switch (w->type) {
++    case WHEEL_FX_CONSTANT: {
++        /* PS3_WHEEL_FFB_MIN: a gear or belt wheel's own friction swallows small forces, so the
++         * range above zero is moved up to start at the minimum. Zero stays zero. */
++        float lv = w->level;
++        if (s_min_force > 0.f && lv != 0.f) {
++            const float a = lv < 0.f ? -lv : lv;
++            const float m = s_min_force + (1.f - s_min_force) * (a > 1.f ? 1.f : a);
++            lv = lv < 0.f ? -m : m;
++        }
++        prm->c.lMagnitude = di_signed(lv * s_ffb_sign);
++        eff->cbTypeSpecificParams = sizeof(DICONSTANTFORCE);
++        break; }
++    case WHEEL_FX_SPRING:
++    case WHEEL_FX_DAMPER:
++    case WHEEL_FX_FRICTION:
++        /* PS3_WHEEL_FFB_SPRING scales the coefficients; the saturation (the most force the
++         * effect may give) scales with them, so 50% is half as stiff and half as strong. */
++        prm->cond.lOffset = di_signed(w->center);
++        prm->cond.lPositiveCoefficient = di_signed(w->k_pos * s_spring_scale);
++        prm->cond.lNegativeCoefficient = di_signed(w->k_neg * s_spring_scale);
++        prm->cond.dwPositiveSaturation = di_unsigned(w->sat * (s_spring_scale < 1.f ? s_spring_scale : 1.f));
++        prm->cond.dwNegativeSaturation = di_unsigned(w->sat * (s_spring_scale < 1.f ? s_spring_scale : 1.f));
++        prm->cond.lDeadBand = (LONG)di_unsigned(w->deadband);
++        eff->cbTypeSpecificParams = sizeof(DICONDITION);
++        break;
++    default: {
++        u32 period = w->period_ms;
++        if (period < 4) period = 4;
++        if (period > 2000) period = 2000;
++        prm->p.dwMagnitude = di_unsigned(w->magnitude);
++        prm->p.lOffset = di_signed(w->offset * s_ffb_sign);
++        prm->p.dwPeriod = period * 1000;
++        eff->cbTypeSpecificParams = sizeof(DIPERIODIC);
++        break; }
++    }
++    eff->lpvTypeSpecificParams = prm;
++}
++
++static void fx_sync_one(HostFx* h, const WheelEffect* w, int force)
++{
++    const int on = w->playing && w->type != WHEEL_FX_NONE && !s_fx_bad[w->type & 15];
++    if (!on) {
++        if (h->fx && h->running) { IDirectInputEffect_Stop(h->fx); h->running = 0; }
++        return;
++    }
++    if (h->fx && h->type != w->type) {
++        IDirectInputEffect_Stop(h->fx);
++        IDirectInputEffect_Unload(h->fx);
++        IDirectInputEffect_Release(h->fx);
++        memset(h, 0, sizeof *h);
++    }
++    DIEFFECT eff; FxParams prm; DWORD axes[1]; LONG dir[1];
++    fx_describe(w, &eff, &prm, axes, dir);
++    if (!h->fx) {
++        HRESULT hr = IDirectInputDevice8_CreateEffect(s_dev, fx_guid(w->type), &eff, &h->fx, NULL);
++        if (FAILED(hr) || !h->fx) {
++            h->fx = NULL;
++            if (hr == DIERR_NOTEXCLUSIVEACQUIRED || hr == DIERR_NOTACQUIRED || hr == DIERR_INPUTLOST) {
++                s_ffb_dirty = 2;                     /* not ours right now: try again shortly */
++                s_ffb_retry_at = GetTickCount64() + 100;
++                return;
++            }
++            fprintf(stderr, "[wheel] this wheel refused effect type %d (0x%08lX); skipping it\n",
++                    w->type, (unsigned long)hr);
++            s_fx_bad[w->type & 15] = 1;
++            return;
++        }
++        h->type = w->type;
++        IDirectInputEffect_Start(h->fx, 1, 0);
++        h->running = 1;
++        h->applied = *w;
++        return;
++    }
++    if (force || !h->running || memcmp(&h->applied, w, sizeof *w) != 0) {
++        DWORD flags = DIEP_TYPESPECIFICPARAMS | (h->running && !force ? 0 : DIEP_START);
++        HRESULT hr = IDirectInputEffect_SetParameters(h->fx, &eff, flags);
++        if (FAILED(hr)) {   /* not acquired (another program has the wheel?): try again shortly */
++            s_ffb_dirty = 2;
++            s_ffb_retry_at = GetTickCount64() + 100;
++            return;
++        }
++        h->running = 1;
++        h->applied = *w;
++    }
++}
++
++/* Forces stop while the settings page has the input, and while the game window is not in front
++ * (PS3_WHEEL_FFB_MUTE=0: never). A wheel left pulling on a desk while someone types elsewhere is
++ * how fingers get caught; direct-drive wheels are strong enough to hurt. */
++static int ffb_muted(void)
++{
++    if (!s_mute_cfg) return 0;
++    if (g_pad_input_blocked) return 1;
++    HWND fg = GetForegroundWindow();
++    DWORD pid = 0;
++    if (!fg) return 1;
++    GetWindowThreadProcessId(fg, &pid);
++    return pid != GetCurrentProcessId();
++}
++
++static void ffb_sync(void)
++{
++    static int was_muted;
++    const int muted = ffb_muted();
++    if (muted != was_muted) {
++        was_muted = muted;
++        fprintf(stderr, "[wheel] force feedback %s\n",
++                muted ? "paused (settings page open or game window in the background)" : "resumed");
++        InterlockedExchange(&s_ffb_dirty, 2);
++    }
++    if (s_ffb_retry_at && GetTickCount64() < s_ffb_retry_at) return;
++    s_ffb_retry_at = 0;
++    const LONG d = InterlockedExchange(&s_ffb_dirty, 0);
++    if (!d || !s_has_ffb) return;
++    WheelFfb f;
++    wheel_g27_ffb_snapshot(&f);
++    if (muted) {   /* every slot stopped, the default spring too */
++        for (int i = 0; i < WHEEL_FFB_SLOTS; i++) f.slot[i].playing = 0;
++        f.def_spring_on = 0;
++    }
++    for (int i = 0; i < WHEEL_FFB_SLOTS; i++) fx_sync_one(&s_fx[i], &f.slot[i], d == 2);
++    WheelEffect ds = f.def_spring;
++    ds.playing = f.def_spring_on;
++    if (!ds.type) ds.type = WHEEL_FX_SPRING;
++    fx_sync_one(&s_fx[WHEEL_FFB_SLOTS], &ds, d == 2);
++}
++
++/* ---------------------------------------------------------------------------
++ * Thread
++ * -------------------------------------------------------------------------*/
++static LRESULT CALLBACK helper_proc(HWND h, UINT m, WPARAM w, LPARAM l) { return DefWindowProcW(h, m, w, l); }
++
++/* Live tuning from the settings page (wheel_host_set_ffb). The wheel's thread applies it. */
++static volatile LONG s_set_gen, s_set_gain = -1, s_set_invert, s_set_spring = 100, s_set_min;
++
++void wheel_host_set_ffb(int gain, int invert, int spring, int min_force)
++{
++    if (gain < 0) gain = 0;
++    if (gain > 100) gain = 100;
++    if (spring < 0) spring = 0;
++    if (spring > 200) spring = 200;
++    if (min_force < 0) min_force = 0;
++    if (min_force > 50) min_force = 50;
++    InterlockedExchange(&s_set_gain, gain);
++    InterlockedExchange(&s_set_invert, invert ? 1 : 0);
++    InterlockedExchange(&s_set_spring, spring);
++    InterlockedExchange(&s_set_min, min_force);
++    InterlockedIncrement(&s_set_gen);
++}
++
++static void ffb_settings_follow(void)
++{
++    const int gain = (int)s_set_gain;
++    if (gain < 0) return;   /* never set: the environment's values stand */
++    const float sign = s_set_invert ? -1.f : 1.f;
++    const float spring = (float)s_set_spring / 100.f, minf = (float)s_set_min / 100.f;
++    if (gain != s_gain) {
++        const int was = s_gain;
++        s_gain = gain;
++        fprintf(stderr, "[wheel] force feedback strength %d%%\n", s_gain);
++        if (s_dev) {
++            if (s_has_ffb) set_prop_dword(DIPROP_FFGAIN, DIPH_DEVICE, 0, (DWORD)s_gain * 100);
++            else if (!was && gain) dev_close("force feedback switched on");
++        }
++    }
++    if (sign != s_ffb_sign || spring != s_spring_scale || minf != s_min_force) {
++        s_ffb_sign = sign; s_spring_scale = spring; s_min_force = minf;
++        fprintf(stderr, "[wheel] force feedback %s, springs %d%%, minimum force %d%%\n",
++                sign < 0.f ? "inverted" : "normal", (int)s_set_spring, (int)s_set_min);
++        InterlockedExchange(&s_ffb_dirty, 2);   /* the effects are sent again */
++    }
++}
++
++static DWORD WINAPI wheel_thread(LPVOID unused)
++{
++    (void)unused;
++    /* The game's threads keep every core busy on a small PC, some of them above normal
++     * priority; this one must still read the wheel every millisecond or two. Its work per
++     * read is a few microseconds, then it sleeps. */
++    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
++    if (s_mode == MODE_VIRTUAL) {
++        /* For testing the game side: PS3_WHEEL_VIRTUAL=steer=0.5,throttle=1
++         * holds the rim and pedals where it says, from DELAY seconds on.
++         * PS3_WHEEL_VIRTUAL_FILE=<path>: a test writes "<what> <ms>" there, e.g.
++         * "cross 200", "up 150" (the d-pad: up/down/left/right), "steer=-0.8 600",
++         * "throttle=1 300", and the wheel does that for that long; the file is
++         * emptied when it is taken. nohat=1 in PS3_WHEEL_VIRTUAL plays a wheel
++         * with no d-pad (as most cheap wheels are), jitter=1 a rim that never
++         * rests (see below). */
++        WheelInput in; memset(&in, 0, sizeof in);
++        in.connected = 1; in.hat = -1; in.shifter = s_shifter_cfg > 0;
++        publish(&in);
++        const char* v = getenv("PS3_WHEEL_VIRTUAL");
++        const char* vf = getenv("PS3_WHEEL_VIRTUAL_FILE");
++        const char* at;
++        float steer = 0.f, thr = 0.f, brk = 0.f;
++        double delay = 0.;
++        if (v && (at = strstr(v, "steer="))) steer = (float)atof(at + 6);
++        if (v && (at = strstr(v, "throttle="))) thr = (float)atof(at + 9);
++        if (v && (at = strstr(v, "brake="))) brk = (float)atof(at + 6);
++        if (v && (at = strstr(v, "delay="))) delay = atof(at + 6);
++        s_has_hat = !(v && strstr(v, "nohat=1"));
++        const int jitter = v && strstr(v, "jitter=1");
++        build_map(&s_map, 0, 0);
++        fprintf(stderr, "[wheel] PS3_WHEEL=virtual: a G27 with no PC wheel behind it (steer %.2f, throttle %.2f, brake %.2f after %.0f s%s)\n",
++                steer, thr, brk, delay, s_has_hat ? "" : ", no d-pad");
++        const ULONGLONG t0 = GetTickCount64();
++        ULONGLONG press_until = 0;
++        WheelInput press; memset(&press, 0, sizeof press);
++        int press_steer = 0, press_thr = 0, press_brk = 0;
++        while (!s_stop) {
++            const ULONGLONG now = GetTickCount64();
++            if (vf && *vf && now >= press_until) {
++                FILE* f = fopen(vf, "rb");
++                if (f) {
++                    char line[96] = "";
++                    const int got = fgets(line, sizeof line, f) != NULL;
++                    fclose(f);
++                    char what[48] = ""; int ms = 150;
++                    if (got && sscanf(line, "%47s %d", what, &ms) >= 1 && *what) {
++                        f = fopen(vf, "wb"); if (f) fclose(f);
++                        memset(&press, 0, sizeof press); press.hat = -1;
++                        press_steer = press_thr = press_brk = 0;
++                        s_vbtn = 0;
++                        lower(what);
++                        static const char* const dn[4] = { "up", "right", "down", "left" };
++                        int known = 0;
++                        /* Several at once with '+': "btn6+throttle=0.5 8000". */
++                        for (char* w = what; w && *w; ) {
++                            char* plus = strchr(w, '+');
++                            if (plus) *plus = 0;
++                            for (int d = 0; d < 4; d++) if (!strcmp(w, dn[d])) { press.hat = d * 2; known = 1; }
++                            for (int i = 0; i < WHEEL_BTN_COUNT; i++)
++                                if (!strcmp(w, k_btn_name[i])) { press.buttons |= 1u << i; known = 1; }
++                            if (!strncmp(w, "steer=", 6))    { press.steer = (float)atof(w + 6); press_steer = known = 1; }
++                            if (!strncmp(w, "throttle=", 9)) { press.throttle = (float)atof(w + 9); press_thr = known = 1; }
++                            if (!strncmp(w, "brake=", 6))    { press.brake = (float)atof(w + 6); press_brk = known = 1; }
++                            if (!strncmp(w, "btn", 3))       { known = 1; s_vbtn = atoi(w + 3); }   /* "btn7": host button 7 */
++                            if (plus) *plus = '+';
++                            w = plus ? plus + 1 : NULL;
++                        }
++                        press_until = known ? now + (ULONGLONG)(ms > 0 ? ms : 150) : 0;
++                        fprintf(stderr, "[wheel] virtual: %s for %d ms%s\n", what, ms, known ? "" : " (unknown, ignored)");
++                    }
++                }
++            }
++            const int pressing = now < press_until;
++            if (!pressing) s_vbtn = 0;
++            const int held = (double)(now - t0) / 1000.0 >= delay;
++            in.steer = pressing && press_steer ? press.steer : held ? steer : 0.f;
++            in.throttle = pressing && press_thr ? press.throttle : held ? thr : 0.f;
++            in.brake = pressing && press_brk ? press.brake : held ? brk : 0.f;
++            in.buttons = pressing ? press.buttons : 0;
++            in.hat = pressing && s_has_hat ? press.hat : -1;
++            if (s_vbtn) {   /* a host button by number, through the button map */
++                for (int i = 0; i < WHEEL_BTN_COUNT; i++) if (s_map.btn[i] == s_vbtn - 1) in.buttons |= 1u << i;
++                for (int d = 0; d < 4; d++) if (s_map.dpad[d] == s_vbtn - 1) in.hat = d * 2;
++                if (s_map.pbtn[0] == s_vbtn - 1) in.throttle = 1.f;
++                if (s_map.pbtn[1] == s_vbtn - 1) in.brake = 1.f;
++                if (s_map.pbtn[2] == s_vbtn - 1) in.clutch = 1.f;
++            }
++            /* jitter=1: a real rim never rests on one value, so nearly every report it
++             * sends is new; this wobbles the steering a little every 2 ms to match. */
++            if (jitter) { static int flip; flip ^= 1; in.steer += flip ? 0.004f : -0.004f; }
++            if (in.buttons & (0x7Fu << WHEEL_BTN_GEAR1)) s_shifter_seen = 1;   /* as a real wheel does */
++            in.shifter = s_shifter_cfg >= 0 ? s_shifter_cfg : s_shifter_seen;
++            menu_dpad(&in);
++            publish(&in);
++            Sleep(jitter ? 2 : 10);
++        }
++        return 0;
++    }
++    WNDCLASSEXW wc; memset(&wc, 0, sizeof wc);
++    wc.cbSize = sizeof wc;
++    wc.lpfnWndProc = helper_proc;
++    wc.hInstance = GetModuleHandleW(NULL);
++    wc.lpszClassName = L"ps3recomp_wheel";
++    RegisterClassExW(&wc);
++    s_hwnd = CreateWindowExW(0, wc.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, wc.hInstance, NULL);
++    if (FAILED(DirectInput8Create(GetModuleHandleW(NULL), DIRECTINPUT_VERSION, &IID_IDirectInput8W,
++                                  (void**)&s_di, NULL))) {
++        fprintf(stderr, "[wheel] DirectInput is not available; no wheel\n");
++        return 0;
++    }
++    ULONGLONG next_scan = 0;
++    const ULONGLONG t_start = GetTickCount64();
++    int said_none = 0;
++    while (!s_stop) {
++        const ULONGLONG now = GetTickCount64();
++        { static LONG set_gen;
++          if (set_gen != s_set_gen) { set_gen = s_set_gen; ffb_settings_follow(); } }
++        if (!s_dev && now >= next_scan) {
++            /* A wheel plugged in later is found within a few seconds early on,
++             * within ten later; looking costs a little, on this thread only. */
++            next_scan = now + (s_lost_at && now - s_lost_at < 30000 ? 500
++                               : now - t_start < 30000 ? 3000 : 10000);
++            if (dev_open()) said_none = 1;
++            else if (!said_none) { said_none = 1; fprintf(stderr, "[wheel] no steering wheel found; still looking every few seconds\n"); }
++        }
++        /* Read every millisecond or so. A long gap between reads: the PC was too busy to run
++         * this thread, or a call into the wheel's driver took that long. */
++        static ULONGLONG prev; static unsigned held_said;
++        if (s_dev) {
++            if (prev && now - prev >= 250 && held_said < 20) {
++                held_said++;
++                fprintf(stderr, "[wheel] %llu ms between two reads of the PC wheel\n", now - prev);
++            }
++            prev = now;
++            dev_poll();
++            if (s_dev) ffb_sync();
++            if (!s_dev) prev = 0;
++        } else prev = 0;
++        MSG msg;
++        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
++        Sleep(s_dev ? 1 : 20);
++    }
++    dev_close("shutdown");
++    IDirectInput8_Release(s_di);
++    s_di = NULL;
++    if (s_hwnd) DestroyWindow(s_hwnd);
++    return 0;
++}
++
++int wheel_host_start(void)
++{
++    read_settings();
++    if (s_mode == MODE_OFF) return 0;
++    if (s_started) return 1;
++    s_stop = 0;
++    s_pub.hat = -1;
++    wheel_g27_reset();
++    s_thread = CreateThread(NULL, 256 * 1024, wheel_thread, NULL, 0, NULL);
++    if (!s_thread) return 0;
++    s_started = 1;
++    return 1;
++}
++
++void wheel_host_stop(void)
++{
++    if (!s_started) return;
++    InterlockedExchange(&s_stop, 1);
++    WaitForSingleObject(s_thread, 3000);
++    CloseHandle(s_thread);
++    s_thread = NULL;
++    s_started = 0;
++}
++
++#else  /* !_WIN32: no host wheel yet */
++
++int  wheel_host_start(void) { return 0; }
++void wheel_host_stop(void) {}
++int  wheel_host_read(WheelInput* out) { memset(out, 0, sizeof *out); out->hat = -1; return 0; }
++void wheel_host_ffb_changed(void) {}
++int  wheel_host_raw(WheelRaw* out) { memset(out, 0, sizeof *out); return 0; }
++void wheel_host_set_ffb(int gain, int invert, int spring, int min_force) { (void)gain; (void)invert; (void)spring; (void)min_force; }
++
++#endif
+diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
+index 2af64f97..9fd9027f 100644
+--- a/libs/input/cellPad.c
++++ b/libs/input/cellPad.c
+@@ -173,8 +173,34 @@ static void pad_track_assign(void)
+         if (on != s_port_reported[i]) { s_port_reported[i] = on; s_port_changed[i] = 1; }
+     }
+ }
++/* Custom controllers (cellPadLdd*): a game's own USB driver registers one and
++ * feeds it CellPadData; libpad hands that back on its port like any pad's.
++ * Gran Turismo 5 does this for its Logitech wheels (cellUsbd.c presents an
++ * emulated G27). They take ports from PAD_MAX_HOST_PORTS up, clear of the
++ * ports host pads land on. Adapted from gt5-recomp (MIT, (c) 2026
++ * MormonFTP-hub). */
++#ifndef CELL_PAD_ERROR_TOO_MANY_DEVICES
++#define CELL_PAD_ERROR_TOO_MANY_DEVICES 0x80121109
++#endif
++#ifndef CELL_PAD_ERROR_NO_DEVICE
++#define CELL_PAD_ERROR_NO_DEVICE 0x80121107
++#endif
++typedef struct {
++    int used;
++    u16 button[CELL_PAD_MAX_CODES];
++} PadLdd;
++static PadLdd s_ldd[CELL_PAD_MAX_PORT_NUM];
++static int    s_ldd_changed[CELL_PAD_MAX_PORT_NUM];
++static int pad_is_ldd(u32 port)
++{
++    return port < CELL_PAD_MAX_PORT_NUM && __atomic_load_n(&s_ldd[port].used, __ATOMIC_ACQUIRE);
++}
++
+ static u32 pad_status_take(u32 port)
+ {
++    if (port < CELL_PAD_MAX_PORT_NUM &&
++        __atomic_exchange_n(&s_ldd_changed[port], 0, __ATOMIC_RELAXED))
++        return CELL_PAD_STATUS_ASSIGN_CHANGES;
+     if (port >= PAD_MAX_HOST_PORTS) return 0;
+     const int ch = __atomic_exchange_n(&s_port_changed[port], 0, __ATOMIC_RELAXED);
+     return ch ? CELL_PAD_STATUS_ASSIGN_CHANGES : 0;
+@@ -1068,7 +1094,40 @@ static struct {
+     int   (*GameControllerHasRumble)(void*);
+     int   (*GameControllerSendEffect)(void*, const void*, int);
+     int   (*GameControllerGetType)(void*);   /* optional: SDL 2.0.12 */
++    int   (*JoystickGetDeviceType)(int);     /* optional: SDL 2.0.6 */
++    unsigned short (*JoystickGetDeviceVendor)(int);    /* optional: SDL 2.0.6 */
++    unsigned short (*JoystickGetDeviceProduct)(int);   /* optional: SDL 2.0.6 */
+ } s_sdl;
++
++/* A steering wheel is the wheel emulation's (libs/hardware/wheel_host_win.c,
++ * cellUsbd.c): read here too, as a pad, its rim and pedals would drive the
++ * menus twice. SDL names wheels by its own list (SDL_JOYSTICK_TYPE_WHEEL = 2);
++ * Logitech's wheels are listed here as well, for SDLs that don't know one.
++ * PS3_WHEEL=off leaves wheels to SDL as before; PAD_SDL_WHEELS=1 reads them
++ * as pads anyway. */
++static int pad_sdl_is_wheel(int d)
++{
++    static int keep = -1;
++    if (keep < 0) {
++        const char* w = getenv("PS3_WHEEL");
++        const char* k = getenv("PAD_SDL_WHEELS");
++        keep = (k && *k == '1') || (w && (!strcmp(w, "off") || !strcmp(w, "0") || !strcmp(w, "no")));
++    }
++    if (keep) return 0;
++    if (s_sdl.JoystickGetDeviceType && s_sdl.JoystickGetDeviceType(d) == 2) return 1;
++    if (s_sdl.JoystickGetDeviceVendor && s_sdl.JoystickGetDeviceProduct &&
++        s_sdl.JoystickGetDeviceVendor(d) == 0x046D) {
++        static const unsigned short k_logitech_wheels[] = {
++            0xC294, 0xC295, 0xC298, 0xC299, 0xC29A, 0xC29B, 0xCA03, 0xCA04,   /* DF, Momo, DFP, G25, DFGT, G27 */
++            0xC24F, 0xC260, 0xC261, 0xC262, 0xC266, 0xC267, 0xC268, 0xC26D, 0xC26E,   /* G29, G920, G923, PRO */
++            0xC272,
++        };
++        const unsigned short pid = s_sdl.JoystickGetDeviceProduct(d);
++        for (unsigned i = 0; i < sizeof k_logitech_wheels / sizeof k_logitech_wheels[0]; i++)
++            if (pid == k_logitech_wheels[i]) return 1;
++    }
++    return 0;
++}
+ static void* s_sdl_pad[PAD_MAX_HOST_PORTS];
+ static int   s_sdl_family[PAD_MAX_HOST_PORTS];   /* g_pad_device_family codes */
+ static int   s_sdl_type[PAD_MAX_HOST_PORTS];     /* SDL_GameControllerType, 0 unknown */
+@@ -1240,6 +1299,9 @@ static int pad_sdl_dyn_init(void)
+     *(FARPROC*)&s_sdl.GameControllerHasRumbleTriggers = GetProcAddress(m, "SDL_GameControllerHasRumbleTriggers");
+     *(FARPROC*)&s_sdl.GameControllerHasRumble = GetProcAddress(m, "SDL_GameControllerHasRumble");
+     *(FARPROC*)&s_sdl.GameControllerSendEffect = GetProcAddress(m, "SDL_GameControllerSendEffect");
++    *(FARPROC*)&s_sdl.JoystickGetDeviceType = GetProcAddress(m, "SDL_JoystickGetDeviceType");
++    *(FARPROC*)&s_sdl.JoystickGetDeviceVendor = GetProcAddress(m, "SDL_JoystickGetDeviceVendor");
++    *(FARPROC*)&s_sdl.JoystickGetDeviceProduct = GetProcAddress(m, "SDL_JoystickGetDeviceProduct");
+     /* Watch OS device notifications in SDL's joystick thread; the owner below
+      * pumps SDL events and reads input for our native (non-SDL) window. */
+     s_sdl.SetHint("SDL_JOYSTICK_THREAD", "1");
+@@ -1266,6 +1328,11 @@ static void pad_sdl_dyn_scan(void)
+     int n = s_sdl.NumJoysticks();
+     for (int d = 0; d < n; d++) {
+         if (!s_sdl.IsGameController(d)) continue;
++        if (pad_sdl_is_wheel(d)) {
++            static int said;
++            if (!said) { said = 1; printf("[cellPad] a steering wheel is left to the wheel emulation, not read as a pad (PAD_SDL_WHEELS=1: read it)%c", 10); }
++            continue;
++        }
+         int id = s_sdl.JoystickGetDeviceInstanceID(d), open = 0, slot = -1;
+         for (int i = 0; i < PAD_MAX_HOST_PORTS; i++) {
+             if (!s_sdl_pad[i]) { if (slot < 0) slot = i; continue; }
+@@ -1719,6 +1786,8 @@ s32 cellPadInit(u32 max_connect)
+     s_pad_initialized = 1;
+     s_max_connect = max_connect > CELL_PAD_MAX_PORT_NUM ? CELL_PAD_MAX_PORT_NUM : max_connect;
+     memset(s_port_setting, 0, sizeof(s_port_setting));
++    memset(s_ldd, 0, sizeof(s_ldd));
++    memset(s_ldd_changed, 0, sizeof(s_ldd_changed));
+     for (int i = 0; i < PAD_MAX_HOST_PORTS; i++)
+         pad_host_release(&s_host_state[i]);
+ 
+@@ -1786,6 +1855,25 @@ s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
+     CellPadData _d; CellPadData* data = &_d;
+     memset(data, 0, sizeof(CellPadData));
+ 
++    /* A custom controller: what its driver last inserted, on every read, as
++     * many words as the port setting asks for. Nothing while the settings
++     * page has the input (g_pad_input_blocked). */
++    if (pad_is_ldd(port_no)) {
++        static int said;
++        if (!said) { said = 1; fprintf(stderr, "[cellPad] the game reads its custom controller on port %u\n", port_no); }
++        const u32 setting = s_port_setting[port_no];
++        s32 len = (setting & CELL_PAD_SETTING_SENSOR_ON) ? CELL_PAD_LEN_CHANGE_SENSOR_ON
++                : (setting & CELL_PAD_SETTING_PRESS_ON)  ? CELL_PAD_LEN_CHANGE_PRESS_ON
++                                                         : CELL_PAD_LEN_CHANGE_DEFAULT;
++        if (len > CELL_PAD_MAX_CODES) len = CELL_PAD_MAX_CODES;
++        if (g_pad_input_blocked) len = 0;
++        const unsigned int ea = (unsigned int)(uintptr_t)data_guest;
++        vm_write32(ea, (u32)len);
++        for (int i = 0; i < CELL_PAD_MAX_CODES; i++)
++            vm_write16(ea + 4 + (unsigned int)i * 2, i < len ? s_ldd[port_no].button[i] : 0);
++        return CELL_OK;
++    }
++
+     /* Poll fresh state */
+     pad_poll_backend();
+ 
+@@ -2151,8 +2239,8 @@ s32 cellPadGetInfo(CellPadInfo2* info)
+      * it ever finished booting. Both entry points describe the same hardware
+      * and have to answer the same way. */
+     u32 connected = 0;
+-    for (u32 i = 0; i < s_max_connect && i < PAD_MAX_HOST_PORTS; i++)
+-        if (s_host_state[i].connected || i == 0) connected++;
++    for (u32 i = 0; i < s_max_connect && i < CELL_PAD_MAX_PORT_NUM; i++)
++        if (pad_is_ldd(i) || (i < PAD_MAX_HOST_PORTS && (s_host_state[i].connected || i == 0))) connected++;
+ 
+     vm_write32(gaddr + 0x00, s_max_connect);
+     vm_write32(gaddr + 0x04, connected);
+@@ -2162,10 +2250,11 @@ s32 cellPadGetInfo(CellPadInfo2* info)
+      * Packed for 7 ports, status landed at 0x28 and GH3 -- which reads
+      * info+0x208+port -- saw port 0 disconnected and never polled the pad. */
+     for (u32 i = 0; i < CELL_PAD_MAX_PORT_NUM; i++) {
+-        int on = (i < s_max_connect && i < PAD_MAX_HOST_PORTS &&
+-                  (s_host_state[i].connected || i == 0));
+-        vm_write16(gaddr + 0x00C + i * 2, on ? 0x054C : 0);   /* vendor: Sony  */
+-        vm_write16(gaddr + 0x10A + i * 2, on ? 0x0268 : 0);   /* product: DS3  */
++        const int ldd = i < s_max_connect && pad_is_ldd(i);
++        int on = ldd || (i < s_max_connect && i < PAD_MAX_HOST_PORTS &&
++                         (s_host_state[i].connected || i == 0));
++        vm_write16(gaddr + 0x00C + i * 2, ldd ? 0 : on ? 0x054C : 0);   /* vendor: Sony  */
++        vm_write16(gaddr + 0x10A + i * 2, ldd ? 0 : on ? 0x0268 : 0);   /* product: DS3  */
+         vm_write8(gaddr + 0x208 + i, (u8)((on ? CELL_PAD_STATUS_CONNECTED : 0) | pad_status_take(i)));
+     }
+     return CELL_OK;
+@@ -2188,7 +2277,21 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
+     info->max_connect = s_max_connect;
+ 
+     u32 connected = 0;
+-    for (u32 i = 0; i < s_max_connect && i < PAD_MAX_HOST_PORTS; i++) {
++    for (u32 i = 0; i < s_max_connect && i < CELL_PAD_MAX_PORT_NUM; i++) {
++        if (pad_is_ldd(i)) {   /* a game driver's custom controller */
++            info->port_status[i]       = CELL_PAD_STATUS_CONNECTED | pad_status_take(i);
++            info->port_setting[i]      = s_port_setting[i];
++            info->device_capability[i] = CELL_PAD_CAPABILITY_PS3_CONFORMITY
++                                       | CELL_PAD_CAPABILITY_PRESS_MODE
++                                       | CELL_PAD_CAPABILITY_SENSOR_MODE;
++            info->device_type[i]       = CELL_PAD_DEV_TYPE_LDD;
++            connected++;
++            continue;
++        }
++        if (i >= PAD_MAX_HOST_PORTS) {
++            info->port_status[i] = CELL_PAD_STATUS_DISCONNECTED | pad_status_take(i);
++            continue;
++        }
+         /* Always present a virtual pad on port 0 (standard emulator behavior) so
+          * boot flows that block until a controller is connected can proceed even
+          * with no physical device attached. */
+@@ -2245,6 +2348,17 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+ 
+     u32 connected = 0;
+     for (u32 i = 0; i < s_max_connect && i < CELL_PAD_MAX_PORT_NUM; i++) {
++        if (pad_is_ldd(i)) {   /* a game driver's custom controller, as in GetInfo2 */
++            info->port_status[i]       = CELL_PAD_STATUS_CONNECTED | pad_status_take(i);
++            info->port_setting[i]      = s_port_setting[i];
++            info->device_capability[i] = CELL_PAD_CAPABILITY_PS3_CONFORMITY
++                                       | CELL_PAD_CAPABILITY_PRESS_MODE
++                                       | CELL_PAD_CAPABILITY_SENSOR_MODE;
++            info->device_type[i]       = CELL_PAD_DEV_TYPE_LDD;
++            info->pclass_type[i]       = CELL_PAD_PCLASS_TYPE_STANDARD;
++            connected++;
++            continue;
++        }
+         /* Same virtual-pad-on-port-0 rule as cellPadGetInfo2, so both views of
+          * the ports agree (a game that cross-checks them must see one truth). */
+         if ((i < PAD_MAX_HOST_PORTS && s_host_state[i].connected) || i == 0) {
+@@ -2449,3 +2563,81 @@ s32 cellPadClearBuf(u32 port_no)
+     /* Nothing to clear in our implementation -- state is polled fresh */
+     return CELL_OK;
+ }
++
++/* ---------------------------------------------------------------------------
++ * Custom controllers (LDD). The handle is the port number, as on the console.
++ * -------------------------------------------------------------------------*/
++
++s32 cellPadLddRegisterController(void)
++{
++    if (!s_pad_initialized)
++        return CELL_PAD_ERROR_NOT_OPENED;
++    int port = -1;
++    for (u32 p = PAD_MAX_HOST_PORTS; p < s_max_connect && p < CELL_PAD_MAX_PORT_NUM; p++)
++        if (!s_ldd[p].used) { port = (int)p; break; }
++    for (int p = (int)s_max_connect - 1; port < 0 && p >= 1; p--)   /* a title with few ports */
++        if (p < CELL_PAD_MAX_PORT_NUM && !s_ldd[p].used &&
++            !(p < PAD_MAX_HOST_PORTS && s_host_state[p].connected))
++            port = p;
++    if (port < 0)
++        return (s32)CELL_PAD_ERROR_TOO_MANY_DEVICES;
++    PadLdd* l = &s_ldd[port];
++    memset(l->button, 0, sizeof l->button);
++    l->button[1] = 0x70 | (CELL_PAD_LEN_CHANGE_DEFAULT / 2);
++    l->button[4] = l->button[5] = l->button[6] = l->button[7] = 128;   /* sticks centred */
++    s_port_setting[port] = 0;
++    __atomic_store_n(&l->used, 1, __ATOMIC_RELEASE);
++    __atomic_store_n(&s_ldd_changed[port], 1, __ATOMIC_RELAXED);
++    printf("[cellPad] LddRegisterController -> port %d\n", port);
++    return port;
++}
++
++s32 cellPadLddUnregisterController(s32 handle)
++{
++    if (!s_pad_initialized)
++        return CELL_PAD_ERROR_NOT_OPENED;
++    if (handle < 0 || handle >= CELL_PAD_MAX_PORT_NUM)
++        return CELL_PAD_ERROR_INVALID_PARAMETER;
++    if (!s_ldd[handle].used)
++        return (s32)CELL_PAD_ERROR_NO_DEVICE;
++    __atomic_store_n(&s_ldd[handle].used, 0, __ATOMIC_RELEASE);
++    __atomic_store_n(&s_ldd_changed[handle], 1, __ATOMIC_RELAXED);
++    printf("[cellPad] LddUnregisterController(port %d)\n", handle);
++    return CELL_OK;
++}
++
++s32 cellPadLddDataInsert(s32 handle, CellPadData* data_guest)
++{
++    if (!s_pad_initialized)
++        return CELL_PAD_ERROR_NOT_OPENED;
++    const unsigned int ea = (unsigned int)(uintptr_t)data_guest;
++    if (handle < 0 || handle >= CELL_PAD_MAX_PORT_NUM || !ea)
++        return CELL_PAD_ERROR_INVALID_PARAMETER;
++    if (!s_ldd[handle].used)
++        return (s32)CELL_PAD_ERROR_NO_DEVICE;
++    for (int i = 0; i < CELL_PAD_MAX_CODES; i++)
++        s_ldd[handle].button[i] = vm_read16(ea + 4 + (unsigned int)i * 2);
++    /* PS3_WHEEL_TRACE: what the game's own driver made of the controller. */
++    static int trace = -1;
++    if (trace < 0) { const char* e = getenv("PS3_WHEEL_TRACE"); trace = (e && *e && *e != '0') ? 1 : 0; }
++    if (trace) {
++        static u16 last[8]; static unsigned lines;
++        const u16* b = s_ldd[handle].button;
++        if (memcmp(last + 2, b + 2, 6 * sizeof(u16)) != 0 && lines < 2000) {
++            memcpy(last, b, sizeof last);
++            lines++;
++            fprintf(stderr, "[cellPad] port %d from the game's driver: d1=%02X d2=%02X R=%u,%u L=%u,%u\n",
++                    handle, b[2] & 0xFF, b[3] & 0xFF, b[4], b[5], b[6], b[7]);
++        }
++    }
++    return CELL_OK;
++}
++
++s32 cellPadLddGetPortNo(s32 handle)
++{
++    if (!s_pad_initialized)
++        return CELL_PAD_ERROR_NOT_OPENED;
++    if (handle < 0 || handle >= CELL_PAD_MAX_PORT_NUM || !s_ldd[handle].used)
++        return CELL_PAD_ERROR_INVALID_PARAMETER;
++    return handle;
++}
+diff --git a/libs/input/cellPad.h b/libs/input/cellPad.h
+index 4a9aab3b..fa32a63a 100644
+--- a/libs/input/cellPad.h
++++ b/libs/input/cellPad.h
+@@ -199,6 +199,12 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param);
+ /* NID: 0x3733EA3C */
+ s32 cellPadClearBuf(u32 port_no);
+ 
++/* Custom controllers (a game's own USB driver, e.g. GT5's Logitech wheels) */
++s32 cellPadLddRegisterController(void);
++s32 cellPadLddUnregisterController(s32 handle);
++s32 cellPadLddDataInsert(s32 handle, CellPadData* data);
++s32 cellPadLddGetPortNo(s32 handle);
++
+ /* Internal: call once per frame to update pad state from host input */
+ void cellPad_poll(void);
+ 
