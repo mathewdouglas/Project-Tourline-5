@@ -6,6 +6,17 @@ versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Textures that changed in place could keep showing their old picture: the
+  renderer only sampled a texture's bytes to notice changes. In a race this
+  caught the car damage map and the cars' small lighting maps. Each frame now
+  re-checks part of the held textures in full and re-uploads any that changed,
+  at no measurable cost (High Speed Ring 59.6-59.9 FPS against 59.7-59.8).
+  `RSX_TEX_CSUM_ROLL=0` restores the old check.
+- Frames that use more than 1024 textures, seen around race starts and in
+  B-Spec, left thousands of texture binds empty. The likely cause of the
+  track map disappearing for the rest of a race until a restart (#49, #52);
+  not yet confirmed in game. The table now has 2048 slots, filled past 1024
+  only when a frame needs them. `RSX_TEX_SLOTS=1024` restores the old size.
 - Car damage drawn as long streaks over whole panels after any contact
   (#42, #47; the striped paint seen on dark cars). Each impact scratches the
   car's damage map with a scratch texture that should end at its edges; the

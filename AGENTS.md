@@ -187,6 +187,15 @@ old); such draws wait for their pipeline rather than use the interpreter.
 Reproduce: `gt5boot.ps1 -Route race -FrameTest` (Fiat scrapes the walls).
 See progress-gt5.md.
 
+**Texture slots and stale textures (0.1.12, runtime).** #49/#52 (track
+map gone until restart) logged `texture slots full (1024)`; the table is
+2048, past 1024 only for a frame's overflow (`RSX_TEX_SLOTS=1024`,
+`RSX_TEX_SLOTS_SOFT`). Held textures were only sample-checked: the damage
+map and lighting cubes stayed stale; a per-frame full re-check budget
+re-uploads them (`RSX_TEX_CSUM_ROLL=0` old). Map fix unconfirmed. #48 (2.11
+freeze at 3x speed, lanes' 1 MB rings full) not reproduced. See
+progress-gt5.md.
+
 **2.11 race audio underruns (0.1.12).** The extended-range check runs only
 in the images named by `audio_extended_range_images` (2.11: the EQ
 `j0B07CA3D`): 482-511 underruns -> 1 per race, no NaN with scrubbing off

@@ -4,6 +4,48 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.1.12: issues #48-#54 triage; texture slots and stale textures (2026-11-20)
+
+**#51** (2.11, 0.1.11, used dealership, freeze): workload 4 `busy=0 ready=0`,
+row `006D 006D FFFF...` (progress = head), `gFKsE` polling `0x00B95248`: the
+lost flag kick of #47, fixed by `SPURS_FLAG_KICK_KEEP=2` (not in 0.1.11).
+
+**#48** (2.11, 0.1.11, dealership with F2 at 3x, freeze): another shape.
+Workload 4 `busy=1`, four lanes at SPU pc `0x04600` (lr `0x1040C`) waiting on
+labels 0x48-0x4B; each lane's 1 MB output ring (`0x40232000` + n x 1 MB) is
+written round to just behind the label (lane 0 head `0x40320D00`, label
+`0x40322100`; lane 1 0x380 bytes short). FIFO get = put (`0x10080`), so the
+GPU has read everything linked; `gFKsE` waits on workload 4's row (head
+0x328, lowest lane 0x28C). The rings fill within one pass and nothing links
+them until the pass ends: the ring-space circle of Phase 22 (`inf1`).
+Hypothesis: 3x vblanks (`g_gt5p_game_speed`) let a menu pass carry more
+work than a ring holds. Not reproduced: 2.11 car list at 3x with Right every
+3 s (`GT5P_GAME_SPEED_AT=CarList+10000:3`, pkg-A211), 10 min, no freeze.
+
+**#49 / #52** (track map gone until a restart; 2.11 B-Spec and 01.04
+B-Spec): both debug reports log `[TEX] texture slots full (1024)` around
+race loading, 8,000-24,000 binds left unbound in short bursts. Not yet tied
+to the map's draw. Locally only one of 695 runs (`mm3`) ever logged it.
+The table is now 2048 (`VP_TEX_SLOTS`); slots past `RSX_TEX_SLOTS_SOFT`
+(1024) are taken only when no slot is free that frame, so resident textures
+are as before. `RSX_TEX_SLOTS=1024` old.
+
+**Stale held textures (found while testing the map).** A held texture is
+re-uploaded only if its sparse checksum (1024 words, all words up to 4 KB)
+changes. `RSX_TEX_CSUM_CHECK` (a temporary check, every slot hashed in full
+every 30 frames) in a High Speed Ring race found 18 misses: 8x8 half-float
+cubes (fmt 0x9A, 12 KB; several cars' lighting) and the player's 256x512
+damage map at `0xC6A99100`. Fix: up to 16 KB is hashed word by word
+(`RSX_TEX_CSUM_DENSE_MAX`), and each frame up to `RSX_TEX_CSUM_ROLL` KB
+(default 1024; 0 off) of held textures not checked for 8 frames are hashed
+in full; a change re-uploads (`[tex-stale]`, first 16). Frame test, 0.1.11
+01.04 relinked with the backend (`pkg-tex104`) against `pkg-border104`,
+alternating: 59.9 / 59.6 FPS against 59.8 / 59.7, walk 5.86 against
+5.87-5.92 ms; 2-3 re-uploads a race (cubes, damage map). Sixth section of
+the runtime patch, `patches/incremental/texture-slots-stale.patch`.
+
+Not bugs: #50 (languages), #53 (frame-rate options), #54 (another project).
+
 ## 0.1.12: car damage streaks are border addressing clamped (2026-11-18)
 
 User report (0.1.11, 01.04, 21:9, 8x MSAA): the player's car shows wavy

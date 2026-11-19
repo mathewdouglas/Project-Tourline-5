@@ -71711,3 +71711,153 @@ index dc8ba72..92b83dd 100644
                        while (!dpso && s_fp_pending && GetTickCount64() - w0 < lim) {
                            s_fp_pending = 0;
                            dpso = DR_GET_FP_PSO();   /* first call moves its jobs to the front */
+diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
+index f04c446..f4fb85b 100644
+--- a/libs/video/rsx_d3d12_backend.c
++++ b/libs/video/rsx_d3d12_backend.c
+@@ -369,7 +369,7 @@ typedef struct {
+  * past slot 30, over draw 0's window onward; with 512 slots (Phase 60) that
+  * reached draw 30. RSX_TEXSLOT_SRV_LOW=1: the old place. */
+ #define TEXSLOT_SRV_BASE SRV_HEAP_SIZE
+-#define TEXSLOT_SRV_N    1024   /* = VP_TEX_SLOTS */
++#define TEXSLOT_SRV_N    2048   /* = VP_TEX_SLOTS */
+ #define SRV_HEAP_ALLOC   (SRV_HEAP_SIZE + TEXSLOT_SRV_N)
+ static void srv_slot_forget(u32 heap_slot);   /* RSX_SRV_CACHE */
+ 
+@@ -393,6 +393,8 @@ typedef struct {
+     u8  repl_cand;      /* the port's replacer manages this texture */
+     u8  res_psr;        /* res is in PIXEL_SHADER_RESOURCE (an upload completed): may be pooled */
+     long repl_gen;      /* s_tex_repl_gen when it was uploaded */
++    u32 dsum;           /* RSX_TEX_CSUM_ROLL: full hash of the bytes last uploaded */
++    u64 dsum_frame;     /* frame it was last compared in full */
+ } VPTexSlot;
+ /* Distinct textures uploadable per frame. Four was enough for a UI/atlas-style
+  * frame but not for a scene: this title binds ~20 distinct textures per frame,
+@@ -401,10 +403,23 @@ typedef struct {
+  * object, which is indistinguishable from a missing texture upload. */
+ /* Was 96: the dealer pages after Acura bind more distinct textures than that
+  * in one frame, and ~2,000 binds a second were left unbound. The table is
+- * VP_TEX_SLOTS long; RSX_TEX_SLOTS=<n> (default 1024) sets how much of it is
++ * VP_TEX_SLOTS long; RSX_TEX_SLOTS=<n> (default 2048) sets how much of it is
+  * used. A slot holds its texture until another texture needs it. */
+-#define VP_TEX_SLOTS 1024
++/* 2048 since issues #49/#52: race loading and B-Spec frames went past 1024
++ * distinct textures ("texture slots full", thousands of binds unbound around
++ * the race start) and the track map stayed blank for the rest of the race.
++ * Only the first RSX_TEX_SLOTS_SOFT (1024) slots are filled while an unused
++ * slot can be evicted, so resident textures stay as before; the rest take a
++ * frame's overflow. RSX_TEX_SLOTS=1024 restores the old table, and
++ * RSX_TEX_SLOTS_SOFT=0 fills empty slots first up to the full table. */
++#define VP_TEX_SLOTS 2048
+ _Static_assert(VP_TEX_SLOTS == TEXSLOT_SRV_N, "one texture-slot view per slot");
++static int vp_tex_soft_cap(void)
++{
++    static int n = -1;
++    if (n < 0) { const char* e = getenv("RSX_TEX_SLOTS_SOFT"); n = e ? atoi(e) : 1024; if (n < 0) n = 0; }
++    return n;
++}
+ static int vp_tex_cap(void)
+ {
+     static int n = 0;
+@@ -10023,7 +10038,12 @@ static u32 rsx_remap_to_d3d(u32 c1, u32 basef)
+ static u32 tex_csum(const u8* base, u32 nbytes)
+ {
+     u32 h = 2166136261u;
+-    u32 step = nbytes > 4096u ? nbytes / 1024u : 4u;
++    /* Up to 16 KB every word (RSX_TEX_CSUM_DENSE_MAX, was 4 KB): GT5's 8x8
++     * half-float lighting cubes (12 KB) changed in words the sparse walk
++     * skipped and kept their first contents. */
++    static u32 dense_max = 0;
++    if (!dense_max) { const char* e = getenv("RSX_TEX_CSUM_DENSE_MAX"); dense_max = e ? (u32)atoi(e) : 16384u; if (dense_max < 4096u) dense_max = 4096u; }
++    u32 step = nbytes > dense_max ? nbytes / 1024u : 4u;
+     for (u32 i = 0; i + 3 < nbytes; i += step) {
+         u32 w32; memcpy(&w32, base + i, sizeof w32);
+         h ^= w32; h *= 16777619u;
+@@ -10031,6 +10051,29 @@ static u32 tex_csum(const u8* base, u32 nbytes)
+     return h;
+ }
+ 
++/* A held texture is re-uploaded when its sparse checksum (1024 samples)
++ * changes, which misses edits between the samples: a GT5 race had its car
++ * damage map (256x512) and lighting cubes change unseen, so the GPU kept the
++ * old picture. Each frame up to RSX_TEX_CSUM_ROLL KB (default 1024; 0 off) of
++ * held textures, those checked longest ago first as frames go by, are hashed
++ * in full; a change re-uploads ([tex-stale] names the first ones). */
++static u32 tex_roll_budget(void)
++{
++    static int v = -1;
++    if (v < 0) { const char* e = getenv("RSX_TEX_CSUM_ROLL"); v = e ? atoi(e) : 1024; if (v < 0) v = 0; }
++    return (u32)v * 1024u;
++}
++static u32 tex_dense_sum(const u8* base, u32 nbytes)
++{
++    u64 h = 0xCBF29CE484222325ull;
++    u32 i = 0;
++    for (; i + 7 < nbytes; i += 8) { u64 w; memcpy(&w, base + i, sizeof w); h = (h ^ w) * 0x100000001B3ull; }
++    for (; i < nbytes; i++) h = (h ^ base[i]) * 0x100000001B3ull;
++    return (u32)(h ^ (h >> 32));
++}
++static u64 s_roll_frame = ~0ull;
++static u32 s_roll_used;
++
+ /* RSX_TEXUPSTAT: the held-texture checksums' count and TSC time. */
+ static u64 s_tcs_n, s_tcs_t, s_tcs_bytes, s_tcr_t, s_tcr_n, s_tcu_t, s_tcu_n;
+ static int texupstat_on(void) { static int on = -1; if (on < 0) on = getenv("RSX_TEXUPSTAT") ? 1 : 0; return on; }
+@@ -10501,7 +10544,7 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+     /* (portable helper tex_csum() -- see above; a statement-expression macro
+      * here was a GCC/Clang extension MSVC rejects.) */
+     #define TEX_CSUM(base, nbytes) tex_csum_timed((base), (nbytes))
+-    int slot = -1, freeslot = -1, emptyslot = -1;
++    int slot = -1, freeslot = -1, emptyslot = -1, nres = 0;
+     const int ncap = vp_tex_cap();
+     const u32 hint_i = ((key_off >> 7) * 2654435761u) >> 20 & (TEX_HINT_N - 1);
+     int i0 = s_tex_hint[hint_i];
+@@ -10525,16 +10568,35 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+              * every one of them every frame was ~70% of the frame's CPU time. */
+             u32 nb = chain_bytes;
+             u32 cs = TEX_CSUM(cube ? vm_base + c->off : tex_src(c->off, nb), nb);
+-            if (cs == c->csum && !(c->repl_cand && c->repl_gen != s_tex_repl_gen)) { c->used = 1; c->last_used_frame = s_d3d.frame_count; return i; }
++            int stale = 0;
++            if (cs == c->csum && tex_roll_budget() && s_d3d.frame_count - c->dsum_frame >= 8) {
++                if (s_roll_frame != (u64)s_d3d.frame_count) { s_roll_frame = s_d3d.frame_count; s_roll_used = 0; }
++                if (s_roll_used < tex_roll_budget()) {
++                    s_roll_used += nb;
++                    c->dsum_frame = s_d3d.frame_count;
++                    const u32 ds = tex_dense_sum(cube ? vm_base + c->off : tex_src(c->off, nb), nb);
++                    if (ds != c->dsum) {
++                        static int nlog = 0;
++                        if (nlog < 16 && ++nlog) fprintf(stderr, "[tex-stale] off=0x%08X %ux%u fmt=0x%02X cube=%d bytes=%u: changed between checksum samples, re-uploaded (frame %llu)%c",
++                                                         off, w, h, fmt & 0xFF, cube, nb, (unsigned long long)s_d3d.frame_count, 10);
++                        stale = 1;
++                    }
++                }
++            }
++            if (cs == c->csum && !stale && !(c->repl_cand && c->repl_gen != s_tex_repl_gen)) { c->used = 1; c->last_used_frame = s_d3d.frame_count; return i; }
+             if (!cube && c->off == off) tex_vol_mark(off, nb);
+             slot = i; break;                      /* stale: fall through and redo */
+         }
+         if (!c->used && (freeslot < 0 || (tex_lru_on() &&
+                 c->last_used_frame < s_d3d.vp_tex[freeslot].last_used_frame))) freeslot = i;
+         if (!c->res && emptyslot < 0) emptyslot = i;
++        if (c->res) nres++;
+     }
+-    /* An empty slot before one whose texture another frame may want again. */
+-    if (slot < 0 && emptyslot >= 0) freeslot = emptyslot;
++    /* An empty slot before one whose texture another frame may want again,
++     * until RSX_TEX_SLOTS_SOFT slots hold textures; past that only when no
++     * slot is free this frame. */
++    { const int soft = vp_tex_soft_cap();
++      if (slot < 0 && emptyslot >= 0 && (freeslot < 0 || !soft || nres < soft)) freeslot = emptyslot; }
+     /* RSX_TEXUPSTAT=1: every 5 s, uploads per frame (new, or held but its
+      * bytes changed), their bytes, and the ten textures uploaded most. */
+     { static int on = -1;
+@@ -11202,7 +11264,8 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+     t->last_used_frame = s_d3d.frame_count;
+     t->repl_cand = (u8)repl_cand; t->repl_gen = repl_gen;
+     { u32 nb = chain_bytes;
+-      t->csum = TEX_CSUM(cube ? vm_base + off : tex_src(off, nb), nb); }
++      t->csum = TEX_CSUM(cube ? vm_base + off : tex_src(off, nb), nb);
++      if (tex_roll_budget()) { t->dsum = tex_dense_sum(cube ? vm_base + off : tex_src(off, nb), nb); t->dsum_frame = s_d3d.frame_count; } }
+     #undef TEX_CSUM
+     return slot;
+ }
