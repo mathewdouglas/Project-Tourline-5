@@ -4,6 +4,34 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.1.12 published (2026-11-20)
+
+Tag `v0.1.12` = `1c98718` (version bump and dated changelog on top of
+`8df8cdf`). Built like 0.1.11 under `C:\pt5-release\0.1.12`: engine-only 01.04
+and 2.11 clean builds at the tag commit, `pgo.py gen` in the 01.04 tree, a
+High Speed Ring profile from it, then the profile-guided dual-engine package:
+0 functions lost counts, 771 without a record. ZIP 128 files, SHA-256
+`b86f10ffb29fae364f7741865c866b1a541d2229e1591242a449ec095cf851ca`; uploaded
+digest matches. VirusTotal (`vt.py scan` after packaging; the earlier key file
+was one-use, so `--vt-key-file` was not passed to the build): ZIP 0/64,
+`gt5.exe` 0/69, `gt5_211.exe` 0/69, `tourline5.exe` Trapmine only (allowed).
+
+Packaged engines on the smoke storage, High Speed Ring frame test, two runs
+each: 01.04 57.5 / 57.5 FPS (median 16.9 ms, p99 26.4 / 25.6 ms; 0.1.11: 58.2);
+2.11 38.4 then 44.1 FPS (0.1.11: 22.9 then 43.4; a new 2.11 build's first run
+is always slow), 24 then 4 underruns (0.1.11's test: 517). 0 `RSX_CMD_CHECK`
+reports, no invalid audio, no null calls. The 01.04 runs took 55 s from
+RaceLoad to RaceAssets: the dev cache's learned race set changed by two
+entries between runs (8194/8192), so the race pack was rebuilt each time
+(`pack stored`); the pack code is unchanged since 0.1.11, whose own first run
+took the same. The first profiling attempt reported no FrameTest line (the
+`grep` saw nothing); the rerun's profile was used.
+
+Issues: closed as fixed #28, #38, #39, #47, #51 (2.11 freeze) and #42 (damage
+streaks). Commented, left open: #36 (freeze fixed; noisy thumbnail open),
+#49/#52 (slot fix likely, unconfirmed), #48 (ring-space freeze at 3x, not
+reproduced), #46 (tuning-shop freeze, likely the fixed one, no log).
+
 ## 0.1.12: issues #48-#54 triage; texture slots and stale textures (2026-11-20)
 
 **#51** (2.11, 0.1.11, used dealership, freeze): workload 4 `busy=0 ready=0`,

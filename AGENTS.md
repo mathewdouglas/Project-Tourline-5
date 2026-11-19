@@ -267,6 +267,11 @@ for the open #36 garage freeze. The runtime patch has a second, appended
 section for these; see progress-gt5.md. Tests: `lwmutex_host_state.py`,
 `gcm_report_memory.py`.
 
+**Release 0.1.12** (tag `v0.1.12`, commit `1c98718`): the 2.11 freeze
+(flag kick), 2.11 race audio, car damage border addressing and the texture
+slot/stale-texture fixes; built like 0.1.11, VirusTotal clean. See
+progress-gt5.md.
+
 **Release 0.1.11** (tag `v0.1.11`, commit `6d66309`): the sync slot fix,
 F2 game speed and the PGO antivirus layout; packaged with the VirusTotal
 check on. See progress-gt5.md.
