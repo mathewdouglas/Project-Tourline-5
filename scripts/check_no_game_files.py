@@ -33,8 +33,10 @@ BRAND_ICONS = {
 }
 # The ps3recomp local-changes patch (patches/*.patch) is our own source diff and
 # passed 1 MB in Phase 60. Text diffs there get a larger limit; anything else
-# keeps MAX_BYTES.
-MAX_PATCH_BYTES = 4_000_000
+# keeps MAX_BYTES. 8 MB since 2026-11-20: the GT5 runtime patch reached 4.0 MB
+# on feat/wheel (088284f), and the --history check of every branch then
+# failed every push. Only text diffs starting "diff --git" get this limit.
+MAX_PATCH_BYTES = 8_000_000
 
 # Lower-cased. Extensions of game data, licences, keys, and analysis databases.
 EXTENSIONS = {
