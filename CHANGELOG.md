@@ -5,6 +5,11 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-11-20
+
+Fixes the 2.11 picture freezes on car screens, crackling 2.11 race sound and
+the streaks that car damage drew over whole panels.
+
 ### Fixed
 - Textures that changed in place could keep showing their old picture: the
   renderer only sampled a texture's bytes to notice changes. In a race this
@@ -25,7 +30,7 @@ versions follow [SemVer](https://semver.org/).
   `RSX_TEX_BORDER_ADDR=0` restores the old behaviour.
 - 2.11: the picture stopping while the game keeps running, on screens that
   show a car (dealership, garage, tuning shop, settings, B-Spec; #28, #36,
-  #38, #39, #47). A restart signal the game sends its car-rendering jobs
+  #38, #39, #47, #51). A restart signal the game sends its car-rendering jobs
   was dropped when it arrived while the previous batch was finishing; the
   new jobs then never ran and the game waited for them for ever. Reproduced
   on the Arcade car list (both test runs froze, after 8 minutes and 3 minutes
