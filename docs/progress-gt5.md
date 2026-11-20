@@ -71,6 +71,18 @@ all reached the menu, no script error. The #55 route (race, then settings)
 was not tried. Next: get the message from a player
 on a build with the hook; then guest exception delivery (landing pads).
 
+**First named report: #64 (0.1.13, 2.11, Master Mod 2.0.0, 2026-11-21).**
+`[script-error] FatalError m_adhoc.cpp:864: nil object cannot be used as
+HObject.` The player was rebuilding the garage thumbnails of all their cars
+(250+). `play.out` shows the loop: per car, `car/M/1/<id>.png` and
+`car/L/1/<id>.png` are written (open flags 0x241) under `USRDIR/car`, ids
+descending `fa f9 f8 de da d3 d2 d1 b8`; the error came on the car after
+`b8`, 9 cars in. Same throw path as #55-#57 (script thread tid 35; native
+callers `0x00A4E9F8+0x278` <- `0x005854B8+0x66C`). 3x game speed was turned
+on about 10-15 s before it, but #55/#56 had no speed change, so speed is not
+required. Next reproduction: 2.11 garage, the thumbnail update over many
+cars (the test save needs more cars).
+
 ## Release 0.1.12 published (2026-11-20)
 
 Tag `v0.1.12` = `1c98718` (version bump and dated changelog on top of
