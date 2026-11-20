@@ -83,6 +83,35 @@ on about 10-15 s before it, but #55/#56 had no speed change, so speed is not
 required. Next reproduction: 2.11 garage, the thumbnail update over many
 cars (the test save needs more cars).
 
+The reporter attached their save (kept privately under
+`C:\pt5-release\0.1.13\issue64-save`). With it in the smoke storage (the
+previous save backed up to `C:\pt5-release\0.1.9\savedata-211-before-64-20261121`),
+the 0.1.13 2.11 engine and Master Mod as `PS3_FS_OVERLAY`, the menu and the
+garage load (56 Premium cars). Master Mod's screen files differ, so the
+`GTLife` milestone never fires: time presses from `MusicDecode` instead.
+Route: Cross at +6 s and +9 s (GT Life), three Downs from +22 s land on the
+garage icon, Cross at +25.5 s opens it. Car pictures live in `USRDIR/car`,
+not in the save, so the garage only stats them. The menu path to the
+"update all pictures" action was not found yet.
+
+## 0.1.13 crash reports #63, #66: native faults on AMD GPUs (2026-11-21)
+
+**#66** (01.04, RX 6950 XT, A-10 licence test): `present` thread reads host
+0x8. Relinking the 0.1.13 objects with `/MAP` (bytes at the RVAs match the
+release) names `render_frame+0x800` <- `rsx_d3d12_backend_present+0x1aa` <-
+`present_thread`. The instruction is `call [rax+8]` (`AddRef`) on a shader
+blob in the shader pack table: `spack_checkpoint`, inlined, which every 10 s
+without a new shader snapshots the table (`AddRef` on each blob, under
+`s_spack_lk`). One blob's vtable was 0: the table held a blob that had been
+freed, so some holder released it once too often. The pack's own
+add/get/end/checkpoint/write paths and the guest VP/FP compile paths
+(`vp_ps_hold_*`, `memo_pb`, `vp_fp` flush) balance on reading; the extra
+release is not found. The log shows 91 failed pipeline builds in that session.
+**#63** (01.04, RX 9070 XT, no ZIP): read at host 0x44 on an unnamed thread
+whose whole host chain is outside `gt5.exe`, so a thread the port did not
+create (likely the driver's). The guest registers in both reports are the
+same stale values (`LR=0x00C45390`), not the faulting code.
+
 ## Release 0.1.12 published (2026-11-20)
 
 Tag `v0.1.12` = `1c98718` (version bump and dated changelog on top of
