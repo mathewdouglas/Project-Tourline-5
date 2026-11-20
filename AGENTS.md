@@ -331,7 +331,7 @@ inputs, pinned downloads) and `scripts/release/package_player.py`
 logging only) is in the runtime patch and measured on 01.04 races; step 2's
 matrix layout is measured (`RSX_SCENE_CONSTS`, `scripts/diag/scene_consts.py`);
 camera motion vectors work for the main view (`RSX_MV=1`, `RSX_MV_VIEW=<px>|c<amp>`,
-mirror open); per-object vectors work too (`RSX_MV=2`, check readback `[mv] check`). Test engines relink the 0.1.11 release objects with only the
+mirror open); per-object vectors work too (`RSX_MV=2`, check readback `[mv] check`); camera jitter works (`RSX_JITTER=<n>`, Halton(2,3); sign checked with `RSX_JITTER_FIXED`). Test engines relink the 0.1.11 release objects with only the
 backend recompiled (`scratch/dlss-build/relink.py`, from `C:/pt5-release/av-test`).
 
 **Car-list render pass (Phase 44).** Workload 4 (body `0x0196FF40`, four lanes)

@@ -4,6 +4,39 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.2.0 DLSS step 4: camera jitter (2026-11-20)
+
+`RSX_JITTER=<n>` (runtime, off by default): scene draws are shifted by a
+Halton(2,3) offset of `n` phases, in host pixels in [-0.5, 0.5), one phase
+per frame judged a scene. Scene draws are those that test depth (or stencil)
+into the last judged scene target, or into its zeta, depth-only passes
+included (they record `rt_off` 0, so they are matched by zeta; a prepass left
+unshifted would z-fight). The shift is added to `vp_posoffset.xy` (a clip
+offset times w) in `vp_record_cb`, per viewport, so the rear mirror moves by
+the same pixels; it is part of the constant-slot reuse key, so a scene draw
+never takes an unshifted slot from the draw before it. The offset each frame
+used is handed to the replay (`FrameSet.mv.jit`, `jit_i`) for DLSS. Motion
+vectors stay unjittered (they come from the guest's matrices). Switches:
+`RSX_JITTER_FIXED=x,y[;x,y...]` constant offsets in host pixels, cycled every
+`RSX_JITTER_FIXED_FRAMES` judged frames (tests); `RSX_JITTER_LOG=1`.
+
+Check (01.04 HSR, 720p, race paused with Start, a fixed camera that keeps
+drawing the scene, 348 draws a frame): offsets (0,0), (40,24), (-20,0) cycled
+every 150 frames, a window shot a second, each shot matched against one in
+state (40,24) by the integer shift with the least mean grey difference
+(`scratch/dlss-build/shift.ps1`). The shots fall into three groups at
+(0,0), (-40,-24) and (-60,-24), error 0.00, 1.47 and 2.17 against 55 unshifted:
+exactly {(0,0), (-20,0)} - (40,24). So +x moves the picture right, +y down,
+by the stated pixels; the reflected reading cannot give that pattern (a
+triangle has no point symmetry). The first attempt (a band of clear colour at
+the edge from a big offset) showed nothing: GT5 culls loosely, so geometry
+just past the edge slides in. With `RSX_JITTER=8 RSX_MV=2`, paused shots
+differ by 2.2-3.9 grey levels (0.00 without jitter), and no z-fighting.
+
+Not done: the texture LOD bias. DLAA draws at output size and needs none; it
+moves to step 6 (render below output size), where the scene's samplers need
+`log2(render / output)`.
+
 ## 0.2.0 DLSS step 3: per-object motion vectors (2026-11-18)
 
 `RSX_MV=2` (runtime, off by default; `=1` stays camera only). Every draw

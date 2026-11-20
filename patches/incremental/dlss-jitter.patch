@@ -1,0 +1,182 @@
+diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
+index 42b84ee..c39e14d 100644
+--- a/libs/video/rsx_d3d12_backend.c
++++ b/libs/video/rsx_d3d12_backend.c
+@@ -689,6 +689,8 @@ typedef struct {
+         int reset;                  /* nothing of the frame before belongs to this one */
+         u32 frame, nobj, matched, camera, none;   /* for the check readback (RSX_MV_VIEW=c) */
+         struct { float rect[4], prect[4], R[16], vz[2]; int ok; } reg[2];
++        float jit[2];               /* [jitter] the frame's scene offset in host pixels (0,0 = none) */
++        u32 jit_i;                  /* its phase, 0 = none */
+     } mv;
+ } FrameSet;
+ static FrameSet s_frs[2];
+@@ -11224,6 +11226,7 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+  * class match the previous record of this frame binds that record's slot
+  * instead. RSX_VCB_REUSE=0: copy every time. */
+ static u32 s_vcb_copies, s_vcb_calls;   /* per 5 s, on the [present-thread] line */
++static int jit_draw(const D3D12DrawRecord* dr, float out[2]);   /* [jitter] defined with the walker side */
+ static void scene_consts_note(const D3D12DrawRecord* dr, const rsx_state* st);   /* [scene] RSX_SCENE_CONSTS */
+ static const float* s_mv_draw_t;   /* [mv] defined with the walker side */
+ static u32 vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+@@ -11515,12 +11518,16 @@ static u32 vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+                     fprintf(stderr, "[uw-edge] fp=0x%08X used=0x%04X t0=%ux%u blend=%d narrow=%d%c",
+                             dr->fp_addr, used, dr->tex[0].w, dr->tex[0].h, dr->blend, narrow, 10); } } }
+       } }
+-    static float l_uw;
++    static float l_uw; static float l_jit[2]; static int l_jon;
++    /* [jitter] decided before reuse: a scene draw must not take a slot without the offset, nor the reverse. */
++    float jit_xy[2] = { 0.0f, 0.0f };
++    const int jit_xy_on = jit_draw(dr, jit_xy);
+     if (dr) ((D3D12DrawRecord*)dr)->uw_edge = uw_edge > 0.0f;   /* every draw: records are reused */
+     const int c03 = (vs_idx >= 0 && vs_idx < s_d3d.vp_vs_n) ? s_d3d.vp_vs[vs_idx].uses_c03 : s_d3d.vp_uses_c03;
+     const float vz0 = st->viewport_scale[2], vz1 = st->viewport_offset[2];
+     if (vreuse && l_ok && l_st == st && l_gen == st->vc_gen && l_fgen == FR->ix_gen &&
+-        l_c03 == (u32)c03 && l_vz[0] == vz0 && l_vz[1] == vz1 && l_uw == uw_edge && l_slot < slot)
++        l_c03 == (u32)c03 && l_vz[0] == vz0 && l_vz[1] == vz1 && l_uw == uw_edge && l_slot < slot &&
++        l_jon == jit_xy_on && l_jit[0] == jit_xy[0] && l_jit[1] == jit_xy[1])
+         return l_slot;
+     char* dst = (char*)s_d3d.vp_cb_mapped
+         + ((u64)FR->parity * s_draw_cap + slot) * VP_CB_STRIDE;
+@@ -11539,6 +11546,7 @@ static u32 vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+                       c[i*4], c[i*4+1], c[i*4+2], c[i*4+3], 10);
+       } }
+     l_ok = 1; l_st = st; l_gen = st->vc_gen; l_fgen = FR->ix_gen; l_c03 = (u32)c03; l_vz[0] = vz0; l_vz[1] = vz1; l_slot = slot; l_uw = uw_edge;
++    l_jon = jit_xy_on; l_jit[0] = jit_xy[0]; l_jit[1] = jit_xy[1];
+     /* VP_MVP=<N>: the constant bank as the shader will see it, for the first N
+      * draws. A snapshot taken from a stale rsx_state looks exactly like a broken
+      * vertex program from the outside -- both give zero fragments. */
+@@ -11623,6 +11631,8 @@ static u32 vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+                if (lock < 0) { const char* le = getenv("DBG_LOCK"); lock = le ? atoi(le) : 0; }
+                if (lock && s_lock_valid) { ux = s_lock_x; uy = s_lock_y; }
+                vpx[0] = k; vpx[1] = k; vpx[4] = -ux * k; vpx[5] = -uy * k; } }
++    /* [jitter] RSX_JITTER: the scene's sub-pixel offset. */
++    if (jit_xy_on) { vpx[4] += jit_xy[0]; vpx[5] += jit_xy[1]; }
+ 
+     /* Garbage-projection fallback (vkcube; see the original comment). */
+     int uses_c03 = (vs_idx >= 0 && vs_idx < s_d3d.vp_vs_n)
+@@ -14949,6 +14959,7 @@ static struct {
+     u32 last_rec;                 /* the last depth-tested record into the scene target */
+     u32 fp;                       /* the boundary draw's fragment program */
+     u32 last_off;                 /* the scene target of the last "scene" frame */
++    u32 last_zeta;                /* and its zeta */
+     int last_kind, last_why;
+     u32 last_logged;
+ } s_scn;
+@@ -15019,12 +15030,15 @@ static void scene_consts_frame(void)
+ }
+ static int mv_on(void);
+ static void scene_mv_frame(void);
++static int jit_on(void);
++static void jit_frame(void);
+ /* Anything that needs the boundary. */
+ static int scene_on(void)
+ {
+     const int consts = scene_consts_wanted();   /* read the switch even when the log is on */
+     const int mv = mv_on();
+-    return scene_log_level() > 0 || consts || mv;
++    const int jit = jit_on();
++    return scene_log_level() > 0 || consts || mv || jit;
+ }
+ /* The units a record's fragment program samples: bindings left over from
+  * earlier draws stay set and must not count (the first live run judged a
+@@ -15086,7 +15100,7 @@ static void scene_frame_scan(void)
+             s_scn.off = rts[best].off; s_scn.zeta = rts[best].zeta;
+             s_scn.w = rts[best].w; s_scn.h = rts[best].h; s_scn.fmt = rts[best].fmt;
+             s_scn.last_rec = rts[best].last;
+-            s_scn.last_off = s_scn.off;
++            s_scn.last_off = s_scn.off; s_scn.last_zeta = s_scn.zeta;
+         } else if (held_u != ~0u) {
+             s_scn.kind = SCN_HELD; s_scn.why = SCN_R_OK; s_scn.unit = held_u;
+         } else s_scn.why = SCN_R_NO_SOURCE;
+@@ -15126,6 +15140,90 @@ static void scene_frame_scan(void)
+     s_scn.last_kind = s_scn.kind; s_scn.last_why = s_scn.why;
+     scene_consts_frame();
+     scene_mv_frame();
++    jit_frame();
++}
++/* ---- [jitter] Sub-pixel camera jitter (DLSS step 4), walker side ----
++ * RSX_JITTER=<n>: scene draws (depth-tested draws into the last judged scene
++ * target, or into its zeta) are shifted by a Halton(2,3) offset of n phases,
++ * in host pixels in [-0.5, 0.5), one phase per frame judged a scene. The
++ * shift is a clip-space offset (vp_posoffset.xy times w), so it moves every
++ * scene viewport, the rear mirror too, by the same pixels. Motion vectors
++ * stay unjittered: they come from the guest's own matrices.
++ * RSX_JITTER_FIXED=x,y: a constant offset in host pixels instead (tests: a
++ * large one shows a band of clear colour at the scene's edge, sign included).
++ * RSX_JITTER_LOG=1: the offset every 120 phases. */
++static struct { int on, n, fixed, log, nf, per; float fx, fy, fl[8][2]; u32 phase; float cur[2]; u32 cur_i, draws, seen; } s_jit = { -1 };
++static float jit_halton(u32 i, u32 b)
++{
++    float f = 1.0f, r = 0.0f;
++    while (i) { f /= (float)b; r += f * (float)(i % b); i /= b; }
++    return r;
++}
++static int jit_on(void)
++{
++    if (s_jit.on < 0) {
++        const char* e = getenv("RSX_JITTER");
++        s_jit.n = e ? atoi(e) : 0;
++        const char* f = getenv("RSX_JITTER_FIXED");
++        while (f && s_jit.nf < 8 && sscanf(f, "%f,%f", &s_jit.fl[s_jit.nf][0], &s_jit.fl[s_jit.nf][1]) == 2) {
++            s_jit.nf++; f = strchr(f, ';'); if (f) f++;
++        }
++        if (s_jit.nf) { s_jit.fixed = 1; s_jit.fx = s_jit.fl[0][0]; s_jit.fy = s_jit.fl[0][1]; }
++        const char* pf = getenv("RSX_JITTER_FIXED_FRAMES");
++        s_jit.per = pf && atoi(pf) > 0 ? atoi(pf) : 1;
++        s_jit.log = getenv("RSX_JITTER_LOG") != NULL;
++        s_jit.on = s_jit.n > 0 || s_jit.fixed;
++        if (s_jit.on)
++            fprintf(stderr, "[jitter] on: %s %d, x %.3f y %.3f host px%s", s_jit.fixed ? "fixed" : "Halton(2,3) phases",
++                    s_jit.fixed ? 0 : s_jit.n, (double)s_jit.fx, (double)s_jit.fy, "\n");
++    }
++    return s_jit.on;
++}
++/* At a judged frame's end: hand the offset its draws used to the replay, pick the next. */
++static void jit_frame(void)
++{
++    if (!jit_on()) return;
++    if (s_jit.log && (s_jit.seen++ % 120) == 0)
++        fprintf(stderr, "[jitter] judged frame %u: %s, %u draws shifted by %.4f, %.4f (scene 0x%X zeta 0x%X)\n",
++                s_scn.frame, s_scn_kind[s_scn.kind], s_jit.draws, (double)s_jit.cur[0], (double)s_jit.cur[1],
++                s_scn.last_off, s_scn.last_zeta);
++    s_jit.draws = 0;
++    FR->mv.jit[0] = s_jit.cur[0]; FR->mv.jit[1] = s_jit.cur[1]; FR->mv.jit_i = s_jit.cur_i;
++    if (s_scn.kind != SCN_SCENE) { s_jit.cur[0] = s_jit.cur[1] = 0.0f; s_jit.cur_i = 0; return; }
++    if (s_jit.fixed) {
++        const u32 k = (s_jit.phase++ / (u32)s_jit.per) % (u32)s_jit.nf;
++        if (s_jit.log && s_jit.nf > 1 && (s_jit.phase - 1) % (u32)s_jit.per == 0)
++            fprintf(stderr, "[jitter] judged frame %u: fixed offset %u (%.1f, %.1f)\n", s_scn.frame, k,
++                    (double)s_jit.fl[k][0], (double)s_jit.fl[k][1]);
++        s_jit.cur[0] = s_jit.fl[k][0]; s_jit.cur[1] = s_jit.fl[k][1]; s_jit.cur_i = k + 1;
++    }
++    else {
++        const u32 i = s_jit.phase % (u32)s_jit.n + 1;
++        s_jit.phase++;
++        s_jit.cur[0] = jit_halton(i, 2) - 0.5f; s_jit.cur[1] = jit_halton(i, 3) - 0.5f; s_jit.cur_i = i;
++    }
++    if (s_jit.log && s_jit.phase % 120 == 1)
++        fprintf(stderr, "[jitter] scene frame %u: phase %u offset %.4f, %.4f host px" "\n", s_scn.frame,
++                s_jit.cur_i, (double)s_jit.cur[0], (double)s_jit.cur[1]);
++}
++/* The clip offset (added to vp_posoffset.xy) for a draw, or 0 when it is not a scene draw. */
++static int jit_draw(const D3D12DrawRecord* dr, float out[2])
++{
++    if (!jit_on() || !dr || !s_jit.cur_i || dr->is_clear || !dr->zeta_off || !dr->vp_w || !dr->vp_h) return 0;
++    /* Colour into the scene, or anything into its depth (a depth-only pass has rt_off 0). */
++    if (dr->rt_off ? dr->rt_off != s_scn.last_off && dr->zeta_off != s_scn.last_zeta
++                   : !dr->zonly || dr->zeta_off != s_scn.last_zeta) return 0;
++    const u32 rw = dr->rt_w ? dr->rt_w : s_gw, rh = dr->rt_h ? dr->rt_h : s_gh;
++    const float hw = (float)dr->vp_w * (float)uw_host_w(rw, rh) / (float)rw;
++    const float hh = (float)dr->vp_h * (float)uw_host_h(rw, rh) / (float)rh;
++    s_jit.draws++;
++    out[0] = 2.0f * s_jit.cur[0] / hw;
++    out[1] = -2.0f * s_jit.cur[1] / hh;
++    { static int n; if (s_jit.log && n < 6 && s_jit.seen > 600) { n++;   /* a few, once a race may be up */
++        fprintf(stderr, "[jitter] draw rt 0x%X %ux%u zeta 0x%X zonly %d vp %u,%u %ux%u host %.1fx%.1f clip offset %.5f, %.5f\n",
++                dr->rt_off, dr->rt_w, dr->rt_h, dr->zeta_off, dr->zonly, dr->vp_x, dr->vp_y, dr->vp_w, dr->vp_h,
++                (double)hw, (double)hh, (double)out[0], (double)out[1]); } }
++    return 1;
+ }
+ /* ---- [mv] Camera motion vectors (DLSS step 2), walker side ----
+  * Measured on 01.04 (progress-gt5.md, "DLSS step 2 groundwork"): a scene

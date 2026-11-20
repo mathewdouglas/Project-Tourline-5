@@ -8,7 +8,9 @@ viewport in the scene target, and world matrices are in world space
 work for the main view (`RSX_MV`; the check view's error is lowest at the
 vectors' own scale); the rear mirror is open and left to step 3. Step 3's
 per-object vectors work too (`RSX_MV=2`: no bad frames in 122 checked, no
-measurable frame-time cost; progress-gt5.md, "DLSS step 3"). Step 1 detail
+measurable frame-time cost; progress-gt5.md, "DLSS step 3"). Step 4's
+jitter works (`RSX_JITTER=<n>`; +x right, +y down, checked by shot shifts;
+progress-gt5.md, "DLSS step 4"); the LOD bias moved to step 6. Step 1 detail
 (`RSX_SCENE_LOG`, see "0.2.0 DLSS step 1" in [progress-gt5.md](progress-gt5.md)).
 GT5's boundary is its own resolve draw: unit 0 is the multisampled scene
 (4 samples at 720p, 2 across at 1080p), units 1-3 the bloom chain. Every
@@ -156,12 +158,15 @@ Each step ends with a measurement on both engines before the next starts.
 3. **Per-object vectors** (`RSX_MV=2`): object table, matching, second render
    target, fill pass. Check on other cars, wheels, the player's car in chase
    and cockpit views, mirrors.
-4. **Jitter and LOD bias** (`RSX_JITTER=<n>`, Halton(2,3)). Check with a
-   four-offset capture that the offsets land where stated, sign included.
+4. **Jitter** (`RSX_JITTER=<n>`, Halton(2,3)). Check with a
+   multi-offset capture that the offsets land where stated, sign included.
+   Done (2026-11-20).
 5. **DLAA** (`RSX_AA=dlaa`): plug-in interface, load, evaluate at the
    boundary, substitute the slot, reset handling, failure fallback (after N
    failures switch off with the reason in F1). GPU time on the F3 page.
 6. **DLSS modes** (`dlss_q|b|p|u|c`, `RSX_DLSS_SCALE`, `RSX_DLSS_PRESET`):
+   texture LOD bias `log2(render / output)` on scene samplers (moved here
+   from step 4; DLAA needs none),
    scene drawn at the render size through the existing scaling, restored
    when no scene is seen. F1 VIDEO row, launcher setting, settings file key.
 7. **Shipping:** licence decision, launcher fetch or packaging, tests in
