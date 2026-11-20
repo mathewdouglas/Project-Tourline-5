@@ -278,6 +278,9 @@ terminate and exits with code 1. New required post-lift step
 off); crash reports name it. Not reproduced in 20 2.11 boots with Skip
 opening movie (half at 3x; 10 with Master Mod 2.0.0). See progress-gt5.md.
 
+**Release 0.1.13** (tag `v0.1.13`, commit `dc3143e`): 0.1.12 plus the
+script-error log; built like 0.1.12, VirusTotal clean. See progress-gt5.md.
+
 **Release 0.1.12** (tag `v0.1.12`, commit `1c98718`): the 2.11 freeze
 (flag kick), 2.11 race audio, car damage border addressing and the texture
 slot/stale-texture fixes; built like 0.1.11, VirusTotal clean. See

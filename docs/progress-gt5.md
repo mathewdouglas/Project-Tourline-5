@@ -4,6 +4,27 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.1.13 published (2026-11-20)
+
+Tag `v0.1.13` = `dc3143e`: 0.1.12 plus the script-error log
+(`script_error_patch.py`, both lifts patched: 01.04 `0x00B3FE1C`, 2.11
+`0x009C3048`) and the report-name fix. Built like 0.1.12 under
+`C:\pt5-release\0.1.13` (engine-only clean builds, `pgo.py gen`, a High Speed
+Ring profile at 16.8 FPS instrumented, profile-guided dual-engine package):
+0 functions lost counts, 775 without a record. ZIP 128 files, SHA-256
+`9c7e227fcb21e017986458cf0aa526063b8756bec2d983931520e5d2662f787d`; uploaded
+digest matches. VirusTotal: ZIP 0/64, `gt5.exe` 0/69, `gt5_211.exe` 0/69,
+`tourline5.exe` 1/71 Trapmine (allowed). The launcher first came back
+"known, 0/0" (analysis not finished); a `--rescan` waited 30 min without a
+result, and a plain lookup afterwards gave the 1/71.
+
+Packaged engines, High Speed Ring frame test: 01.04 58.6 FPS (median 16.8 ms,
+p99 23.5 ms, 3 underruns); 2.11 44.5 then 45.7 FPS (1 underrun each). 0
+`RSX_CMD_CHECK` reports, no invalid audio, no stalls or null calls.
+
+Issues #55-#58 commented (same crash; send the 0.1.13 report; #58's Sharpen
+route is the lead), left open.
+
 ## Exit code 1 reports #55/#56/#57: an uncaught game script error (2026-11-20)
 
 Three reports, all 2.11 with no other message: #55 (0.1.12, after a race,
