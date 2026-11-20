@@ -43,8 +43,11 @@ by the new `player_setup.py` case). Patch/restore/patch is byte-identical.
 **Reproduction, not reproduced.** 10 boots of the dev 2.11 engine with the
 hook (`PAD_SKIP_MOVIE=OpeningMovie`, the movie playing from the disc, every
 second boot at 3x from `installed00.dat` via `GT5P_GAME_SPEED_AT`): all
-reached the menu, no `[script-error]`, no exit. Master Mod and the #55 route
-(race, then settings) were not tried. Next: get the message from a player
+reached the menu, no `[script-error]`, no exit. Then 10 more the same way
+with GT5 Master Mod 2.0.0 (US) as `PS3_FS_OVERLAY` (its top-level `PDIPFS`
+only, no add-on; `[fs-overlay]` confirmed its files were read), as in #57:
+all reached the menu, no script error. The #55 route (race, then settings)
+was not tried. Next: get the message from a player
 on a build with the hook; then guest exception delivery (landing pads).
 
 ## Release 0.1.12 published (2026-11-20)
