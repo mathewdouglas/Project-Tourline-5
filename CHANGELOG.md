@@ -5,6 +5,11 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-11-20
+
+Names the game script error behind the sudden "exited with code 1" quits
+(#55-#58), so the next report says which script failed.
+
 ### Added
 - When a game script error makes the game quit (exit code 1 with no other
   message; #55, #56, #57), the log and the crash report now name the error,
