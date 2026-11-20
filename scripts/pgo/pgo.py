@@ -118,7 +118,7 @@ def gt5boot(tag, exe, extra=(), frame_test=True, settle=40):
     return out
 
 
-POST_LIFT = ('spin_patch.py', 'ui_mask_patch.py', 'spu_native_patch.py', 'spu_regpromo.py', 'spu_region.py')
+POST_LIFT = ('spin_patch.py', 'ui_mask_patch.py', 'script_error_patch.py', 'spu_native_patch.py', 'spu_regpromo.py', 'spu_region.py')
 
 
 def check_lift():

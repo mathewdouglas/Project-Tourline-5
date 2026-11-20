@@ -267,6 +267,17 @@ for the open #36 garage freeze. The runtime patch has a second, appended
 section for these; see progress-gt5.md. Tests: `lwmutex_host_state.py`,
 `gcm_report_memory.py`.
 
+**Script errors end the game (#55/#56/#57, open).** GT5's script engine
+reports errors through one routine (`script_error_func`: 2.11 `0x009C3048`,
+01.04 `0x00B3FE1C`); in its throwing mode it throws a guest C++ exception,
+and the port cannot deliver guest exceptions to their handlers (the
+`__builtin_eh_return` exits are lifted as plain returns), so the game calls
+terminate and exits with code 1. New required post-lift step
+`scripts/script_error_patch.py` logs `[script-error] <kind> <file>:<line>:
+<message>` first (`src/gt5p_script_error.cpp`, `GT5P_SCRIPT_ERROR_LOG=0`
+off); crash reports name it. Not reproduced in 10 2.11 boots with Skip
+opening movie (half at 3x). See progress-gt5.md.
+
 **Release 0.1.12** (tag `v0.1.12`, commit `1c98718`): the 2.11 freeze
 (flag kick), 2.11 race audio, car damage border addressing and the texture
 slot/stale-texture fixes; built like 0.1.11, VirusTotal clean. See
@@ -2019,6 +2030,7 @@ Run Python through the repo's virtual environment: `.venv\Scripts\python`.
 | `scripts/setjmp_patch.py` | Post-lift patch, required after every lift |
 | `scripts/spin_patch.py` | Post-lift patch, required after every lift: guest spin waits on SPU progress yield (`spin_waits` in `config/targets.json`) |
 | `scripts/ui_mask_patch.py` | Post-lift patch, required after every lift: text fade/clip masks centred in ultrawide (`ui_mask_sites`, Prologue's `ui_label_mask_func`; `GT5P_UI_MASK_FIX=0` off) |
+| `scripts/script_error_patch.py` | Post-lift patch, required after every lift: logs the game's script errors at `script_error_func` before they throw (`GT5P_SCRIPT_ERROR_LOG=0` off) |
 | `scripts/spu_native_patch.py` | Post-SPU-lift patch, required: hooks native replacements (`src/gt5p_spu_native.c`) into lifted SPU blocks (`spu_native_hooks`); `GT5P_SPU_NATIVE=0` off, `=2` check |
 | `scripts/spu_regpromo.py` | Post-SPU-lift patch, after `spu_native_patch.py`: copies of hot lifted SPU functions with registers in locals (`spu_regpromo`); `GT5P_SPU_REGPROMO=0` off (default), `1` on, `2` check, `3` A/B; measured slower (Phase 44) |
 | `scripts/spu_region.py` | Post-SPU-lift patch, required, after `spu_regpromo.py`: merges listed loops of lifted SPU functions into one with registers as `__m128i` locals (`spu_regions`); `GT5P_SPU_REGION=1` default, `0` off, `3` A/B; Eiger frames 7.5-8% shorter (Phase 45) |

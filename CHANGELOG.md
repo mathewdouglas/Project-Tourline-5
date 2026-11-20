@@ -5,6 +5,17 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- When a game script error makes the game quit (exit code 1 with no other
+  message; #55, #56, #57), the log and the crash report now name the error,
+  for example `[script-error] FatalError m_adhoc.cpp:864: nil object cannot
+  be used as ...`, and the report's title says it stopped on a script error.
+  `GT5P_SCRIPT_ERROR_LOG=0` turns the log line off.
+
+### Fixed
+- Two problem reports made within the same second no longer overwrite each
+  other.
+
 ## [0.1.12] - 2026-11-20
 
 Fixes the 2.11 picture freezes on car screens, crackling 2.11 race sound and

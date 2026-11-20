@@ -4,6 +4,49 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Exit code 1 reports #55/#56/#57: an uncaught game script error (2026-11-20)
+
+Three reports, all 2.11 with no other message: #55 (0.1.12, after a race,
+in settings), #56 (0.1.11, about 15 s into a boot, Skip opening movie on),
+#57 (0.1.12, about 10 s into a boot, Skip opening movie on, 3x, Master Mod).
+
+**Same path in all three**, on script thread tid 35 `n3FKY`:
+
+- the script engine raises `FatalError` from `m_adhoc.cpp` line 864 (0x360)
+  with "nil object cannot be used as %s." (`0x009C2D6C` formats it,
+  `0x009C3048` reports it). Each report reaches it from a different script
+  operation;
+- `0x009C3048` reads its mode (`0x017B3330`); mode 2 allocates a guest
+  exception and throws it;
+- the throw finds no handler (its personality check is `GNUCC++\0`) and
+  calls terminate (`0x00BBF3BC` -> `0x00BBF438`), exit code 1. The NULL
+  reads/writes by `0x0009AC64` and the `[tty] suspicious len` line come
+  after this, from the exit path.
+
+The port cannot deliver guest C++ exceptions: the libgcc
+`__builtin_eh_return` exits are lifted as plain returns (Phase 6 note). That
+an error which a console would catch ends the game here is a hypothesis; the
+reports cannot show which script failed or why its value was nil.
+
+**Logging (required post-lift step).** `scripts/script_error_patch.py`
+calls `gt5p_script_error` (`src/gt5p_script_error.cpp`) at the entry of
+`script_error_func` (2.11 `0x009C3048`; 01.04 `0x00B3FE1C`, found by its
+`li r5,0x360` caller `0x00B79FC8` and the same mode/throw shape; 01.04
+loads these strings from a constant pool, not by `lis`/`addi`). It prints
+r3 kind, r4 file, r5 line, r6 context and the message that r7's string
+points at: `[script-error] FatalError m_adhoc.cpp:864: ...`, at most 64 a
+run, `GT5P_SCRIPT_ERROR_LOG=0` off. The launcher's report titles such an
+exit "stopped on a game script error (<message>)" and puts the line first.
+Report ZIPs made within one second no longer overwrite each other (found
+by the new `player_setup.py` case). Patch/restore/patch is byte-identical.
+
+**Reproduction, not reproduced.** 10 boots of the dev 2.11 engine with the
+hook (`PAD_SKIP_MOVIE=OpeningMovie`, the movie playing from the disc, every
+second boot at 3x from `installed00.dat` via `GT5P_GAME_SPEED_AT`): all
+reached the menu, no `[script-error]`, no exit. Master Mod and the #55 route
+(race, then settings) were not tried. Next: get the message from a player
+on a build with the hook; then guest exception delivery (landing pads).
+
 ## Release 0.1.12 published (2026-11-20)
 
 Tag `v0.1.12` = `1c98718` (version bump and dated changelog on top of
