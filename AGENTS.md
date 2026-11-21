@@ -303,6 +303,10 @@ old). Textures over a target bind it before sub-viewport captures
 (`RSX_SUBVP_RT_FIRST=0`). `RSX_BLIT_READBACK_DUMP=<dir>` dumps readbacks.
 See progress-gt5.md.
 
+**Release 0.1.15** (tag `v0.1.15`, commit `bc00f98`): the #30 FACING fix;
+built like 0.1.14. VirusTotal: Microsoft `Wacatac.B!ml` on `tourline5.exe`
+only (local Defender clean; published with a note, see progress-gt5.md).
+
 **Release 0.1.14** (tag `v0.1.14`, commit `6feca45`): garage thumbnails,
 2.11 guest exception delivery, script frames in the log, player name; built
 like 0.1.13, VirusTotal clean. See progress-gt5.md.

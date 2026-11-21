@@ -4,6 +4,41 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.1.15 published (2026-11-22)
+
+Tag `v0.1.15` = `bc00f98`: the #30 FACING fix. Built under
+`C:\pt5-release\0.1.15` like 0.1.14 (High Speed Ring profile on the
+instrumented build, 28.4 FPS; 0 functions lost counts, 785 without a record).
+ZIP 128 files, SHA-256
+`0b41c2f05bc2803002f567ed9fedbbe2d770d11cc12dee88f7bb1b52a21396aa`; uploaded
+digest matches. Packaged engines, High Speed Ring frame test: 01.04 59.6 FPS
+(median 16.7 ms, p99 21.0 ms, 10 underruns), 2.11 57.5 FPS (p99 28.2 ms, 0
+underruns); 0 `RSX_CMD_CHECK` reports.
+
+VirusTotal: ZIP 0/65, `gt5.exe` 0/69, `gt5_211.exe` 0/68 (first "known, 0/0";
+`--rescan` of the two exes did not finish in 30 min, a plain lookup later
+gave the result). `tourline5.exe` 2/71: Trapmine (allowed) plus **Microsoft
+`Trojan:Win32/Wacatac.B!ml`**, new. 0.1.13's and 0.1.14's launchers still
+show only Trapmine (their stored analyses; a rescan did not finish). Local
+`MpCmdRun -Scan -ScanType 3` of the launcher and the ZIP: no threats. The
+launcher source differs from 0.1.14 only in its version, but the PGO binary
+differs throughout (compiled with the engine profile, which has no launcher
+records; 512 bytes smaller). Fresh uploads of candidates, all flagged by some
+ML engine:
+
+| Launcher candidate | Result |
+| --- | --- |
+| + CompanyName, InternalName, LegalCopyright | Microsoft Wacatac + Trapmine |
+| first half of `.text` int3 | APEX, Trapmine `malicious.moderate` |
+| second half of `.text` int3 | Trapmine `malicious.moderate` |
+| not profile-guided (the 2.11 tree's build) | APEX `Malicious` |
+| not profile-guided + version fields | APEX `Malicious` |
+
+Published as built at the user's choice, with the label explained in the
+release notes; the user submits it to Microsoft as a false positive. Uploads
+of fresh files finish in minutes; `--rescan` of known files can queue for
+over 25 minutes.
+
 ## Release 0.1.13 published (2026-11-20)
 
 Tag `v0.1.13` = `dc3143e`: 0.1.12 plus the script-error log
