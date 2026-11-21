@@ -217,7 +217,7 @@ is first. The test copy autosaved three new cars; it was restored from
 Tag `v0.1.14` = `6feca45`: the garage thumbnail fixes (large blit readback,
 synchronous at the blit, growing targets keep their picture, sub-viewport
 order), guest exception delivery on 2.11, script frames in the error log, and
-`game.player_name` (#60). Built under `C:\pt5-release .1.14` (private inputs
+`game.player_name` (#60). Built under `C:\pt5-release\0.1.14` (private inputs
 reused from 0.1.13): engine-only 01.04 and 2.11 clean builds at the commit,
 `pgo.py gen` in the 01.04 tree, a High Speed Ring profile on the
 instrumented build (28.0 FPS), profile-guided dual-engine package: 0
