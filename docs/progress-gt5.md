@@ -109,6 +109,50 @@ pictures, makes no grim2 lookup and has no error: a workaround for players.
 Open: which object the script expects there (likely one that exists only when
 signed in), and what a console does offline.
 
+**#64 cause found; guest exceptions delivered (2026-11-21).** Corrections to the
+paragraph above: the "upload" reading and the single-car workaround were wrong.
+
+- *Script position.* The error routine composes its full text (2.11
+  `0x009C2E60`: message plus the script engine's frames, `name:line;`), which
+  is now logged too (`script_error_compose_ret` 0x009C3098 in
+  config/targets.json; `script_error_patch.py`). #64:
+  `scripts/gt5/global_status/Garage2.ad:122; scripts/gt5/ThumbnailUtil.ad:156;
+  projects/gt5/gtmode/GarageFunction.ad:435`.
+- *The car.* The 21st car of the loop is the save's Volkswagen Kubelwagen
+  typ82 '44, shown with a "!" badge in the garage. Triangle on it alone fails
+  the same way (`GaragePopup.ad:1544 <- :1679 <- SequenceUtil.ad:424 <-
+  GaragePopup.ad:250 <- GTModeRoot.ad:1827`), with or without Master Mod (run
+  `r64r`, overlay off). It is a base-game car, not DLC. The grim2 stat before
+  the error is md5(`/log//`), the online log path with an empty user, found by
+  logging the three MD5 updates (`0x007B4D88`, `0x007B5C00`, `0x0081C1F4`); it
+  is not the car's data. Why this car's data is nil is open; the save's
+  garage (`dev_hdd1/game249.db`) is encrypted.
+- *A console exits too.* Exception tables (`.eh_frame` 0x00FA63A0, one
+  personality): the error (`HException`, an `HObject`) is caught by the script
+  engine's native-call wrapper 0x009DA95C (try around the call at 0x009DAC90,
+  pad 0x009DAC9C, selector 4 = catch(HObject)); every branch hands it to the
+  script (0x009D50DC) and rethrows when no script code catches it. The rethrow's
+  search ends in a terminate region (0x00A3A984 here, 0x00A11958 from the
+  popup). So with this car a console also ends; there is no hardware path
+  that continues.
+- *Delivery (new, `guest_eh` in config/targets.json, required post-lift step
+  `scripts/guest_eh_patch.py`, `src/gt5p_guest_eh.cpp`, `GT5P_GUEST_EH=0`
+  old).* At `_Unwind_RaiseException` (0x00BE414C) the port runs the search
+  phase over the game's tables; when the handler is an armed catch site (an
+  armed host setjmp around the try call, with the callee-saved registers) it
+  fills the exception header and lands in the pad with r3/r4. Verified: `[guest-eh]
+  10HException caught by 0x009DA95C at pad 0x009DAC9C (selector 4, ...)`.
+  Cleanups in the frames between are skipped (leaks; counted in the log).
+  Throws a console would not survive still end as before (`not delivered`
+  line). This only changes errors a script catches, which used to exit.
+- *Rejected:* clearing the "not caught" result (so only the script call
+  ends) left the "Please wait / Uploading..." dialog up for good (`r64u`).
+- *Separate bug:* the pictures the port writes for Create Thumbnail(s) are
+  noise (garage list after `r64k`), so single-car Create Thumbnail is not a
+  workaround: it overwrites a picture with noise.
+- Regression: Arcade race on 2.11 with delivery on, frame test 55.8 FPS, no
+  delivery lines.
+
 ## 0.1.13 crash reports #63, #66: native faults on AMD GPUs (2026-11-21)
 
 **#66** (01.04, RX 6950 XT, A-10 licence test): `present` thread reads host

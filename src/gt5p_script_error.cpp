@@ -11,7 +11,14 @@
  *
  *   [script-error] FatalError m_adhoc.cpp:864: nil object cannot be used as ...
  *
- * At most 64 lines a run. GT5P_SCRIPT_ERROR_LOG=0: nothing is printed. */
+ * The routine then composes the full text (2.11 0x009C2E60: the message plus
+ * the script engine's frames, `name:line;` innermost first) into a
+ * std::string; `script_error_compose_ret` in config/targets.json is where
+ * that call returns, and the patch prints the composed text there too:
+ *
+ *   [script-error]   <message> name:line;name:line;...
+ *
+ * At most 64 lines a run each. GT5P_SCRIPT_ERROR_LOG=0: nothing is printed. */
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -70,5 +77,20 @@ extern "C" void gt5p_script_error(uint64_t kind, uint64_t file, uint64_t line, u
     fprintf(stderr, "[script-error] %s %s:%d%s%s: %s\n",
             guest_text((uint32_t)kind, 40).c_str(), guest_text((uint32_t)file, 80).c_str(), (int)(int32_t)line,
             ctx.empty() ? "" : " ", ctx.c_str(), guest_text(text, 400).c_str());
+    fflush(stderr);
+}
+
+/* str: the guest std::string object (its first word points at the characters;
+ * the length is 12 bytes before them). */
+extern "C" void gt5p_script_error_text(uint64_t str)
+{
+    static int on = -1;
+    static volatile long printed = 0;
+    if (on < 0) { const char* e = getenv("GT5P_SCRIPT_ERROR_LOG"); on = !(e && e[0] == '0'); }
+    if (!on || !readable((uint32_t)str, 4)) return;
+    const uint32_t chars = vm_read32((uint32_t)str);
+    if (!readable(chars - 12, 12) || InterlockedIncrement(&printed) > 64) return;
+    const uint32_t len = vm_read32(chars - 12);
+    fprintf(stderr, "[script-error]   %s%c", guest_text(chars, len < 2000 ? len : 2000).c_str(), 10);
     fflush(stderr);
 }

@@ -27,18 +27,31 @@ from spin_patch import find_function
 
 MARK = "/* script_error_patch */"
 DECL = ('extern "C" void gt5p_script_error(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t); '
-        + MARK + "\n")
+        'extern "C" void gt5p_script_error_text(uint64_t); ' + MARK + "\n")
+OLD_DECL = ('extern "C" void gt5p_script_error(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t); '
+            + MARK + "\n")
 CALL = ("        gt5p_script_error(ctx->gpr[3], ctx->gpr[4], ctx->gpr[5], ctx->gpr[6], ctx->gpr[7]); "
         + MARK + "\n")
+# After the call that composes the full text (`script_error_compose_ret`, its
+# return address in the routine): r26 holds the std::string it wrote.
+TEXT = " gt5p_script_error_text(ctx->gpr[26]); " + MARK
 
 
 def patch_body(body):
     first = body.index("{\n") + 2
-    return body[:first] + CALL + body[first:]
+    body = body[:first] + CALL + body[first:]
+    ret = target.TARGET.get("script_error_compose_ret")
+    if ret:
+        m = re.search(r"ctx->lr = 0x%08X; func_[0-9A-F]{8}\(ctx\); DRAIN_TRAMPOLINE\(ctx\);"
+                      % int(ret, 16), body)
+        if not m:
+            raise SystemExit(f"script_error_compose_ret {ret}: call not found")
+        body = body[:m.end()] + TEXT + body[m.end():]
+    return body
 
 
 def unpatch_body(body):
-    return body.replace(CALL, "")
+    return body.replace(CALL, "").replace(TEXT, "")
 
 
 def main():
@@ -59,8 +72,8 @@ def main():
             print(f"func_{func}: not patched")
             return
         text = text[:start] + unpatch_body(body) + text[end:]
-        if MARK not in text.replace(DECL, ""):
-            text = text.replace(DECL, "")
+        if MARK not in text.replace(DECL, "").replace(OLD_DECL, ""):
+            text = text.replace(DECL, "").replace(OLD_DECL, "")
         print(f"func_{func}: restored")
     else:
         if patched:

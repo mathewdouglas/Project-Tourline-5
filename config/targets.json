@@ -137,6 +137,8 @@
     "audio_extended_range": true,
     "audio_extended_range_images": ["j0B07CA3D"],
     "script_error_func": "0x009C3048",
+    "script_error_compose_ret": "0x009C3098",
+    "guest_eh": {"raise_func": "0x00BE414C", "eh_frame": "0x00FA63A0", "eh_frame_size": "0x300DAC", "si_typeinfo_vtable": "0x0171D288", "catch_sites": [{"func": "0x009DA95C", "call": "0x009DAC90", "pad": "0x009DAC9C", "pad_after": "goto loc_009DB094;", "pad_check": "ctx->gpr[4]; int64_t b = (int64_t)4;"}]},
     "spin_waits": [["0x00B99648", "0x00B996C8"], ["0x00B9BB90", "0x00B9BBB8"]],
     "spu_native_hooks": [["b017BD780", "0x4C14", "gt5p_spu_clear_words"]],
     "spu_regpromo": [["b017BD780", ["0xB240", "0xAD30", "0xF970", "0xC5E0", "0xA408", "0x96A0", "0x9500", "0xC324", "0xBB18", "0x9E10", "0xC35C", "0xFD60", "0xFA78", "0xC318"]]],
