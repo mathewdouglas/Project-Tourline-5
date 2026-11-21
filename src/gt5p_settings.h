@@ -57,6 +57,7 @@ struct Gt5pSettings {
     bool skip_movie = false;    /* press through the opening movie (PAD_SKIP_MOVIE) */
     bool smooth_colour = true;  /* 16-bit targets, no dither noise (RSX_HIGH_PRECISION) */
     int anisotropy = 16;        /* 1 (trilinear), 4, 8 or 16: forced anisotropic filtering (RSX_ANISO) */
+    std::string player_name;    /* the PS3 user name the game shows; "" = "User" (PS3_USER_NAME) */
 
     /* [audio] */
     int audio_channels = 2;     /* sound output: 2 stereo, 6 (5.1), 8 (7.1), 0 auto (AUDIO_OUTPUT_CHANNELS) */

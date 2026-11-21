@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iterator>
 #include <optional>
+#include <cctype>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -42,7 +43,7 @@ const char* const kEnvNames[] = {
     "PAD_MODERN_CONTROLS", "PAD_TRIGGER_DEADZONE", "PAD_TRIGGER_CURVE", "PAD_ADAPTIVE_TRIGGERS", "PAD_TRIGGER_RUMBLE", "PAD_SDL_RUMBLE",
     "PAD_NO_SDL", "PAD_NO_KEYBOARD", "PS3_VERBOSE",
     "GT5P_VBLANK_HZ", "SPURS_LANE_PIN", "SPURS_JL_SPU3", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_STARTUP", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "PAD_SKIP_MOVIE", "RSX_SHADER_INTERP",
-    "AUDIO_OUTPUT_CHANNELS",
+    "AUDIO_OUTPUT_CHANNELS", "PS3_USER_NAME",
 };
 bool g_env_set[sizeof kEnvNames / sizeof kEnvNames[0]];
 
@@ -198,6 +199,15 @@ void read_tristate(toml::node_view<const toml::node> v, const char* key, int& ou
     warn(std::string(key) + " must be \"auto\", true or false; keeping the default");
 }
 
+/* A name the game can show: 1-16 printable characters, none that need quoting. */
+bool gt5p_player_name_ok(const std::string& v)
+{
+    if (v.empty() || v.size() > 16) return false;
+    for (unsigned char c : v)
+        if (!(isalnum(c) || c == ' ' || c == '.' || c == '-' || c == '_' || c == '\'')) return false;
+    return v.front() != ' ' && v.back() != ' ';
+}
+
 /* Keys this version knows, so a misspelt one is reported instead of ignored. */
 bool known_key(std::string_view section, std::string_view key)
 {
@@ -213,7 +223,7 @@ bool known_key(std::string_view section, std::string_view key)
         {"input", "adaptive_triggers"},
         {"input", "trigger_rumble"},
         {"input", "sdl_rumble"},
-        {"game", "skip_movie"},       {"game", "smooth_colour"},    {"game", "anisotropy"},
+        {"game", "skip_movie"},       {"game", "smooth_colour"},    {"game", "anisotropy"}, {"game", "player_name"},
         {"audio", "output"},
         {"performance", "vblank_hz"}, {"performance", "lane_pinning"},
         {"performance", "fifth_spu_lane"},
@@ -327,6 +337,11 @@ void parse_into(const toml::table& tbl, Gt5pSettings& s)
         if (v && (*v == 1 || *v == 4 || *v == 8 || *v == 16)) s.anisotropy = (int)*v;
         else warn("game.anisotropy must be 1, 4, 8 or 16; keeping the default");
     }
+    if (auto n = tbl["game"]["player_name"]) {
+        const auto v = n.value<std::string>();
+        if (v && gt5p_player_name_ok(*v)) s.player_name = *v;
+        else warn("game.player_name must be 1 to 16 letters, digits, spaces or . - _ ' characters; keeping \"User\"");
+    }
     read_audio_output(tbl["audio"]["output"], s.audio_channels);
     read_vblank(tbl["performance"]["vblank_hz"], s.vblank_hz100);
     read_lane_cores(tbl["performance"]["lane_pinning"], s.lane_cores);
@@ -378,6 +393,7 @@ void apply_env(const Gt5pSettings& s)
     if (!s.smooth_colour)   set_default_env("RSX_HIGH_PRECISION", "0");
     snprintf(buf, sizeof buf, "%d", s.anisotropy);
     set_default_env("RSX_ANISO", buf);
+    if (!s.player_name.empty()) set_default_env("PS3_USER_NAME", s.player_name.c_str());
     if (s.verbose_log >= 0) set_default_env("PS3_VERBOSE", s.verbose_log ? "1" : "0");
     set_default_env("AUDIO_OUTPUT_CHANNELS", s.audio_channels == 6 ? "6" : s.audio_channels == 8 ? "8" : s.audio_channels == 0 ? "auto" : "2");
     set_default_env("GT5P_VBLANK_HZ", s.vblank_hz100 == 6250 ? "62.5" : "59.94");
@@ -434,6 +450,7 @@ void reflect_env(Gt5pSettings& s)
     if (const char* e = getenv("PAD_KEYMAP")) gt5p_keymap_parse(e, s.keys);
     { const char* e = getenv("PAD_SKIP_MOVIE"); s.skip_movie = e && *e && strcmp(e, "0") != 0; }
     { const char* e = getenv("RSX_HIGH_PRECISION"); s.smooth_colour = !(e && e[0] == '0'); }
+    if (const char* e = getenv("PS3_USER_NAME"); e && gt5p_player_name_ok(e)) s.player_name = e;
     if (const char* e = getenv("RSX_ANISO")) { const int a = atoi(e); s.anisotropy = a >= 16 ? 16 : a >= 8 ? 8 : a >= 4 ? 4 : 1; }
     if (const char* e = getenv("PS3_VERBOSE")) s.verbose_log = (e[0] && e[0] != '0') ? 1 : 0;
     if (const char* e = getenv("AUDIO_OUTPUT_CHANNELS"))
@@ -587,6 +604,9 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "# Texture filtering: 1 (trilinear, the game's own), or 4, 8 or 16 for\n"
          "# anisotropic: surfaces at a slant stay sharp into the distance. [RSX_ANISO]\n"
          "anisotropy = " << s.anisotropy << "\n"
+         "# Your name in the game (profile, race results), up to 16 letters, digits,\n"
+         "# spaces or . - _ '. Empty: \"User\". Restart to apply. [PS3_USER_NAME]\n"
+         "player_name = \"" << s.player_name << "\"\n"
          "\n"
          "[audio]\n"
          "# Sound output: \"stereo\" (the default), \"5.1\" or \"7.1\" for surround\n"

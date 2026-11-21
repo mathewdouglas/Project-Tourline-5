@@ -282,6 +282,11 @@ in config/targets.json, 2.11 only: the engine's native-call wrapper
 search ends in terminate too, so it still exits (cause of the nil open).
 See progress-gt5.md.
 
+**Player name (#60, 2026-11-21).** `game.player_name` in gt5p_settings.toml
+(1-16 letters, digits, spaces, `.-_'`; empty = "User") sets `PS3_USER_NAME`,
+which the runtime's current-user name (cellSysutil, cellUserInfo) returns.
+Shown on GT Life; not on the F1 page yet.
+
 **Garage thumbnails (runtime, 2026-11-21).** Were noise: 1:1 blits of a
 GPU-only surface over 64x64 now read back (`RSX_BLIT_READBACK_LARGE=0` off),
 synchronously at the blit by cutting the frame (`RSX_BLIT_READBACK_SYNC=0`:
