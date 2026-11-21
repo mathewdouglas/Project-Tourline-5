@@ -153,6 +153,51 @@ paragraph above: the "upload" reading and the single-car workaround were wrong.
 - Regression: Arcade race on 2.11 with delivery on, frame test 55.8 FPS, no
   delivery lines.
 
+**Garage thumbnails fixed (runtime, 2026-11-21).** Every port thumbnail was
+the same noise (identical files; the game encrypts them with a fixed
+keystream, so the bytes were checked in guest memory instead,
+`RSX_BLIT_READBACK_DUMP=<dir>` writes each readback as a `.ppm`). How 2.11
+makes one: the car scene is drawn into `0x06C63600` (768x432 for M, 1280x720
+for L), post-process `0x0581FA81` reads it into `0x03780000`, the composite
+`0x0581FC81` writes it back into `0x06C63600` 1920 wide, and two 1:1 NV3089
+blits per pass (192x54 / 384x108 halves, colour pass then mask pass) copy it
+into main memory, where the PPU encodes the PNG. Three faults, all fixed:
+
+1. *Large blits read stale memory.* Readback existed only up to 64x64.
+   1:1 32-bit blits of a GPU-only surface of any size now get a readback
+   buffer of their own (`rsx_d3d12_note_blit_copy`, `RSX_BLIT_READBACK_LARGE=0`
+   off).
+2. *Too late for the guest.* The guest reads the destination once the GPU
+   passes a label after the blit, which the walker writes long before the
+   next frame. Such a blit now cuts the frame (an offscreen batch, no
+   present), waits for it and writes the pixels into the source surface and
+   the destination before the blit's own copy (`RSX_BLIT_READBACK_SYNC=0`:
+   next frame start). The second half's blit finds no draw in the cut frame,
+   so the last noted surface is reused.
+3. *A growing target lost its picture.* The M composite widened `0x06C63600`
+   from 768x432 to 1920x432 in the frame after the scene was drawn; a remade
+   target is filled from guest memory, which never holds GPU pictures, so
+   the post-process read old video memory (the pink/green stripes). A target
+   that grows now copies its old picture into the new resource
+   (`RSX_RT_GROW_KEEP=0` old). L worked only because its growth came in the
+   scene's frame.
+
+Also: a texture whose address is one of our targets now binds the target
+before the sub-viewport capture heuristic (`RSX_SUBVP_RT_FIRST=0` old); it
+was taking the composite's source, though fixing it alone changed nothing
+here. Diagnostics: `RSX_BLIT_READBACK_DBG=1|2`, `RSX_BLIT_READBACK_SRC=<levels>`,
+`RT_TEXDBG_RAW=<hex>` with `RT_TEXDBG_FP=<hex>`. Verified: the Camaro SS RM
+'10's thumbnail shows correctly in the garage after a fresh boot (runs
+`th27`-`th30`); Arcade race frame test 57.5 FPS, no large-blit cuts in the
+race. Thumbnails made by earlier builds stay noise until remade. Runtime
+patch section: `patches/incremental/gt5-thumbnail-readback.patch`.
+
+**Kubelwagen (#64), still open.** Base-game car, "!" in the garage. Player
+reports tie the yellow "!" to cars won in special events and to DLC needing a
+reinstall; unconfirmed. No game-data file fails to open around it. The
+garage database (`dev_hdd1/game249.db`) is encrypted. Next: which native
+returns nil before `Garage2.ad:122` / `GaragePopup.ad:1544`.
+
 ## 0.1.13 crash reports #63, #66: native faults on AMD GPUs (2026-11-21)
 
 **#66** (01.04, RX 6950 XT, A-10 licence test): `present` thread reads host

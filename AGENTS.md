@@ -279,7 +279,15 @@ in config/targets.json, 2.11 only: the engine's native-call wrapper
 `0x009DA95C`; required post-lift step `scripts/guest_eh_patch.py`,
 `src/gt5p_guest_eh.cpp`, `GT5P_GUEST_EH=0` off). #64 is a save car (Kubelwagen,
 "!" in the garage) whose data is nil: no script catches it and a console's
-search ends in terminate too, so it still exits. Port thumbnails are noise.
+search ends in terminate too, so it still exits (cause of the nil open).
+See progress-gt5.md.
+
+**Garage thumbnails (runtime, 2026-11-21).** Were noise: 1:1 blits of a
+GPU-only surface over 64x64 now read back (`RSX_BLIT_READBACK_LARGE=0` off),
+synchronously at the blit by cutting the frame (`RSX_BLIT_READBACK_SYNC=0`:
+next frame), and a target that grows keeps its picture (`RSX_RT_GROW_KEEP=0`
+old). Textures over a target bind it before sub-viewport captures
+(`RSX_SUBVP_RT_FIRST=0`). `RSX_BLIT_READBACK_DUMP=<dir>` dumps readbacks.
 See progress-gt5.md.
 
 **Release 0.1.13** (tag `v0.1.13`, commit `dc3143e`): 0.1.12 plus the
