@@ -162,6 +162,15 @@ if(GT5P_VM_INLINE)
     endif()
     message(STATUS "lifted PPU chunks: guest memory access inline")
 endif()
+# SSE4.1 for the lifted PPU chunks, as the lifted SPU code already has: the
+# AltiVec byte moves (vperm, lvlx, lvrx, lvsl/lvsr) are then byte shuffles
+# (runtime/ppu/ppu_vshuf.h) instead of sixteen-step byte loops, and the
+# per-lane byte swaps of the vector float ops vectorise. Same results bit for
+# bit (scripts/test/ppu_vshuf.py). OFF builds the scalar forms.
+option(GT5P_PPU_SSE41 "Build the lifted PPU code with SSE4.1" ON)
+if(GT5P_PPU_SSE41 AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+    set_property(SOURCE ${GENERATED_SOURCES} APPEND PROPERTY COMPILE_OPTIONS "-msse4.1")
+endif()
 
 # The runtime library does not bundle the PPU loader/HLE/VFS translation units;
 # each title compiles them so it can supply its own function_table and boot
@@ -361,6 +370,7 @@ target_link_libraries(gt5p PRIVATE ps3recomp_runtime)
 # Derived aliases and lifted source stay under build/; baseline SSE images remain available.
 string(JSON GT5P_AUDIO_IMAGES ERROR_VARIABLE GT5P_AUDIO_IMAGES_ERR GET "${GT5P_T}" audio_native_images)
 option(GT5P_AUDIO_EXTENDED_ZERO "Fix SPU extended/zero arithmetic in audio images" ON)
+option(GT5P_NATIVE_SPU_HOOKS "Native fast blocks in the FMA copies of audio images (audio_native_hooks)" ON)
 if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_ID MATCHES "Clang")
     string(JSON image_count LENGTH "${GT5P_AUDIO_IMAGES}")
     math(EXPR image_last "${image_count} - 1")
@@ -453,7 +463,59 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
                 string(REPLACE "gt5p_" "gt5p_audio_" alternate "${sym}")
                 string(APPEND wrapper "#define ${sym} ${alternate}\n")
             endforeach()
-            string(APPEND wrapper "#include \"${image_dir}/spu_recomp.c\"\n")
+            # Native fast blocks for this image (audio_native_hooks in
+            # config/targets.json; GT5P_NATIVE_SPU_HOOKS=OFF builds none): the
+            # FMA copy is compiled from a copy of the lifted file in which the
+            # hooked definitions are renamed ..._orig, and the native source
+            # defines the original names, so lifted callers and the registry
+            # reach it. The portable copy is never hooked.
+            set(hook_source "")
+            set(hook_functions "")
+            if(GT5P_NATIVE_SPU_HOOKS)
+                string(JSON n_hooks ERROR_VARIABLE hooks_err LENGTH "${GT5P_T}" audio_native_hooks)
+                if(NOT hooks_err AND n_hooks GREATER 0)
+                    math(EXPR last_hook "${n_hooks} - 1")
+                    foreach(h RANGE ${last_hook})
+                        string(JSON hook_image GET "${GT5P_T}" audio_native_hooks ${h} 0)
+                        if(hook_image STREQUAL image)
+                            string(JSON hook_source GET "${GT5P_T}" audio_native_hooks ${h} 1)
+                            string(JSON n_fn LENGTH "${GT5P_T}" audio_native_hooks ${h} 2)
+                            math(EXPR last_fn "${n_fn} - 1")
+                            foreach(f RANGE ${last_fn})
+                                string(JSON fn GET "${GT5P_T}" audio_native_hooks ${h} 2 ${f})
+                                list(APPEND hook_functions "${fn}")
+                            endforeach()
+                        endif()
+                    endforeach()
+                endif()
+            endif()
+            if(hook_source)
+                file(READ "${image_dir}/spu_recomp.c" hooked_text)
+                foreach(fn IN LISTS hook_functions)
+                    set(def "void gt5p_${image}_spu_func_${fn}(spu_context* ctx) {")
+                    string(FIND "${hooked_text}" "${def}" at)
+                    if(at LESS 0)
+                        message(FATAL_ERROR "audio_native_hooks: ${image} has no lifted function ${fn} (re-lift?)")
+                    endif()
+                    string(REPLACE "${def}" "void gt5p_${image}_spu_func_${fn}_orig(spu_context* ctx) {" hooked_text "${hooked_text}")
+                    string(APPEND wrapper "#define gt5p_${image}_spu_func_${fn}_orig gt5p_audio_${image}_spu_func_${fn}_orig\n")
+                endforeach()
+                file(WRITE "${CMAKE_BINARY_DIR}/hooked_${image}.c.tmp" "${hooked_text}")
+                configure_file("${CMAKE_BINARY_DIR}/hooked_${image}.c.tmp" "${CMAKE_BINARY_DIR}/hooked_${image}.c" COPYONLY)
+                set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${image_dir}/spu_recomp.c")
+                string(APPEND wrapper "#include \"${CMAKE_BINARY_DIR}/hooked_${image}.c\"\n")
+                set(hook_native "${CMAKE_SOURCE_DIR}/${hook_source}")
+                target_sources(gt5p PRIVATE "${hook_native}")
+                set_source_files_properties("${hook_native}" PROPERTIES
+                    COMPILE_OPTIONS "-msse4.1;-mfma"
+                    INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu;${image_dir}")
+                if(NOT GT5P_SPU_PROBES)
+                    set_property(SOURCE "${hook_native}" APPEND PROPERTY COMPILE_DEFINITIONS "SPU_LS_NO_PROBES")
+                endif()
+                message(STATUS "audio image ${image}: native hooks ${hook_functions} (${hook_source})")
+            else()
+                string(APPEND wrapper "#include \"${image_dir}/spu_recomp.c\"\n")
+            endif()
             set(native_source "${CMAKE_BINARY_DIR}/audio_native_${image}.c")
             file(CONFIGURE OUTPUT "${native_source}" CONTENT "${wrapper}" @ONLY)
             target_sources(gt5p PRIVATE "${native_source}")
@@ -465,7 +527,7 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
             endif()
             set_source_files_properties("${native_source}" PROPERTIES
                 COMPILE_OPTIONS "-msse4.1;-mfma"
-                INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu")
+                INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu;${image_dir}")
             if(NOT GT5P_SPU_PROBES)
                 set_property(SOURCE "${native_source}" APPEND PROPERTY COMPILE_DEFINITIONS "SPU_LS_NO_PROBES")
             endif()
