@@ -212,6 +212,33 @@ Lefts and Down (Volkswagen); Right (Kubelwagen), Cross, Cross, Cross; Cross
 is first. The test copy autosaved three new cars; it was restored from
 `C:\pt5-release\0.1.13\issue64-save`.
 
+## Issue triage for 0.1.14 (2026-11-21)
+
+- **#60 player name:** `game.player_name` / `PS3_USER_NAME` (runtime
+  cellSysutil current user name and cellUserInfoGetStat). Checked: GT Life
+  shows "Test Driver" with `PS3_USER_NAME=Test Driver`.
+- **#62 glitched car images:** the garage thumbnail noise, fixed (above).
+- **#68 (0.1.13, 2.11, exit 1 after a NASCAR special event race, no
+  script-error line):** the abort chain runs through `0x00BE7238`, which is
+  `__cxa_pure_virtual` (its descriptor `0x0176A180` sits in 5,491 vtable
+  slots). Caller `0x00870DD0` loops over two sub-objects at
+  `obj+0x70+i*0x28+0x10` and calls vtable slot 9 (`+0x24`); called from
+  `0x0083245C` (the loop at `0x0083244C`). One sub-object was mid-destruction
+  at race end. Not reproduced (needs a finished NASCAR event); asked whether
+  it repeats.
+- **#67 (0.1.13, 2.11, 4K, 2x MSAA, interpreter on, Master Mod):** the
+  dealership's Night backdrop showed blue horizontal stripes. Not reproduced:
+  Kubelwagen, Night backdrop, at 720p (`bd1`), 4K (`bd2`) and 4K 2x MSAA with
+  the interpreter (`bd3`) shows the city. Their session ran 11 minutes;
+  likely stale texture data later in a session. Route: Volkswagen dealer
+  (above), Right, Cross, Down x3 (Daytime, Sunset, Night).
+- **#61 (0.1.12, driver rendering):** the B-Spec new-driver dialog renders
+  correctly on 0.1.13 and this build at 720p and at 4K 2x MSAA with the
+  interpreter (`bs3`-`bs5`). Route: GT Life to Dealerships (above), 4 Lefts
+  (Garage), Down (My Drivers), Cross; Right x3, Cross (new driver slot).
+- **#59** (resolution question), **#65** (Rome lag, 01.04, no logs) and
+  **#55-#58** (need 0.1.14's script frames) answered or asked for more.
+
 ## 0.1.13 crash reports #63, #66: native faults on AMD GPUs (2026-11-21)
 
 **#66** (01.04, RX 6950 XT, A-10 licence test): `present` thread reads host
