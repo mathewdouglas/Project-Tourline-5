@@ -94,6 +94,21 @@ garage icon, Cross at +25.5 s opens it. Car pictures live in `USRDIR/car`,
 not in the save, so the garage only stats them. The menu path to the
 "update all pictures" action was not found yet.
 
+**#64 reproduced (first try).** Garage, then Right x3 (the pointer reaches the
+first car), Triangle opens the car's menu (Open, Change Car, Tuning, Create
+Thumbnail, Create Thumbnails for All Cars, ...); Down x4 and Cross start "for
+All Cars" (a "Please wait / Uploading..." dialog). Run `r64k`: 20 cars got
+`M` and `L` pictures, ids `11c` down to `112`, then `fa f9 f8 de da d3 d2 d1
+b8`, the same tail as the reporter's log. Right after `L/1/000000b8.png` the
+game stats `/dev_hdd1/grim2/cache/header/<md5>` (its online file cache; the
+port reports NP offline and cellNetCtl not initialised), and the script error
+follows with the same native chain (`0x00A4EC70`, `0x00585B24`). So it fails
+at the step after the first batch of 20 pictures, an online "upload" step,
+not on one car. Single-car Create Thumbnail (`r64l`, Down x3) writes the two
+pictures, makes no grim2 lookup and has no error: a workaround for players.
+Open: which object the script expects there (likely one that exists only when
+signed in), and what a console does offline.
+
 ## 0.1.13 crash reports #63, #66: native faults on AMD GPUs (2026-11-21)
 
 **#66** (01.04, RX 6950 XT, A-10 licence test): `present` thread reads host
