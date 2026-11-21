@@ -4,6 +4,39 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## #40 B-Spec interface and #46 weight-reduction freeze, checked on 0.1.15 (2026-11-22)
+
+**#40** (0.1.10 debug export, 2.11 + Master Mod, Daytona B-Spec, about 45 min
+into the session): course map, tyre and fuel bars, driver strength bars and
+standings icons were blank. Its stderr has `texture slots full (1024)` 222
+times, ending at about 442,000 binds left unbound: the #49/#52 slot overflow
+that 0.1.12 fixed (2048-entry table, `RSX_TEX_SLOTS_SOFT`). The 0.1.15 2.11
+engine with the smoke save (B-Spec level 34) and Master Mod overlay, Sunday Cup
+at Autumn Ring Mini, B-Spec race for 60 s: every HUD element drawn, 0 slot
+lines. The test is shorter than the reporter's session.
+
+**#46** (no log, pre-0.1.12, "freezes about 5 times in a row" in weight
+reduction): the same setup reaches Tuning Shop > Body/Chassis. Weight
+reduction cannot be fitted to the save's current car (Camaro SS RM, a race
+car), so the route first changes to the Camaro Z28 '69. Stages 1 and 2 were
+bought and installed in one session: the "Purchase Complete", "install now?" and
+"Installation complete" dialogs all appeared, and frames stayed at 301 per 5 s
+throughout. No freeze. The 0.1.12 flag-kick fix (car screens) is the likely
+earlier cause. Both issues are commented and left open for the reporter.
+
+Routes (in the ignored `scratch/routes/`, for `r64.sh` with the smoke storage;
+restore the save from `C:\pt5-release\0.1.13\issue64-save` after a run that
+buys or changes cars):
+- `hbspec.txt`: B-Spec, Beginner, Sunday Cup race 1.
+- `hchg.txt`: Garage, Camaro Z28 (row 2), Change Car, back to My Home. Back
+  out with Circle held 1.5 s, three times.
+- `hwr3.txt`: `hchg.txt` plus the weight-reduction purchases. Stage 3 needs
+  later presses.
+
+The garage list and My Home use a pointer-style cursor. Short Circle presses
+did not back out, and the list starts on row 1 (the current car). A car
+change is saved only on return to My Home.
+
 ## Release 0.1.15 published (2026-11-22)
 
 Tag `v0.1.15` = `bc00f98`: the #30 FACING fix. Built under
