@@ -5,6 +5,37 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-11-21
+
+Fixes the garage car pictures and adds a setting for your name in the game.
+
+### Added
+- Your name in the game: set `player_name` under `[game]` in
+  gt5p_settings.toml (up to 16 letters, digits, spaces or . - _ '); empty
+  keeps "User" (#60). `PS3_USER_NAME` does the same.
+- A game script error now logs where in the game's scripts it happened (the
+  script files and lines), so a report of an "exited with code 1" quit names
+  the script that failed (#55-#58, #64).
+
+### Fixed
+- Car pictures in the garage ("Create Thumbnail" and "Create Thumbnails for
+  All Cars") came out as the same noise for every car (#62). Three renderer
+  faults: copies of the rendered picture into memory were only read back from
+  the GPU up to 64x64 pixels, they arrived a frame after the game read them,
+  and a render surface that grew threw away what was drawn in it. Pictures
+  made by earlier versions stay noisy until made again. Switches:
+  `RSX_BLIT_READBACK_LARGE=0`, `RSX_BLIT_READBACK_SYNC=0`, `RSX_RT_GROW_KEEP=0`,
+  `RSX_SUBVP_RT_FIRST=0` restore the old behaviour.
+- 2.11: a game script error that the game's own scripts catch no longer ends
+  the game; the error now reaches the game's handler as on a console
+  (`GT5P_GUEST_EH=0` restores the old exit). Errors no script catches still
+  end the game, as they would on a console.
+
+### Known issues
+- #64: a save whose garage holds a car the game cannot load (shown with a
+  yellow "!") quits on any action on that car, as on a console. Remove that
+  car; a new one from the dealership works.
+
 ## [0.1.13] - 2026-11-20
 
 Names the game script error behind the sudden "exited with code 1" quits
