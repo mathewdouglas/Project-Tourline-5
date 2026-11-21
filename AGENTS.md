@@ -295,6 +295,10 @@ old). Textures over a target bind it before sub-viewport captures
 (`RSX_SUBVP_RT_FIRST=0`). `RSX_BLIT_READBACK_DUMP=<dir>` dumps readbacks.
 See progress-gt5.md.
 
+**Release 0.1.14** (tag `v0.1.14`, commit `6feca45`): garage thumbnails,
+2.11 guest exception delivery, script frames in the log, player name; built
+like 0.1.13, VirusTotal clean. See progress-gt5.md.
+
 **Release 0.1.13** (tag `v0.1.13`, commit `dc3143e`): 0.1.12 plus the
 script-error log; built like 0.1.12, VirusTotal clean. See progress-gt5.md.
 

@@ -212,6 +212,29 @@ Lefts and Down (Volkswagen); Right (Kubelwagen), Cross, Cross, Cross; Cross
 is first. The test copy autosaved three new cars; it was restored from
 `C:\pt5-release\0.1.13\issue64-save`.
 
+## Release 0.1.14 published (2026-11-21)
+
+Tag `v0.1.14` = `6feca45`: the garage thumbnail fixes (large blit readback,
+synchronous at the blit, growing targets keep their picture, sub-viewport
+order), guest exception delivery on 2.11, script frames in the error log, and
+`game.player_name` (#60). Built under `C:\pt5-release .1.14` (private inputs
+reused from 0.1.13): engine-only 01.04 and 2.11 clean builds at the commit,
+`pgo.py gen` in the 01.04 tree, a High Speed Ring profile on the
+instrumented build (28.0 FPS), profile-guided dual-engine package: 0
+functions lost counts, 785 without a record. ZIP 128 files, SHA-256
+`313e297dd2f77cfebee4894e16afa7d5d39d75783ae72f5e3c2f4e86c9817cff`; uploaded
+digest matches. VirusTotal: ZIP 0/62, `gt5.exe` 0/60, `gt5_211.exe` 0/69
+(first "known, 0/0", a lookup minutes later gave 0/69), `tourline5.exe` 1/71
+Trapmine (allowed). The VT key is not stored on this machine: request it.
+
+Packaged engines, High Speed Ring frame test: 01.04 57.4 FPS (13
+underruns), then 59.5 FPS (median 16.7 ms, p99 20.8 ms, 5 underruns); 2.11
+56.5 FPS, 0 underruns. 0 `RSX_CMD_CHECK` reports, no invalid audio; no
+large-blit cuts in either race. The clean 2.11 engine's thumbnail readback
+dump shows the car.
+
+Issues: #60 and #62 closed (fixed); #55-#59, #61, #63-#68 commented, open.
+
 ## Issue triage for 0.1.14 (2026-11-21)
 
 - **#60 player name:** `game.player_name` / `PS3_USER_NAME` (runtime
