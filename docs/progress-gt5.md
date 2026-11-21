@@ -198,6 +198,20 @@ reinstall; unconfirmed. No game-data file fails to open around it. The
 garage database (`dev_hdd1/game249.db`) is encrypted. Next: which native
 returns nil before `Garage2.ad:122` / `GaragePopup.ad:1544`.
 
+**Kubelwagen: the save's own record (2026-11-21).** On the reporter's save
+(Master Mod on), a Kubelwagen bought new at the Volkswagen dealership
+(245,000 Cr) loads, renders in the dealer and delivery scenes, and its Create
+Thumbnail works (garage id `0x11f`, M and L written, no script error, run
+`dl12`). So the port handles the car; only the save's existing Kubelwagen
+(with its "!") fails. Its record is the problem: how it was obtained (the
+wiki lists it as the A-Spec European Classic Car Championship prize too) or
+something that changed the record (save editor, mod menu). Route used:
+GT Life, Right, Right, Down, Right (Dealerships), Cross; 26 Rights then 5
+Lefts and Down (Volkswagen); Right (Kubelwagen), Cross, Cross, Cross; Cross
+(skip delivery), Cross (use now: Yes); 4 Lefts (Garage), Cross; the new car
+is first. The test copy autosaved three new cars; it was restored from
+`C:\pt5-release\0.1.13\issue64-save`.
+
 ## 0.1.13 crash reports #63, #66: native faults on AMD GPUs (2026-11-21)
 
 **#66** (01.04, RX 6950 XT, A-10 licence test): `present` thread reads host
