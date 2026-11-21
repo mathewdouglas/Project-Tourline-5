@@ -5,6 +5,20 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-11-21
+
+Fixes cars whose paint and lighting depend on which side of a surface is drawn,
+such as the Ford Mark IV Race Car '67 (#30).
+
+### Fixed
+- The Ford Mark IV Race Car '67 showed white in the dealership list and a dull
+  maroon close up instead of its bright red, with odd lighting on its body and
+  glass (#30). The renderer gave shaders 0 for "is this the front or back of
+  the surface", and that car's paint shader multiplies its surface direction
+  by it, which wiped out its lighting, paint colour and reflections. Any other
+  car or object that uses the same input is fixed too, on 01.04 and 2.11.
+  `RSX_FP_FACING=0` restores the old behaviour.
+
 ## [0.1.14] - 2026-11-21
 
 Fixes the garage car pictures and adds a setting for your name in the game.
