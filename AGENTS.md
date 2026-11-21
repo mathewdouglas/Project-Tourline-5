@@ -282,6 +282,14 @@ in config/targets.json, 2.11 only: the engine's native-call wrapper
 search ends in terminate too, so it still exits (cause of the nil open).
 See progress-gt5.md.
 
+**Fragment FACING (#30, 2026-11-21).** The decompiler returned 0 for the
+RSX FACING input; programs that multiply a normal by it (the Ford Mark IV
+body) lost lighting and paint (white instead of red). FACING now reads
+`SV_IsFrontFace` with the sign inverted (the port's front is the reverse of
+the RSX's; the inverse matches RPCS3); the interpreter takes the same sign.
+`RSX_FP_FACING=0` old zero, `=3` uninverted. `RSX_CAP_SMALLTEX=1` dumps a
+captured frame's small textures. See progress-gt5.md.
+
 **Player name (#60, 2026-11-21).** `game.player_name` in gt5p_settings.toml
 (1-16 letters, digits, spaces, `.-_'`; empty = "User") sets `PS3_USER_NAME`,
 which the runtime's current-user name (cellSysutil, cellUserInfo) returns.

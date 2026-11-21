@@ -212,6 +212,39 @@ Lefts and Down (Volkswagen); Right (Kubelwagen), Cross, Cross, Cross; Cross
 is first. The test copy autosaved three new cars; it was restored from
 `C:\pt5-release\0.1.13\issue64-save`.
 
+## #30: Ford Mark IV paint and lighting, FACING was zero (2026-11-21)
+
+The Mark IV Race Car '67 has one colour, Mark IV Red. The port drew it white
+in the dealership list and a dull maroon in its close-up; RPCS3 (user's
+screenshot) shows a bright glossy orange-red. No error of any kind differed
+between it and the Ford GT (`errgt`/`errmk4`, `RSX_CMD_CHECK`, `D3D12_DBG`,
+`D3D12_IQ`), and a switch sweep (remaps, sRGB, expansion, mips, interpreter,
+16-bit colour) left it white.
+
+A frame capture (`RSX_CAP`, plus the new `RSX_CAP_SMALLTEX=1`, which writes
+each small texture a frame binds as raw guest bytes) found the body program
+(`0x0694DE81` in that boot) and its 64x4 paint table (remap `0xAA1B`: the red,
+correct). The program's HLSL (`FP_DUMP_DIR`, empty shader cache) multiplies
+the normal by `float4(0,0,0,0)`: the decompiler returned 0 for the RSX FACING
+input (0xE, "FACING not plumbed"). With a zero normal the lighting, the paint
+lookup and the reflection were all wrong. The Mustang's body program does not
+read FACING, so most cars were fine.
+
+Fix (runtime, `rsx_fp_decompiler.c`): FACING reads `SV_IsFrontFace`, declared
+only by programs that use it. The port's front is the reverse of the RSX's
+(its viewport flips the picture): `front ? +1 : -1` gave chrome-like white
+streaks, `front ? -1 : +1` matches RPCS3, so that is the default. The
+interpreter computed `face` the same uninverted way and now takes the same
+sign (`RSX_INTERP_FACE_SIGN`). `RSX_FP_FACING=0` restores the zero, `=3` the
+uninverted sign. Checked: Mark IV red on all four backdrops (`face3`), Ford
+GT '06 unchanged (`facegt2`), 2.11 race 57.4 FPS, no pipeline failures. Patch
+section `patches/incremental/fp-facing.patch`.
+
+Also seen: after a race with the #64 reporter's save the game wrote its save,
+and the next boot quit with the same `Garage2.ad:122` error, now from the top
+menu (`GTTopRoot.ad:672`); restoring the original save boots again. That save
+should be treated as damaged.
+
 ## Release 0.1.14 published (2026-11-21)
 
 Tag `v0.1.14` = `6feca45`: the garage thumbnail fixes (large blit readback,
