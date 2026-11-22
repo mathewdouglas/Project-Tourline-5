@@ -4,6 +4,28 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Mixed-route PGO selected as the default (2026-11-22)
+
+The user accepted the measured Eiger pacing tradeoff below and selected the refreshed
+profile as the default. `cmake/LocalPGO.cmake` enables `GT5P_PGO_AUTO` for ordinary
+01.04 builds: when `scratch/pgo/gt5.profdata` exists, both compiler launchers use its
+content-addressed copy. `scripts/build.cmd` restores AUTO on each normal invocation;
+`-DGT5P_PGO_AUTO=OFF` opts out, and `pgo.py ab` supplies it for its baseline.
+Explicit instrumentation/release launchers take precedence. No profile means an
+unprofiled build; 2.11 never receives the 01.04 profile. Native fill/table-cull switches
+remain off. The standard `build/gt5.exe` is rebuilt with the accepted profile, so the
+usual launcher uses it without a different executable path.
+
+Clean 01.04 releases now default to the private checkout's merged profile when present,
+with `--profile` to select another and `--no-profile` to opt out. Existing source-fit
+checks, provenance and main.cpp antivirus layout remain in place. No release is made
+by this change. `cmake -P scripts/test/pgo_default.cmake` checks missing input, opt-out,
+target isolation, explicit launchers and a changed profile forcing a new command.
+Validation: the ordinary build completed with zero lost profile counts and refreshed
+the staged launcher engine hash. `gt5boot.ps1 -Tag pgo-default-smoke -Settle 5 -Gap 5`
+used its default `build/gt5.exe`, reached MusicDecode/the main menu and exited normally;
+the game-window capture was checked. Python syntax and the staged-file checks passed.
+
 ## Native bulk fills, coverage-table culling and mixed-route PGO (2026-11-22)
 
 - **Bulk fill**: v104 b01697100 LS 0x5BA8 (`gt5p_spu_fill_lines`, plain post-lift hook),

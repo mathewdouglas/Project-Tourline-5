@@ -11,6 +11,7 @@ if "%PS3RECOMP_DIR%"=="" set PS3RECOMP_DIR=%~dp0..\..\ps3recomp-tourline5
 cmake -S "%~dp0.." -B "%~dp0..\build" -G Ninja ^
   -DPS3RECOMP_DIR="%PS3RECOMP_DIR:\=/%" ^
   -DCMAKE_BUILD_TYPE=Release ^
+  -DGT5P_PGO_AUTO=ON ^
   -DCMAKE_C_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe" ^
   -DCMAKE_CXX_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe" %* || exit /b 1
 cmake --build "%~dp0..\build" || exit /b 1

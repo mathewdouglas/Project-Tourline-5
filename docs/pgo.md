@@ -17,6 +17,14 @@ JonathanDC64/Soulbrandt). The scripts here are written for this build.
 
 ## Commands
 
+Ordinary 01.04 builds now use `scratch/pgo/gt5.profdata` by default when present
+(`GT5P_PGO_AUTO=ON`). Run `scripts\build.cmd -DGT5P_PGO_AUTO=OFF` for an unprofiled
+build; the next ordinary `build.cmd` invocation restores automatic PGO. Checkouts
+without a profile build unprofiled, and other game targets are unchanged. Explicit
+compiler launchers take precedence. The private profile is copied by content hash,
+so changing it rebuilds affected objects. Refresh it after changing compiled sources.
+`pgo.py ab` always disables automatic PGO for its baseline.
+
 ```
 .venv\Scripts\python scripts\pgo\pgo.py gen          # build_pgo_gen\gt5.exe, instrumented (2 jobs)
 .venv\Scripts\python scripts\pgo\pgo.py play         # High Speed Ring race route; counts -> scratch\pgo\profraw
@@ -127,13 +135,16 @@ The 01.04 profile trained on HSR, Rome, Eiger and the Fiat car list fits the fin
 sources (zero lost function counts). Against the same-source unprofiled build,
 HSR uses 9.0% less CPU per frame, the Fiat list 4.8% less and Eiger rain 9.2% less.
 HSR and the car list improve pacing, but Eiger's p99 worsens in both pairs and its
-mean FPS drops. This profile is a private development candidate, not the default
-or a replacement for a release profile. Full results and sample limitations are in
+mean FPS drops. The user accepted that tradeoff and selected it as the default local
+01.04 profile. Full results and sample limitations are in
 the newest entry of [progress-gt5.md](progress-gt5.md).
 
 ## Releases
 
-`scripts\release\clean_build.py --profile <profdata>` builds the player ZIP
+`scripts\release\clean_build.py` defaults to the private checkout's
+`scratch/pgo/gt5.profdata` for 01.04 when present. `--profile <profdata>` selects another
+profile, and `--no-profile` explicitly opts out. All existing profile-fit checks remain.
+The script builds the player ZIP
 profile-guided. The profile is one more private input, like the ELF: the clean
 clone's own `scripts\pgo\pgocc.py` compiles everything with it, and
 `release.ini` in the ZIP records its SHA-256 (`pgo_profile_sha256`).

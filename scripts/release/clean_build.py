@@ -16,7 +16,8 @@ reproducible from the tag.
 
     python scripts/release/clean_build.py --private C:/path/to/dev/checkout --work C:/pt5-release/0.1.0
 
-With --profile, the build is profile-guided (docs/pgo.md): every compile goes
+With --profile, or the private checkout's default 01.04 profile when present,
+the build is profile-guided (docs/pgo.md; --no-profile opts out): every compile goes
 through the tag's scripts/pgo/pgocc.py with that profile, which is one more
 private input. Make it from the same sources as the tag (pgo.py gen, play,
 merge in a development checkout at the tag, with every post-lift step applied).
@@ -82,8 +83,10 @@ def main():
     ap.add_argument('--vc-runtime-dir', type=Path)
     ap.add_argument('--compare-generated', type=Path,
                     help='optional generated/ of an earlier lift: report whether this lift is byte-identical')
-    ap.add_argument('--profile', type=Path,
-                    help='a merged PGO profile (.profdata) made from the same sources: profile-guided build')
+    profile_choice = ap.add_mutually_exclusive_group()
+    profile_choice.add_argument('--profile', type=Path,
+                    help='a merged PGO profile (.profdata); defaults to the private checkout profile for 01.04')
+    profile_choice.add_argument('--no-profile', action='store_true', help='explicitly build without PGO')
     ap.add_argument('--profile-max-stale', type=int, default=0,
                     help='functions whose profile counts may be lost to a changed body (default 0)')
     ap.add_argument('--profile-max-missing', type=int, default=2000,
@@ -110,6 +113,11 @@ def main():
         raise ValueError('--jobs must be 1..8')
     work = args.work.resolve()
     private = args.private.resolve()
+    if not args.profile and not args.no_profile and args.target == 'BCUS98114-v104':
+        candidate = private / 'scratch/pgo/gt5.profdata'
+        if candidate.is_file():
+            args.profile = candidate
+            print(f'Default 01.04 PGO profile: {candidate}', flush=True)
     profile = None
     if args.profile:
         profile = args.profile.resolve()
@@ -189,7 +197,9 @@ def main():
         same = tree_sha(src / 'generated') == tree_sha(args.compare_generated.resolve())
         print(f'generated/ identical to {args.compare_generated}: {same}', flush=True)
 
-    build = ['cmd', '/d', '/c', r'scripts\build.cmd', '-DGT5P_TARGET='+args.target]
+    # Release provenance comes from the selected private input, never an ambient
+    # profile in the clean source checkout. Explicit launchers below still apply.
+    build = ['cmd', '/d', '/c', r'scripts\build.cmd', '-DGT5P_TARGET='+args.target, '-DGT5P_PGO_AUTO=OFF']
     pgo_args = []
     if profile:
         pgocc = src / 'scripts/pgo/pgocc.py'

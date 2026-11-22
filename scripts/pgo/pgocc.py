@@ -1,6 +1,7 @@
 """Compiler launcher for profile-guided (PGO) builds; scripts/pgo/pgo.py sets it
 as CMAKE_C_COMPILER_LAUNCHER and CMAKE_CXX_COMPILER_LAUNCHER of build_pgo_gen/
-and build_pgo_use/. The normal build/ never uses it.
+and build_pgo_use/. Ordinary 01.04 builds also use it when LocalPGO.cmake finds
+a private local profile; GT5P_PGO_AUTO=OFF keeps an unprofiled baseline.
 
     pgocc.py gen <dir>        <compiler> <args...>   IR instrumentation
     pgocc.py use <profdata>   <compiler> <args...>   optimise from a profile

@@ -242,6 +242,14 @@ compares CPU per frame and per second as well as pacing. Fresh profiles stay pri
 and comparisons against an unprofiled build are not gains over an older PGO release.
 See the newest entry in docs/progress-gt5.md for measurements and rollbacks.
 
+**PGO default accepted (2026-11-22).** The user accepted the mixed profile's Eiger
+pacing tradeoff. Ordinary 01.04 `scripts/build.cmd` builds now use the local
+`scratch/pgo/gt5.profdata` when present (`-DGT5P_PGO_AUTO=OFF` opts out); no profile
+falls back to unprofiled. Explicit compiler launchers and 2.11 are unchanged.
+`pgo.py ab` explicitly disables AUTO for its baseline. Clean 01.04 releases select
+the private checkout profile by default; `--no-profile` opts out. Profiles still
+need refreshing for changed compiled sources; release source-fit checks remain.
+
 **Game sound fixed (2026-11-14).** Menus and races were silent: the DSP
 image `j9804ABA8` produced NaN PCM from two SPU arithmetic differences (0 x
 extended-range is 0; single precision truncates). Audio images force-include

@@ -9,6 +9,10 @@ set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Use this checkout's private mixed-route profile for ordinary 01.04 builds.
+# Explicit compiler launchers (instrumentation and clean releases) take precedence.
+include(cmake/LocalPGO.cmake)
+
 # =============================================================================
 # ps3recomp runtime
 # =============================================================================

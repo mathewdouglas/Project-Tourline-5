@@ -2,8 +2,9 @@
 
 They live beside the normal build/, in build_pgo_gen/ and build_pgo_use/,
 configured like build/ (target, runtime, GT5P_* options) plus a compiler
-launcher (scripts/pgo/pgocc.py) that adds the profile flags. build/ never
-changes. A profile comes from running the game, so it is derived data like the
+launcher (scripts/pgo/pgocc.py) that adds the profile flags. Ordinary build/
+also uses a local profile by default; ab explicitly disables it for its baseline.
+A profile comes from running the game, so it is derived data like the
 lift: it stays in scratch/pgo/ and is never committed.
 
     pgo.py gen [--jobs 2]        instrumented build: build_pgo_gen/gt5.exe
@@ -226,7 +227,7 @@ def cmd_ab(a):
         sys.exit('[pgo] no build_pgo_use/gt5.exe: run use first')
     say('bringing build/ up to date (same sources as the PGO build)')
     if run_bat(PGO / 'normal_build.bat', [f'set "CMAKE_BUILD_PARALLEL_LEVEL={a.jobs}"',
-               f'call "{ROOT / "scripts/build.cmd"}" || exit /b 1'], PGO / 'normal_build.log'):
+               f'call "{ROOT / "scripts/build.cmd"}" -DGT5P_PGO_AUTO=OFF || exit /b 1'], PGO / 'normal_build.log'):
         sys.exit(f'[pgo] normal build failed: {PGO / "normal_build.log"}')
     sides = {'A': NORMAL / 'gt5.exe', 'B': pgo_exe}
     res = {'A': [], 'B': []}
