@@ -279,6 +279,14 @@ tested and not kept (no Car list gain). Refreshed 4-route PGO `build/gt5.exe`: H
 (`2.2%` late), Car list `58.5 FPS` (`3.2%` late), Eiger `58.5 FPS` (`5.2%` late), Rome `57.7-58.4 FPS`
 (`6.0-8.1%` late). Re-run `spu_native_patch.py` after lifting. See progress-gt5.md.
 
+**DXC fallback VS & `VS_PENDING` PSO fix (0.1.16, runtime).** `#70`/`#71` logged `[FP] PSO FAIL (0x80070057) vs_idx=-1`:
+when `RSX_SHADER_INTERP_VP=1` drew a `VS_PENDING` draw, `vp_get_fp_pso()` fell back to `s_d3d.vp_vs_blob` (compiled with
+FXC `vs_5_0`) and paired it with a DXC `ps_6_0` pixel shader, which D3D12 rejects with `E_INVALIDARG`. `vp_get_fp_pso()`
+now populates `vp_ps_hold` and skips PSO creation for `VS_PENDING` when `vp_interp_cfg()` is active
+(`RSX_VP_PENDING_NO_PSO=0` old), and `compile_vp()` compiles `s_d3d.vp_vs_blob` through `d3d_compile_cached` so any
+genuine `vs_idx == -1` fallback matches the active compiler (`RSX_VP_FALLBACK_DXC=0` old). Test:
+`scripts/test/vp_fallback_pso.py` (WARP). See progress-gt5.md.
+
 **Game sound fixed (2026-11-14).** Menus and races were silent: the DSP
 image `j9804ABA8` produced NaN PCM from two SPU arithmetic differences (0 x
 extended-range is 0; single precision truncates). Audio images force-include
