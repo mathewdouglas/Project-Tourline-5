@@ -4,6 +4,28 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## SSE4.1 SPU estimate/convert/mask helpers + refreshed PGO (2026-11-23)
+
+- **Branchless SSE4.1 SPU helpers** (`../ps3recomp-tourline5/runtime/spu/spu_helpers.h`,
+  folded into `patches/ps3recomp-5244db9-local.patch`, verified clean apply on fresh `5244db9`
+  export; `-DSPU_FLOAT_SCALAR` rollback):
+  - `spu_frest` (~105 insns + 4 branches -> ~18 branchless SSE4.1 insns) and `spu_frsqest`
+    (~90 insns + 4 branches -> ~16 branchless SSE4.1 insns), which `region_00008298` calls
+    7 times per cell on Eiger rain.
+  - `spu_csflt`, `spu_cuflt`, `spu_cflts` (SSE4.1 float conversions instead of double loops),
+    `spu_gb` (`movmskps` + 16-byte bit-reverse LUT), and `spu_fsm` (16-entry aligned LUT load).
+  - **Exactness**: `scripts/test/spu_helpers_sse.py` (7M random + edge-case comparisons against
+    `-DSPU_FLOAT_SCALAR`), `scripts/test/spu_float_sse.py`, `scripts/test/audio_math.py`, and
+    `scripts/test/audio_extended.py` all pass with 0 differences.
+- **Refreshed 4-route PGO** (`hsr,rome,eiger,carlist` merged into `scratch/pgo/gt5.profdata`,
+  rebuilt `build/gt5.exe` with 0 stale hash mismatches):
+  - **HSR:** `59.5 FPS`, median `16.6 ms`, p99 `20.6 ms`, late `1.3%`, `5.53 cores`.
+  - **Rome:** `58.1 FPS`, median `16.8 ms`, p99 `24.1 ms`, late `6.5%`, `4.97 cores`.
+  - **Eiger rain (heavy rain, top lane 87%):** `54.3 FPS` (vs `51.7 FPS` prior heavy-rain run,
+    +5.0%), median `18.2 ms` (-1.0 ms), p99 `23.8 ms`, late `17.7%` (vs `32.2%`), `4.89 cores`.
+  - **Car list:** `55.4 FPS` (vs `52.9 FPS` prior, `50.3 FPS` pre-Stage 1: +10.1% total),
+    median `17.9 ms`, p99 `24.0 ms`, late `10.4%`, `5.52 cores`.
+
 ## SPU runtime fast paths, PPU `func_00C350C0` spin-yield, and SPU kick wake (2026-11-23)
 
 - **SPU runtime fast paths** (`../ps3recomp-tourline5/runtime/spu/spu_channels.c`, folded into

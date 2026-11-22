@@ -260,7 +260,12 @@ Same-exe A/B: Car list `50.3 -> 53.3 FPS` (+6.0%, late `48.8/21.7% -> 20.0/15.9%
 (01.04 `spin_waits`) adds `0x00C350C0` (`GT5P_SPIN_YIELD=0` off; Eiger top PPU thread
 `70.1% -> 43.1%`, process CPU `5.75 -> 5.41 cores`), and `src/main.cpp` defaults
 `SPURS_SPU_KICK_WAKE=1` for GT5 (`=0` off; Eiger `53.6 -> 55.6 FPS`, median `17.9 -> 17.0 ms`).
-Refreshed 4-route PGO rebuilt `build/gt5.exe` with 0 stale hash mismatches. See progress-gt5.md.
+Refreshed 4-route PGO rebuilt `build/gt5.exe` with 0 stale hash mismatches. `runtime/spu/spu_helpers.h`
+also vectorizes `spu_frest`, `spu_frsqest`, `spu_csflt`, `spu_cuflt`, `spu_cflts`, `spu_gb`, and
+`spu_fsm` under SSE4.1 (`-DSPU_FLOAT_SCALAR` rollback; `scripts/test/spu_helpers_sse.py`, 7M bit-exact
+checks): with refreshed PGO, HSR `59.5 FPS` (`1.3%` late, p99 `20.6 ms`), Rome `58.1 FPS` (`6.5%` late,
+p99 `24.1 ms`), Eiger heavy rain `54.3 FPS` (`17.7%` late, p99 `23.8 ms`, `4.89 cores`), Car list
+`55.4 FPS` (`10.4%` late, p99 `24.0 ms`). See progress-gt5.md.
 
 **Game sound fixed (2026-11-14).** Menus and races were silent: the DSP
 image `j9804ABA8` produced NaN PCM from two SPU arithmetic differences (0 x
