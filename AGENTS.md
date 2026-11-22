@@ -223,6 +223,15 @@ instead); `RSX_IO_UNMAPPED=0` off, `=2` check mode. None at High Speed Ring.
 See progress-gt5.md, 2026-11-12.
 
 
+**gt5-recomp ideas (2026-11-22, `perf/gt5recomp-natives`).** PPU AltiVec byte moves are
+shuffles (`runtime/ppu/ppu_vshuf.h`, PPU chunks `-msse4.1`; `PPU_VSHUF=0` at lift,
+`GT5P_PPU_SSE41=OFF`): -3% game CPU. Native fast blocks from gt5-recomp (MIT) run in the FMA
+copies of the mixer `jD58063CD` and EQ `jEB79FDFC` (`audio_native_hooks` in targets.json,
+`src/gt5p_native_mixer.c`, `src/gt5p_native_eq.c`; `GT5P_NATIVE_MIXER=0`, `GT5P_NATIVE_EQ=0`,
+`-DGT5P_NATIVE_SPU_HOOKS=OFF`): sound chain 60% -> 37% busy. A new hooked function needs
+`scripts/test/native_audio.py` on captured states first (identical registers and LS). Re-lift
+after pulling (lifter change). See progress-gt5.md, 2026-11-22.
+
 **Game sound fixed (2026-11-14).** Menus and races were silent: the DSP
 image `j9804ABA8` produced NaN PCM from two SPU arithmetic differences (0 x
 extended-range is 0; single precision truncates). Audio images force-include

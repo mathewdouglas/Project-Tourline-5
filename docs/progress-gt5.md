@@ -4,6 +4,42 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Ideas from gt5-recomp: PPU shuffles, native sound mixer and EQ (2026-11-22)
+
+Branch `perf/gt5recomp-natives`. [gt5-recomp](https://github.com/MormonFTP-hub/gt5-recomp)
+(MIT) is built from the 01.00 disc executable. Its SPU job bodies `w01606C00` and `w018CAD00`
+are byte-identical to our 01.04 `b01697100` (Eiger) and `b0196FF40` (car list), and its mixer
+and EQ images have our fingerprints (`jD58063CD`, `jEB79FDFC`). Measured at High Speed Ring,
+4 or 2 interleaved rounds, 40 s frame-test windows, `-Cpu`:
+
+| Change | Switch | Exact check | Result |
+|---|---|---|---|
+| PPU `vperm`, `lvlx`, `lvrx`, `lvsl`/`lvsr` as byte shuffles (`runtime/ppu/ppu_vshuf.h`), PPU chunks built with `-msse4.1` | `PPU_VSHUF=0` at lift, `-DGT5P_PPU_SSE41=OFF` | `scripts/test/ppu_vshuf.py`: 48 M cases | process CPU 6.05 -> 5.85 cores (every run below every baseline run); the two busiest PPU threads 57 -> 52% and 55 -> 48% of a core; FPS 58.6 both |
+| Native mixer fast blocks (`src/gt5p_native_mixer.c`): biquads 0x4720/0x4C80, resampler 0x44CC, bus mix 0x4E58, ADPCM 0x1908 | `GT5P_NATIVE_MIXER=0` | `scripts/test/native_audio.py`: 200 captured states, all registers and LS identical, 3.7x | sound chain busy 59-60% -> 37-38%, job 0.27 -> 0.17 ms, longest 3.0 -> 1.4 ms; process CPU 5.89 -> 5.67 |
+| Native EQ FFT fast blocks (`src/gt5p_native_eq.c`): 0x3C6C, 0x3ADC, 0x4158, 0x4008, 0x3D80, 0x43C0 | `GT5P_NATIVE_EQ=0` | 180 captured states identical, 3.7x | sound chain busy 38-39% -> 36-37%, job 0.17 -> 0.16 ms |
+
+FPS, underruns (1 per run) and frame times were unchanged by all three on this 12-thread CPU:
+the gains are CPU, mostly for 4- and 6-core PCs, where the sound chain thread runs out first.
+
+- **Wiring of the natives**: only the FMA copy of an audio image (`audio_native_images`) is
+  hooked. CMake compiles it from a copy of the lifted file with the listed definitions renamed
+  `_orig` (`audio_native_hooks` in `config/targets.json`); the native file defines the original
+  names and finishes through `_orig`. `-DGT5P_NATIVE_SPU_HOOKS=OFF` builds none.
+- **Float rules**: gt5-recomp's runtime is SPU-exact (round toward zero, -0 flushed, extended
+  range); ours runs plain host float. The fast blocks do the lifted operations in the same order
+  and stop before any non-finite value, so they match our lift on finite data; the EQ's -0 flush
+  was removed for that (`NS_KEEP`). Fused double FMA matched our `spu_dfma` in this build.
+- **Bench**: `spu_loop_bench.c` gains `BENCH_CHAIN=a,b` (follow a loop over several lifted
+  functions in block mode; the ADPCM decoder is 0x1908 <-> 0x1A2C) and a `spu_rchcnt` stub.
+- **Not ported: the grid pass** (`w01606C00` 0x8038, inside the Eiger loop). It reruns
+  statements cut from gt5-recomp's own lift (one function 0x8038-0x8948, registers in locals,
+  their LS helpers) and replays per-cell logs to rebuild registers; our lift splits that range
+  into separate functions and `spu_region.py` merges part of it. A port means rebuilding the
+  extraction for our lift. Their own measurement at High Speed Ring was ~3% of SPU worker CPU;
+  at Eiger, where that loop gates the frame (Phase 45), it could be more: unmeasured.
+- **Not ported: the reverb** (`jFE031AF6`): not one of our FMA audio images yet.
+- Licence: `third_party_notices/gt5-recomp-LICENSE.txt`, shipped in the player ZIP.
+
 ## #40 B-Spec interface and #46 weight-reduction freeze, checked on 0.1.15 (2026-11-22)
 
 **#40** (0.1.10 debug export, 2.11 + Master Mod, Daytona B-Spec, about 45 min
