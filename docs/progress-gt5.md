@@ -4,6 +4,23 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## SPU float helpers as SSE; reverb natives tried (2026-11-22)
+
+- **SPU single-precision helpers as SSE** (runtime `spu_helpers.h`: `fa fs fm fceq fcgt`, and
+  `fma fms fnms` where FMA is built in; `-DSPU_FLOAT_SCALAR` for the loops). The per-lane loops
+  vectorised alone, but in chains clang split them into even/odd lane halves with shuffles
+  (`t_chain` 30 -> 10 instructions). Same bits: `scripts/test/spu_float_sse.py` (8 M vectors per
+  op, NaN payloads, FTZ/DAZ off and on, with and without FMA). Measured: no change at Rome (57.0
+  FPS both, 2 rounds); Eiger runs were bimodal within each build (46.6/58.7 base, 59.0/48.9 new:
+  the scene differs run to run), so no reading there. Kept: exact and cheaper code.
+- **Reverb natives** (gt5-recomp's `jFE031AF6`, ported like the EQ, the image added to the FMA
+  audio images): 175 captured states identical, 2.8x on the functions, but the sound chain stayed
+  at 39% busy with them on or off (2 pairs), and above the 36-37% of the EQ runs. Not kept.
+- Runtime patch note: a second section for the same file in one patch did not apply in one
+  `git apply` run here (it did in two). Fold changes into the file's existing section, and check a
+  fresh export OUTSIDE any git work tree: inside one, `git apply` skips every path ("Skipped
+  patch") and reports success.
+
 ## Rome, and where Eiger and the car render pass spend their time (2026-11-22)
 
 Players report Rome as heavy. `gt5boot.ps1 -Route race -Tab 2` now drives there (track
