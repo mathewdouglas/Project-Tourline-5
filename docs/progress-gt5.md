@@ -4,6 +4,29 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Car render job: native triangle loop, and where the cull's time really is (2026-11-22)
+
+- **Native 0xAF88 loop** (`src/gt5p_native_cull.c`, from gt5-recomp's exact `nx_decide`/`nx_pack`,
+  MIT): a new jump-hook form in `spu_native_patch.py` (`[image, block, fn, target]`: `fn(ctx, fused)`
+  returns 1 and the lifted code goes on at the target) at b0196FF40 0xAF88 -> 0xB4E0, plus a plain
+  hook at 0xAB00 that records the batch's sample pattern (1 and 5 stay lifted). Our SPU float runs in
+  the thread's MXCSR mode, so no round-toward-zero requirement; `fused` (from the copy's build:
+  `GT5P_HOOK_FUSED`) picks fused fma/fnms or the doubles of `SPU__FMAF`. AVX2/FMA chosen at run time
+  (`__cpuid`). `GT5P_NATIVE_CULL=0` off.
+- **Exact**: `scripts/test/native_cull.py` runs 37 captured cull calls (entry 0xAB00, Rome race and
+  car list) to their return in both builds: local store, return pc and every register but the
+  volatile r2-r79 identical, for both the doubles and the fused (-mfma) build; whole cull call 1.31x /
+  1.49x. r2 differs (a loop temporary): no path from the two call sites (0x79B0, 0x7AB0 -> 0x7A18)
+  reads r2 or r3 before writing it. `spu_loop_bench.c` gains `BENCH_IGNORE_REGS=lo-hi`; BENCH_CHAIN
+  takes 16 addresses.
+- **In game, no FPS change** (Rome, same exe, switch alternated, 2 pairs: 56.8/56.9 off, 55.6/57.1
+  on; workload 4 race-window runs 3.6-4.7 ms either way). The profile says why: 0xAF14 picks one of
+  two triangle loops per batch by an indirect branch (r56): 0xAF88 (native now; 0xAFC0 fell out of
+  the profile) or 0xB210 -> 0xB240, a variant that also looks up a coverage table by sample bits.
+  At Rome 0xB240 is 8.1% of workload 4 and the vertex stage 0xAD30 5.2%; the native loop covered
+  about 4%. gt5-recomp has no native for 0xB240 or 0xAD30: next would be our own exact versions,
+  derived from the SPU code.
+
 ## SPU float helpers as SSE; reverb natives tried (2026-11-22)
 
 - **SPU single-precision helpers as SSE** (runtime `spu_helpers.h`: `fa fs fm fceq fcgt`, and

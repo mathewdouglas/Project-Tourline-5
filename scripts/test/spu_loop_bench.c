@@ -57,6 +57,7 @@ void spu_stop(spu_context* ctx) { (void)ctx; unreached("spu_stop"); }
  * unless this variant is built to test them. */
 volatile int g_spu_exp;
 #include "../../src/gt5p_spu_native.c"
+#include "../../src/gt5p_native_cull.c"
 #ifdef BENCH_COUNT
 static unsigned s_cnt[0x40000 / 4];
 void bench_count(unsigned a) { s_cnt[(a & 0x3FFFF) / 4]++; }
@@ -148,6 +149,12 @@ int main(int argc, char** argv)
                 ) { fprintf(stderr, "state %d: ended at pc 0x%X, expected 0x%X (bad=%d)\n", k, s_ctx.pc, ret, s_bench_bad); return 1; }
             const double us = (double)(t1.QuadPart - t0.QuadPart) * 1e6 / (double)qf.QuadPart;
             if (nb < 64) best[nb++] = us;
+            /* BENCH_IGNORE_REGS=lo-hi: registers left out of the comparison (a routine run to its
+             * return: the SPU ABI's volatile registers) */
+            { static int lo = -2, hi = -1;
+              if (lo == -2) { const char* e = getenv("BENCH_IGNORE_REGS"); lo = -1;
+                              if (e && *e) { char* q; lo = (int)strtol(e, &q, 10); hi = (*q == '-') ? (int)strtol(q + 1, NULL, 10) : lo; } }
+              for (int g = lo; g >= 0 && g <= hi && g < 128; g++) memset(&s_ctx.gpr[g], 0, sizeof s_ctx.gpr[g]); }
             const uint32_t endpc = s_ctx.pc;
             uint64_t hh = fnv(&endpc, 4, fnv(s_ctx.ls_store, SPU_LS_SIZE, fnv(s_ctx.gpr, sizeof s_ctx.gpr, 1469598103934665603ULL)));
             hh=fnv(&s_ctx.int_enable,sizeof s_ctx.int_enable,hh);
