@@ -15,6 +15,18 @@
 #include <stdlib.h>
 #include <time.h>
 
+/* Optional tail calls for indirect branches (scripts/lift_spu_jobs.py,
+ * SPU_CHAIN_IB=1 at lift time). GT5P_SPU_CHAIN_IB=1 enables the experiment;
+ * default/0 keeps the dispatcher. Read once at start. */
+volatile int g_gt5p_chain_ib = 0;
+#if defined(__clang__) || defined(__GNUC__)
+__attribute__((constructor)) static void gt5p_chain_ib_init(void)
+{
+    const char* e = getenv("GT5P_SPU_CHAIN_IB");
+    if (e && e[0] == '1') g_gt5p_chain_ib = 1;
+}
+#endif
+
 static volatile int s_mode = -1, s_stats = 0;
 
 static int native_mode(void)

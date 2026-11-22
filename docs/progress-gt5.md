@@ -4,6 +4,50 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Indirect SPU chaining: return-boundary repair, kept experimental (2026-11-22)
+
+The unfinished `SPU_CHAIN_IB` experiment tail-called `spu_indirect_branch` from lifted job
+blocks. Its enabled Rome runs froze after the menu: a computed return could execute a lifted
+entry at the return address instead of letting the drain return to its suspended host caller.
+The drain normally intercepts that address, but the new tail call bypassed it.
+
+- `scripts/lift_spu_jobs.py` now saves and arms `drain_ret_pc` before each lifted call, then
+  restores the enclosing boundary after its drain. Indirect branches at that boundary keep
+  the trampoline. Unarmed boundaries, LS zero, pending interrupts, stack resets, slow/lockstep
+  mode and disabled backward chaining also keep the dispatcher. Unknown call syntax fails
+  the transform instead of silently omitting a boundary.
+- `scripts/test/spu_chain.py` compiles the actual transform on synthetic nested direct and
+  indirect calls, with return PCs that are also lifted entries. It checks restored outer
+  boundaries, LS-zero exits, unarmed entry, rollback and the guards, and rejects the original
+  missing-return-check failure. It needs no game inputs. The captured cull regression also
+  matched all 37 states in both arithmetic builds (`native_cull.py --reps 3`, with chaining
+  off and on). `spu_loop_bench.py --chain-ab` additionally compares all registers and local
+  store with chaining off/on in the same replay exe: 37 cull states identical, both default
+  and `--variant fused=-mfma` builds. Use `--image b0196FF40 --states <private captures>`.
+- **Rome: no convincing gain**, same experimental exe, `gt5boot.ps1 -Route race -Tab 2
+  -FrameTest -Cpu -Settle 40`, `PS3_VERBOSE=0`, order off/on/on/off:
+
+  | Run | FPS | p99 ms | Late >20 ms | CPU cores |
+  | --- | ---: | ---: | ---: | ---: |
+  | off A1 | 57.1 | 25.5 | 12.0% | 4.98 |
+  | on B1 | 57.3 | 25.5 | 11.6% | 5.05 |
+  | on B2 | 57.2 | 24.8 | 11.6% | 4.95 |
+  | off A2 | 56.8 | 26.8 | 13.0% | 4.94 |
+
+  Mean 56.95 -> 57.25 FPS (+0.5%), insufficient evidence for a default change. An earlier
+  enabled race completed at 55.0 FPS; all three enabled races finished without the menu
+  freeze. Private evidence: `scratch/ab-ibfix.log`, `scratch/pv/ibfix-{A1,B1,B2,A2}.*`.
+  The final generator additionally refuses unarmed boundaries and respects disabled backward
+  chaining; those conservative guards are covered by the synthetic test, not these timings.
+- **Off by default at both stages**: opt in with `SPU_CHAIN_IB=1` for a full SPU lift and
+  `GT5P_SPU_CHAIN_IB=1` at run time. Run the three SPU post-lift steps and rebuild. Restore by
+  lifting without `SPU_CHAIN_IB`; changing the environment alone cannot undo generated call
+  bookkeeping. No runtime compatibility patch change is needed. 2.11 is untested.
+- Final default verification: full SPU lift, all three post-lift steps and `scripts/build.cmd`
+  passed; no `_chain_ret`/`g_gt5p_chain_ib` references remain in the lifted files. The rebuilt
+  engine completed a headless Arcade -> track list -> car list smoke run
+  (`scratch/default-final-smoke.log`); this was a boot check, not an FPS measurement.
+
 ## Car render job: native triangle loop, and where the cull's time really is (2026-11-22)
 
 - **Native 0xAF88 loop** (`src/gt5p_native_cull.c`, from gt5-recomp's exact `nx_decide`/`nx_pack`,

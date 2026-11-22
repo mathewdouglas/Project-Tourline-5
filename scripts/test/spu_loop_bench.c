@@ -13,6 +13,7 @@
 
 volatile int g_spu_fast = 1;
 volatile int g_spu_chain_back = 1;
+volatile int g_yz_lockstep_on;
 unsigned g_spu_stack_reset_n;
 int g_spu_ls_watch_n;
 SPU_THREAD_LOCAL void (*g_spu_trampoline_fn)(spu_context*);
