@@ -4,6 +4,96 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Native bulk fills, coverage-table culling and mixed-route PGO (2026-11-22)
+
+- **Bulk fill**: v104 b01697100 LS 0x5BA8 (`gt5p_spu_fill_lines`, plain post-lift hook),
+  repeated 16-byte values, all but the last iteration batched. The lifted final iteration
+  supplies the original scratch registers and successor. It preserves quadword alignment,
+  LS wrap and uint32 register wrap; fewer than four lines, spans over one LS, malformed
+  spans, pending enabled interrupts, diagnostics and the special image-2 policy context
+  stay lifted. Ordinary GT5 bodies retain `policy_mode=1` with image 1 and are eligible.
+  `GT5P_NATIVE_FILL=1` opts in, `0`/default stays lifted; global `GT5P_SPU_NATIVE=0|2` also
+  leaves it lifted. Inspired by gt5-recomp's integer fill (MIT).
+- **Fill tests**: `scripts/test/spu_fill.py` extracts the real lifted loop into scratch and
+  compares every register and every LS byte on 2,400 random cases, with positive advancement
+  assertions, both wraps, unaligned addresses, zero/pattern fills, diagnostic/interrupt and
+  rollback cases. It also times bounded fills. Larger fills are substantially cheaper in
+  the standalone benchmark; this is not a whole-game CPU claim. `GT5P_SPU_NATIVE_STATS=1`
+  reports advanced fills/bytes. An Eiger race with both candidates enabled completed and
+  confirmed thousands of fills per interval (`scratch/natives-livecheck.log`). Initial
+  `fill-*` timings used an overbroad policy guard and are discarded; `fill2-*` uses the
+  corrected implementation.
+- **Coverage-table cull**: v104 b0196FF40 LS 0xB210 -> 0xB4E0, the other triangle loop
+  (`gt5p_cull_b210`). It reuses the native geometry decisions, quantizes bounds in eighths,
+  indexes the guest's actual 512-byte table by Y span and Y/X phases, and compares its
+  threshold against X span. Packing uses this variant's initial quadword and fill batches.
+  Only captured pattern 5 is eligible; overlapping inputs, unknown constants and other
+  shapes stay lifted. `GT5P_NATIVE_CULL_TABLE=1` opts in, `0`/default stays lifted;
+  `GT5P_NATIVE_CULL=0` disables both cull natives.
+- **Cull tests**: `native_cull.py --table-only --expand --reps 3` compares with the existing
+  native cull on both sides. It varies batch sizes (including short/tail batches) and both
+  facing signs: 854 cases, default and fused builds, identical LS, return PC and registers
+  except ABI-volatile r2-r79. Each build reports 1,050 successful table-native calls and
+  requires a nonzero count rather than accepting a fallback-only pass. The final full
+  comparison against the lifted cull also matched all 854 cases in both arithmetic builds
+  (routine replay 1.20x / 1.36x; `scratch/cull-full-final.log`). `BENCH_STATE_DIR` can dump
+  private replay outputs for mismatches. Captures and dumps stay under scratch. 2.11 has
+  no new hooks.
+- **PGO tooling**: `pgo.py play --routes hsr,rome,eiger,carlist` trains all four paths;
+  `ab --route ...` records CPU cores and aggregate CPU ms/frame alongside FPS/p99/late
+  frames. Failed routes cannot reuse an old frame summary. Older raw profiles and merged
+  data were preserved in `scratch/pgo/pre-native-20261122-180405` before fresh training.
+
+**Live decision: both remain opt-in.** Same exe, independent switches, verbose logging off,
+warm caches, 40-second samples after a 20-second delay, no compiler during these windows:
+
+| Scene / switch | Run | FPS | CPU ms/frame | CPU cores | p99 ms | Late >20 ms |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| HSR / fill off | A1 | 58.92 | 94.43 | 5.562 | 21.67 | 3.19% |
+| HSR / fill on | B1 | 58.93 | 94.94 | 5.592 | 21.36 | 2.73% |
+| Fiat car list / table off | A1 | 55.20 | 103.62 | 5.718 | 23.29 | 7.29% |
+| Fiat car list / table on | B1 | 54.05 | 108.61 | 5.868 | 23.10 | 23.26% |
+| Fiat car list / table on | B2 | 59.29 | 96.97 | 5.747 | 20.00 | 0.96% |
+| Fiat car list / table off | A2 | 54.31 | 104.92 | 5.697 | 21.54 | 8.32% |
+| Rome / table off | A1 | 57.27 | 85.93 | 4.918 | 25.62 | 11.36% |
+| Rome / table on | B1 | 56.95 | 87.52 | 4.980 | 25.72 | 12.09% |
+
+The fill's whole-process result is unchanged within noise. The table cull is variable at
+the car list, with one worse late-frame run, and offers no Rome CPU saving. Exact local
+replay speedups alone do not justify enabling either. Evidence: `scratch/native-ab.log`,
+`scratch/pv/fill2-*`, `table2-*`, `table-rome-*`. Baseline/enabled game-window captures were
+checked; the car-list route is the Fiat 500, not the older Zonda R route.
+
+**Fresh mixed-route PGO:** trained the final sources with both new natives off, one
+40-second sample each at HSR, Rome, Eiger and the Fiat car list. Four fresh raw profiles
+merged into SHA-256 `d37c395116c50a44c1ff7ad19d70ec1749c9db4b4df431ec22a9234c41534a27`.
+`gen --jobs 2` and `use --jobs 3` completed. The use build reports zero function hash
+mismatches and 21 functions without a record. LLVM also warns about absent indirect-call
+value sites: the existing continuous-mode instrumentation deliberately disables value
+profiles (`pgocc.py`, `-disable-vp=true`); branch counts remain available.
+The private engine is `build_pgo_use/gt5.exe`. This is an 01.04 development build, not a
+release or a 2.11 profile. Comparisons use the same-source **unprofiled** build, so these
+are not gains over an older PGO release. HSR and Eiger ran A/B/B/A; each sample is 40 seconds after
+the race delay, with no compilation during sampling.
+
+| Scene | Rounds | FPS normal / PGO | CPU ms/frame normal / PGO | CPU cores normal / PGO | p99 ms normal / PGO | Late normal / PGO |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| HSR | 2 | 58.90 / 59.80 | 97.08 / 88.32 (-9.0%) | 5.71 / 5.28 (-7.6%) | 21.80 / 19.40 | 3.30% / 0.55% |
+| Fiat car list | 1 | 56.00 / 58.20 | 101.99 / 97.06 (-4.8%) | 5.71 / 5.64 (-1.1%) | 21.40 / 21.10 | 6.20% / 2.30% |
+| Eiger rain | 2 | 58.70 / 57.20 | 110.02 / 99.93 (-9.2%) | 6.46 / 5.71 (-11.5%) | 22.70 / 26.65 | 4.15% / 8.00% |
+
+Both HSR pairs favor PGO on CPU per frame, CPU per second, FPS, p99 and late frames.
+The single car-list pair favors PGO too, mostly in efficiency and FPS rather than CPU
+per second; it has less repeat evidence than HSR. Eiger saves CPU in both pairs but has
+worse p99 in both: normal FPS 58.6/58.8 versus PGO 55.6/58.8; late frames 4.8%/3.5%
+versus 13.1%/2.9%. Thus **the fresh profile remains a development candidate, not a general
+default or release replacement**. Lower CPU alone does not meet the request to preserve
+performance. Normal `build/gt5.exe` and release selection remain unchanged.
+Game-window captures were checked at HSR, the Fiat list and Eiger rain. No obvious rendering
+difference was seen; this does not establish behavior parity in untested scenes.
+Evidence: `scratch/pgo/ab-hsr.txt`, `ab-carlist.txt`, `ab-native-eiger.log`,
+`ab-native-eiger-repeat.log`, `native-mixed-results.json`, `scratch/pv/pgoab-*`.
+
 ## Indirect SPU chaining: return-boundary repair, kept experimental (2026-11-22)
 
 The unfinished `SPU_CHAIN_IB` experiment tail-called `spu_indirect_branch` from lifted job

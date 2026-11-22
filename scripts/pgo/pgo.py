@@ -7,16 +7,17 @@ changes. A profile comes from running the game, so it is derived data like the
 lift: it stays in scratch/pgo/ and is never committed.
 
     pgo.py gen [--jobs 2]        instrumented build: build_pgo_gen/gt5.exe
-    pgo.py play [--runs 1] [NAME=VALUE ...]
-                                 the High Speed Ring race route (gt5boot.ps1
-                                 -Route race -FrameTest: boot, menus, car list,
-                                 loading, 60 s of racing) on the instrumented
+    pgo.py play [--runs 1] [--routes hsr,rome,eiger,carlist] [NAME=VALUE ...]
+                                 selected routes (High Speed Ring by default:
+                                 boot, menus, car list, loading and racing)
+                                 on the instrumented
                                  build; counts go to scratch/pgo/profraw/ while
                                  it runs (continuous mode), so the scripted kill
                                  loses nothing
     pgo.py merge                 scratch/pgo/profraw/*.profraw -> scratch/pgo/gt5.profdata
     pgo.py use [--jobs 4]        optimised build: build_pgo_use/gt5.exe
-    pgo.py ab [--rounds 4]       frame tests alternating build/gt5.exe and
+    pgo.py ab [--rounds 4] [--route hsr|rome|eiger|carlist]
+                               frame/CPU tests alternating build/gt5.exe and
                                  build_pgo_use/gt5.exe (after bringing build/
                                  up to date), with a paired summary
     pgo.py clean-gen             delete build_pgo_gen/ (about 3 GB) once the
@@ -28,12 +29,14 @@ counts); `use` prints how many functions no longer match.
 """
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
 import statistics
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -74,12 +77,11 @@ def build(mode, arg, jobs):
     defs = ' '.join(f'"{x}"' for x in normal_settings())
     lines = [f'set "PATH=C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer;%PATH%"',
              f'call "{VCVARS}" >nul', 'if errorlevel 1 exit /b 1']
-    last_arg = (d / 'pgo.arg').read_text() if (d / 'pgo.arg').is_file() else ''
-    if not (d / 'build.ninja').is_file() or last_arg != arg:
-        # The launcher's arguments are in every compile command, so a new
-        # profile path recompiles everything once configure sets them.
-        lines.append(f'cmake -S "{ROOT}" -B "{d}" -G Ninja {defs} '
-                     f'"-DCMAKE_C_COMPILER_LAUNCHER={launcher}" "-DCMAKE_CXX_COMPILER_LAUNCHER={launcher}" || exit /b 1')
+    # Refresh normal-build options even when the profile directory is the same:
+    # a reused PGO cache may still contain options from an older experiment.
+    # A changed profile path in the launcher also makes Ninja rebuild objects.
+    lines.append(f'cmake -S "{ROOT}" -B "{d}" -G Ninja {defs} '
+                 f'"-DCMAKE_C_COMPILER_LAUNCHER={launcher}" "-DCMAKE_CXX_COMPILER_LAUNCHER={launcher}" || exit /b 1')
     if mode == 'gen':
         # The instrumented objects ask for clang's profile runtime, built /MT
         # (libcmt); the game is /MD.
@@ -107,14 +109,29 @@ def build(mode, arg, jobs):
     return d
 
 
-def gt5boot(tag, exe, extra=(), frame_test=True, settle=40):
+ROUTES = {
+    'hsr': ('race', ()),
+    'rome': ('race', ('-Tab', '2')),
+    'eiger': ('race', ('-Track', '6')),
+    'carlist': ('carlist', ('-ShotsFrom', 'CarList')),
+}
+
+
+def gt5boot(tag, exe, extra=(), frame_test=True, settle=40, route='hsr', cpu=False):
+    destination, navigation = ROUTES[route]
     args = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(ROOT / 'scripts/test/gt5boot.ps1'),
-            '-Tag', tag, '-Route', 'race', '-Settle', str(settle), '-Exe', str(exe)]
+            '-Tag', tag, '-Route', destination, '-Settle', str(settle), '-Exe', str(exe)]
     if frame_test:
         args.append('-FrameTest')
+    if cpu:
+        args.append('-Cpu')
+    args += list(navigation)
     args += list(extra)
-    out = subprocess.run(args, cwd=ROOT, capture_output=True, text=True, errors='replace').stdout
+    process = subprocess.run(args, cwd=ROOT, capture_output=True, text=True, errors='replace')
+    out = process.stdout + ('\n' + process.stderr if process.stderr else '')
     (ROOT / 'scratch/pv' / f'{tag}.run.txt').write_text(out)
+    if process.returncode:
+        sys.exit(f'[pgo] {tag}: test driver exited {process.returncode}; see scratch/pv/{tag}.run.txt')
     return out
 
 
@@ -150,9 +167,15 @@ def cmd_play(a):
     raw.mkdir(parents=True, exist_ok=True)
     # %p: a file per run; %c: continuous mode, counts written while it runs.
     env = [f'LLVM_PROFILE_FILE={raw.as_posix()}/gt5-%p%c.profraw'] + a.vars
+    routes = a.routes.split(',')
+    if not routes or any(route not in ROUTES for route in routes):
+        sys.exit('[pgo] --routes must be comma-separated hsr,rome,eiger,carlist')
     for i in range(a.runs):
-        out = gt5boot(f'pgo-play{i + 1}', exe, env, settle=a.settle)
-        say(f'run {i + 1}: ' + ' | '.join(l for l in out.splitlines() if 'FrameTest' in l or 'RaceStart' in l))
+        for route in routes:
+            out = gt5boot(f'pgo-play-{route}{i + 1}', exe, env, settle=a.settle, route=route)
+            if 'FrameTest: frames ' not in out:
+                sys.exit(f'[pgo] {route} did not finish its training route; see scratch/pv/pgo-play-{route}{i + 1}.run.txt')
+            say(f'run {i + 1} {route}: ' + ' | '.join(l for l in out.splitlines() if 'FrameTest' in l or 'RaceStart' in l))
     files = sorted(raw.glob('*.profraw'))
     say(f'{len(files)} profile file(s), {sum(f.stat().st_size for f in files) >> 20} MB; next: pgo.py merge')
 
@@ -210,23 +233,36 @@ def cmd_ab(a):
     for r in range(a.rounds):
         order = 'AB' if r % 2 == 0 else 'BA'   # alternate, so drift falls on both sides
         for s in order:
-            tag = f'pgoab-{s}{r + 1}'
-            gt5boot(tag, sides[s], settle=a.settle)
-            txt = ROOT / 'scratch/pv' / f'{tag}.frames.txt'
-            m = FRAMES.search(txt.read_text()) if txt.is_file() else None
+            tag = f'pgoab-{a.route}-{s}{r + 1}'
+            launch_ms = time.time_ns() // 1_000_000
+            out = gt5boot(tag, sides[s], settle=a.settle, route=a.route, cpu=True)
+            # A failed route must not reuse a previous run's files with this tag.
+            m = FRAMES.search(out)
             if not m:
                 say(f'{tag}: no frame test result (see scratch/pv/{tag}.run.txt)')
                 res[s].append(None)
                 continue
             v = dict(fps=float(m[2]), median=float(m[3]), p99=float(m[4]), late=float(m[5]), walk=float(m[6]))
+            cpu_file = ROOT / 'scratch/pv' / f'{tag}.cpu.json'
+            frame_file = ROOT / 'scratch/pv' / f'{tag}.frames.json'
+            if not cpu_file.is_file() or not frame_file.is_file():
+                sys.exit(f'[pgo] {tag}: missing CPU/frame measurement')
+            cpu, frames = json.loads(cpu_file.read_text()), json.loads(frame_file.read_text())
+            if (cpu['sample_start_ms'] < launch_ms or
+                cpu['sample_start_ms'] != frames['sample_start_ms'] or
+                cpu['sample_end_ms'] != frames['sample_end_ms']):
+                sys.exit(f'[pgo] {tag}: stale or mismatched CPU/frame window')
+            v['cpu_ms_frame'] = 1000 * cpu['process_cpu_seconds'] / (frames['frames'] - 1)
+            v['cpu_cores'] = cpu['process_cpu_seconds'] / cpu['seconds']
             res[s].append(v)
             say(f'{tag} ({"normal" if s == "A" else "PGO"}): {v["fps"]:.1f} FPS, late {v["late"]:.1f}%, '
-                f'p99 {v["p99"]:.1f} ms, walk {v["walk"]:.2f} ms')
+                f'p99 {v["p99"]:.1f} ms, walk {v["walk"]:.2f} ms, '
+                f'CPU {v["cpu_ms_frame"]:.2f} ms/frame ({v["cpu_cores"]:.2f} cores)')
     pairs = [(x, y) for x, y in zip(res['A'], res['B']) if x and y]
     if not pairs:
         sys.exit('[pgo] no complete rounds')
     lines = ['| | normal | PGO | PGO - normal (mean of rounds) | rounds PGO better |', '|---|---|---|---|---|']
-    for k, better in (('fps', 1), ('late', -1), ('p99', -1), ('walk', -1)):
+    for k, better in (('fps', 1), ('late', -1), ('p99', -1), ('walk', -1), ('cpu_ms_frame', -1), ('cpu_cores', -1)):
         A = [p[0][k] for p in pairs]; B = [p[1][k] for p in pairs]
         diff = [b - x for x, b in zip(A, B)]
         wins = sum(1 for d in diff if d * better > 0)
@@ -235,6 +271,7 @@ def cmd_ab(a):
                      f'{wins} of {len(pairs)} |')
     table = '\n'.join(lines)
     (PGO / 'ab.txt').write_text(table + '\n')
+    (PGO / f'ab-{a.route}.txt').write_text(table + '\n')
     print(table)
 
 
@@ -250,11 +287,13 @@ def main():
     sub = p.add_subparsers(dest='cmd', required=True)
     g = sub.add_parser('gen'); g.add_argument('--jobs', type=int, default=2); g.set_defaults(fn=cmd_gen)
     g = sub.add_parser('play'); g.add_argument('--runs', type=int, default=1); g.add_argument('--settle', type=int, default=60)
+    g.add_argument('--routes', default='hsr', help='comma-separated hsr,rome,eiger,carlist')
     g.add_argument('vars', nargs='*', help='NAME=VALUE for the game'); g.set_defaults(fn=cmd_play)
     g = sub.add_parser('merge'); g.set_defaults(fn=cmd_merge)
     g = sub.add_parser('use'); g.add_argument('--jobs', type=int, default=4); g.add_argument('--profile')
     g.set_defaults(fn=cmd_use)
     g = sub.add_parser('ab'); g.add_argument('--rounds', type=int, default=4); g.add_argument('--settle', type=int, default=40)
+    g.add_argument('--route', choices=ROUTES, default='hsr')
     g.add_argument('--jobs', type=int, default=4); g.set_defaults(fn=cmd_ab)
     g = sub.add_parser('clean-gen'); g.set_defaults(fn=cmd_clean_gen)
     a = p.parse_args()

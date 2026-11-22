@@ -20,11 +20,28 @@ JonathanDC64/Soulbrandt). The scripts here are written for this build.
 ```
 .venv\Scripts\python scripts\pgo\pgo.py gen          # build_pgo_gen\gt5.exe, instrumented (2 jobs)
 .venv\Scripts\python scripts\pgo\pgo.py play         # High Speed Ring race route; counts -> scratch\pgo\profraw
+.venv\Scripts\python scripts\pgo\pgo.py play --routes hsr,rome,eiger,carlist
 .venv\Scripts\python scripts\pgo\pgo.py merge        # -> scratch\pgo\gt5.profdata
 .venv\Scripts\python scripts\pgo\pgo.py use          # build_pgo_use\gt5.exe, optimised (4 jobs)
 .venv\Scripts\python scripts\pgo\pgo.py ab           # alternating frame tests: build\ vs build_pgo_use\
+.venv\Scripts\python scripts\pgo\pgo.py ab --route carlist --rounds 2
 .venv\Scripts\python scripts\pgo\pgo.py clean-gen    # delete build_pgo_gen\ once merged
 ```
+
+`play --routes` trains each selected route per run; all four pass through the menus and
+loading, while the car-list route stays on the car list. A route that does not produce a
+fresh frame sample fails instead of being reported as completed training. Preserve or move
+old `scratch/pgo/profraw` and `gt5.profdata` before training changed sources: `merge` consumes
+every raw profile in that folder.
+Both `gen` and `use` refresh their CMake options from the normal build on every invocation;
+reusing a profile-directory path cannot retain an older experiment's build options.
+
+`ab --route hsr|rome|eiger|carlist` now measures process CPU as well as frame pacing.
+CPU milliseconds per frame divide aggregate CPU time across all threads by the measured
+frame intervals; CPU cores report aggregate CPU seconds divided by wall seconds. Read both:
+a build that draws more frames can use more CPU per second while using less per frame.
+Results are saved as `scratch/pgo/ab-<route>.txt` and the latest `ab.txt`. These comparisons
+are against the normal non-PGO build of the same sources, not against an older PGO release.
 
 | Step | Time here (i5-12400F, 16 GB) | Notes |
 |---|---|---|
@@ -104,6 +121,16 @@ That is about +2.5%; the car list is held by the SPU job chain (workload 4).
 **Not measured**: other tracks, Eiger in rain, menus beyond the route, and a
 profile merged from several routes.
 
+## Mixed-route refresh (2026-11-22)
+
+The 01.04 profile trained on HSR, Rome, Eiger and the Fiat car list fits the final
+sources (zero lost function counts). Against the same-source unprofiled build,
+HSR uses 9.0% less CPU per frame, the Fiat list 4.8% less and Eiger rain 9.2% less.
+HSR and the car list improve pacing, but Eiger's p99 worsens in both pairs and its
+mean FPS drops. This profile is a private development candidate, not the default
+or a replacement for a release profile. Full results and sample limitations are in
+the newest entry of [progress-gt5.md](progress-gt5.md).
+
 ## Releases
 
 `scripts\release\clean_build.py --profile <profdata>` builds the player ZIP
@@ -149,5 +176,6 @@ the earlier PGO build in the same session.
 - **A/B measurements**: a change measured on PGO builds needs a profile per
   side, since changed code has no counts in the other side's profile. Keep
   A/Bs on normal builds unless both sides are profiled.
-- **Profile coverage**: a route through Eiger and the car list would give
-  those scenes their own counts.
+- **Profile coverage**: `play --routes hsr,rome,eiger,carlist` now collects
+  those scenes explicitly. Recheck each important route when refreshing a profile;
+  broader training alone does not establish a performance gain.

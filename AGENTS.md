@@ -232,6 +232,16 @@ copies of the mixer `jD58063CD` and EQ `jEB79FDFC` (`audio_native_hooks` in targ
 `scripts/test/native_audio.py` on captured states first (identical registers and LS). Re-lift
 after pulling (lifter change). See progress-gt5.md, 2026-11-22.
 
+**Further native CPU experiments (2026-11-22).** 01.04 has opt-in integer bulk fills
+(`GT5P_NATIVE_FILL=1`) and coverage-table culling (`GT5P_NATIVE_CULL_TABLE=1`); both remain
+off because live tests did not establish a CPU saving, despite exact replay checks.
+Re-run `spu_native_patch.py` after lifting. `spu_fill.py` checks 2,400 full states;
+`native_cull.py --table-only --expand` checks the new cull actually executes.
+`pgo.py play --routes hsr,rome,eiger,carlist` trains a mixed profile; `ab --route ...`
+compares CPU per frame and per second as well as pacing. Fresh profiles stay private,
+and comparisons against an unprofiled build are not gains over an older PGO release.
+See the newest entry in docs/progress-gt5.md for measurements and rollbacks.
+
 **Game sound fixed (2026-11-14).** Menus and races were silent: the DSP
 image `j9804ABA8` produced NaN PCM from two SPU arithmetic differences (0 x
 extended-range is 0; single precision truncates). Audio images force-include

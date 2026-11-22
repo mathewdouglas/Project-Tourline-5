@@ -157,6 +157,16 @@ int main(int argc, char** argv)
                               if (e && *e) { char* q; lo = (int)strtol(e, &q, 10); hi = (*q == '-') ? (int)strtol(q + 1, NULL, 10) : lo; } }
               for (int g = lo; g >= 0 && g <= hi && g < 128; g++) memset(&s_ctx.gpr[g], 0, sizeof s_ctx.gpr[g]); }
             const uint32_t endpc = s_ctx.pc;
+            const char* dump_dir = getenv("BENCH_STATE_DIR");
+            if (r == 0 && dump_dir && *dump_dir) {
+                char path[2048]; snprintf(path, sizeof path, "%s/state-%03d.bin", dump_dir, k);
+                FILE* dump = fopen(path, "wb");
+                if (!dump) { perror(path); return 3; }
+                fwrite(&endpc, sizeof endpc, 1, dump);
+                fwrite(s_ctx.gpr, sizeof s_ctx.gpr, 1, dump);
+                fwrite(s_ctx.ls, SPU_LS_SIZE, 1, dump);
+                fclose(dump);
+            }
             uint64_t hh = fnv(&endpc, 4, fnv(s_ctx.ls_store, SPU_LS_SIZE, fnv(s_ctx.gpr, sizeof s_ctx.gpr, 1469598103934665603ULL)));
             hh=fnv(&s_ctx.int_enable,sizeof s_ctx.int_enable,hh);
             if (r && hh != hash) { fprintf(stderr, "state %d: not deterministic\n", k); return 1; }
@@ -167,6 +177,10 @@ int main(int argc, char** argv)
         total += best[nb / 2]; k++;
     }
     printf("total %.1f us over %d states\n", total, k);
+#ifdef NC_TABLE_TEST
+    if (!s_nc_table_hits) { fprintf(stderr, "coverage-table native path never exercised\n"); return 4; }
+    printf("coverage-table native calls: %u\n", s_nc_table_hits);
+#endif
 #ifdef BENCH_COUNT
     printf("counts (function entries per call, all states):\n");
     for (int n = 0; n < 25; n++) {

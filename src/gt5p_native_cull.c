@@ -25,6 +25,15 @@
  *
  * GT5P_NATIVE_CULL=0: the lifted loop always. Test: scripts/test/native_cull.py (captured states:
  * local store and every register but the volatile r2-r79 the same as the lifted run).
+ *
+ * The optional B210 -> B4E0 variant uses the guest's 512-byte coverage table:
+ * quantize bounds in eighths, clamp the Y span for the table, index by Y/X
+ * phases, then compare its threshold against X span. Its pipeline starts
+ * with a different carried quadword and two fill batches. Only measured
+ * pattern 5 is enabled; aliases and unknown values remain lifted.
+ * GT5P_NATIVE_CULL_TABLE=1 opts in (default off). --table-only --expand in
+ * native_cull.py compares against the existing native cull, requires this
+ * path to be exercised, and varies batch counts and facing flags.
  */
 #include "spu_context.h"
 #include <immintrin.h>
@@ -91,6 +100,13 @@ static inline __m256i nc_cflts2(__m256 x)
     const __m256 pos_over = _mm256_cmp_ps(t, _mm256_set1_ps(2147483648.0f), _CMP_GE_OQ);
     return _mm256_blendv_epi8(r, _mm256_set1_epi32(0x7FFFFFFF), _mm256_castps_si256(pos_over));
 }
+static inline __m256i nc_cflts8(__m256 x)
+{
+    const __m256 t = _mm256_mul_ps(x, _mm256_set1_ps(8.0f));
+    const __m256i r = _mm256_cvttps_epi32(t);
+    return _mm256_blendv_epi8(r, _mm256_set1_epi32(0x7FFFFFFF),
+        _mm256_castps_si256(_mm256_cmp_ps(t, _mm256_set1_ps(2147483648.0f), _CMP_GE_OQ)));
+}
 /* a * b + c as the lifted copy computes it: fused, or (float)((double)a * b + c) */
 static inline __m256 nc_fma(__m256 a, __m256 b, __m256 c, int fused)
 {
@@ -124,7 +140,7 @@ static inline void nc_role(const uint32_t* soa, const int32_t* idx, __m256* x, _
 /* keep: bit (t & 7) of byte t >> 3 = triangle t kept. The number kept, or -1 for a value
  * outside what the x86 operations reproduce (the lifted loop then runs). */
 static int nc_decide(const uint8_t* ls, uint32_t list, uint32_t scratch, uint32_t ntri, uint32_t nvert,
-                     const nc_consts* k, uint8_t* keep, int fused)
+                     const nc_consts* k, uint8_t* keep, int fused, const uint8_t* coverage)
 {
     const __m256 bias = _mm256_set1_ps(k->bias), k1 = _mm256_set1_ps(k->k1), k2 = _mm256_set1_ps(k->k2);
     const __m256 xlim = _mm256_set1_ps(k->xlim), ylim = _mm256_set1_ps(k->ylim);
@@ -193,8 +209,23 @@ static int nc_decide(const uint8_t* ls, uint32_t list, uint32_t scratch, uint32_
         const __m256 ymin = _mm256_blendv_ps(Cy, nyAB, _mm256_cmp_ps(Cy, nyAB, _CMP_GT_OQ));
         const __m256 xmaxb = _mm256_add_ps(xmax, bias), ymaxb = _mm256_add_ps(ymax, bias);
         const __m256i cmask = _mm256_set1_epi32((int)k->cover_mask);
-        const __m256i cover = _mm256_and_si256(_mm256_sub_epi32(nc_cflts2(xmin), _mm256_and_si256(nc_cflts2(xmaxb), cmask)),
+        __m256i cover = _mm256_and_si256(_mm256_sub_epi32(nc_cflts2(xmin), _mm256_and_si256(nc_cflts2(xmaxb), cmask)),
                                                _mm256_sub_epi32(nc_cflts2(ymin), _mm256_and_si256(nc_cflts2(ymaxb), cmask)));
+        if (coverage) {
+            uint32_t ix[8], iy[8], dx[8], dy[8], hit[8];
+            const __m256i X = nc_cflts8(xmin), Y = nc_cflts8(ymin);
+            _mm256_storeu_si256((__m256i*)ix, X); _mm256_storeu_si256((__m256i*)iy, Y);
+            _mm256_storeu_si256((__m256i*)dx, _mm256_sub_epi32(nc_cflts8(xmaxb), X));
+            _mm256_storeu_si256((__m256i*)dy, _mm256_sub_epi32(nc_cflts8(ymaxb), Y));
+            for (unsigned j = 0; j < 8; j++) {
+                /* The guest indexes by Y span and Y/X phases, then compares
+                 * the threshold with the X span. Its rotate stays in a line. */
+                const uint32_t q = ((dy[j] > 7u ? 7u : dy[j]) << 6) + ((iy[j] & 7u) << 3) + (ix[j] & 7u);
+                const unsigned threshold = coverage[(q & ~15u) | ((q + 3u) & 15u)];
+                hit[j] = (int32_t)dx[j] >= (int32_t)threshold ? ~0u : 0u;
+            }
+            cover = _mm256_loadu_si256((const __m256i*)hit);
+        }
         const __m256i top = _mm256_set1_epi32((int)0xFF000000u);
         const __m256i nA = _mm256_cmpeq_epi32(_mm256_and_si256(An, top), top), nB = _mm256_cmpeq_epi32(_mm256_and_si256(Bn, top), top);
         const __m256i nC = _mm256_cmpeq_epi32(_mm256_and_si256(Cn, top), top);
@@ -228,7 +259,7 @@ static int nc_decide(const uint8_t* ls, uint32_t list, uint32_t scratch, uint32_
 #pragma clang attribute pop
 
 /* the loop's stores. 0 when its counters are not the shape this model knows (nothing written). */
-static int nc_pack(spu_context* ctx, const uint8_t* keep, uint32_t ntri)
+static int nc_pack(spu_context* ctx, const uint8_t* keep, uint32_t ntri, int coverage)
 {
     uint8_t* const ls = ctx->ls;
     const uint32_t list = ctx->gpr[3]._u32[0];
@@ -239,8 +270,8 @@ static int nc_pack(spu_context* ctx, const uint8_t* keep, uint32_t ntri)
     for (uint32_t j = 0; j < 4; j++)                                       /* the last pass's lane mask is the count's */
         if ((ctx->gpr[43]._u32[j] != 0) != (4u * ((ntri + 3u) / 4u - 1u) + j >= ntri)) return 0;
     uint8_t Q[16], fill[2][4][8];
-    for (int i = 0; i < 4; i++) { const uint32_t w = __builtin_bswap32(ctx->gpr[84]._u32[i]); memcpy(Q + 4 * i, &w, 4); }
-    const int fr[4] = { 45, 32, 37, 57 };
+    for (int i = 0; i < 4; i++) { const uint32_t w = __builtin_bswap32(ctx->gpr[coverage ? 87 : 84]._u32[i]); memcpy(Q + 4 * i, &w, 4); }
+    const int fr[4] = { 45, coverage ? 53 : 32, 37, coverage ? 32 : 57 };
     for (int f = 0; f < 4; f++) {
         uint8_t b[16];
         for (int i = 0; i < 4; i++) { const uint32_t w = __builtin_bswap32(ctx->gpr[fr[f]]._u32[i]); memcpy(b + 4 * i, &w, 4); }
@@ -284,18 +315,31 @@ static int nc_pack(spu_context* ctx, const uint8_t* keep, uint32_t ntri)
 
 /* The jump hook at 0xAF88: 1 = the loop is done (r13, r40 and the list written), go on at 0xB4E0;
  * 0 = nothing changed, the lifted loop runs. */
-int gt5p_cull_af88(spu_context* ctx, int fused)
+static int nc_try_cull(spu_context* ctx, int fused, int coverage)
 {
     static NC_TLS uint8_t keep[0x8000 / 8 + 8];
     int on = g_nc_on;
     if (__builtin_expect(on < 0, 0)) on = nc_init();
     if (!on) return 0;
     if (ctx->int_enable && (ctx->event_status & ctx->event_mask)) return 0;
-    if (t_nc_ctx != ctx || t_nc_pat == 1u || t_nc_pat == 5u) return 0;
+    if (t_nc_ctx != ctx || (!coverage && (t_nc_pat == 1u || t_nc_pat == 5u))) return 0;
+    if (coverage && t_nc_pat != 5u) return 0; /* captured/verified table pattern */
     const uint8_t* ls = ctx->ls;
+    const uint32_t table = ctx->gpr[28]._u32[0];
+    if (coverage && ((table & 15u) || table > SPU_LS_SIZE - 512u)) return 0;
     const uint32_t line = ctx->gpr[4]._u32[0] & SPU_LS_MASK & ~15u;
     const uint32_t ntri = nc_be32(ls, line), nvert = nc_be32(ls, line + 4);
     if (!ntri || ntri > 0x8000u) return 0;
+    if (coverage) {
+        const uint32_t list = ctx->gpr[3]._u32[0], scratch = ctx->gpr[8]._u32[0];
+        const uint32_t list_end = list + 8u * ((ntri + 7u) & ~7u);
+        const uint32_t scratch_end = scratch + 16u * ((nvert + 3u) & ~3u);
+        /* Deciding first is valid only when packing cannot overwrite its
+         * vertex or coverage inputs. Unusual aliases stay lifted. */
+        if (list_end < list || scratch_end < scratch ||
+            (list < table + 512u && table < list_end) ||
+            (list < scratch_end && scratch < list_end)) return 0;
+    }
     nc_consts k;
     uint32_t u;
     u = ctx->gpr[5]._u32[0]; memcpy(&k.bias, &u, 4); u = ctx->gpr[6]._u32[0]; memcpy(&k.k1, &u, 4);
@@ -303,7 +347,33 @@ int gt5p_cull_af88(spu_context* ctx, int fused)
     u = ctx->gpr[14]._u32[0]; memcpy(&k.ylim, &u, 4);
     k.flip = ctx->gpr[36]._u32[0]; k.two_sided = ctx->gpr[10]._u32[0] == 16u;
     k.cover_mask = ctx->gpr[58]._u32[0]; k.near_off = ctx->gpr[50]._u32[0];
-    const int kn = nc_decide(ls, ctx->gpr[3]._u32[0], ctx->gpr[8]._u32[0], ntri, nvert, &k, keep, fused);
+    if (coverage) {
+        const unsigned constants[] = {5, 6, 34, 55, 14};
+        for (unsigned i = 0; i < sizeof constants / sizeof *constants; i++)
+            if ((ctx->gpr[constants[i]]._u32[0] & 0x7F800000u) == 0x7F800000u) return 0;
+    }
+    const int kn = nc_decide(ls, ctx->gpr[3]._u32[0], ctx->gpr[8]._u32[0], ntri, nvert, &k, keep, fused, coverage ? ls + table : NULL);
     if (kn < 0) return 0;
-    return nc_pack(ctx, keep, ntri);
+    return nc_pack(ctx, keep, ntri, coverage);
+}
+int gt5p_cull_af88(spu_context* ctx, int fused) { return nc_try_cull(ctx, fused, 0); }
+#ifdef NC_TABLE_TEST
+static unsigned s_nc_table_hits;
+#endif
+int gt5p_cull_b210(spu_context* ctx, int fused)
+{
+    static int mode = -1;
+    int enabled = __atomic_load_n(&mode, __ATOMIC_ACQUIRE);
+    if (enabled < 0) {
+        const char* e = getenv("GT5P_NATIVE_CULL_TABLE"); enabled = e && *e == '1';
+        __atomic_store_n(&mode, enabled, __ATOMIC_RELEASE);
+    }
+#ifdef NC_TABLE_FORCE_OFF
+    enabled = 0;
+#endif
+    const int taken = enabled ? nc_try_cull(ctx, fused, 1) : 0;
+#ifdef NC_TABLE_TEST
+    s_nc_table_hits += taken != 0;
+#endif
+    return taken;
 }

@@ -117,6 +117,9 @@ for v in variants:
         print(f"{name}: indirect-chain off/on identical over {len(before)} states")
     if a.count:
         print(r.stdout[r.stdout.find("counts"):])
+    for line in r.stdout.splitlines():
+        if line.startswith("coverage-table native calls:"):
+            print(line)
     rows = re.findall(r"entry ([0-9A-F]+) calls +\d+: +([\d.]+) us  hash ([0-9A-F]{16})", r.stdout)
     times = [float(t) for _, t, _ in rows]
     hashes = [h for _, _, h in rows]

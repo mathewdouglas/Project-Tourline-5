@@ -148,6 +148,7 @@ void gt5p_spu_sorted_walk_end(spu_context* ctx)
 #include <intrin.h>
 #endif
 static volatile long long s_clears, s_clear_words;
+static volatile long long s_fills, s_fill_bytes;
 static void native_report2(void)
 {
     if (!s_stats) return;
@@ -157,6 +158,8 @@ static void native_report2(void)
     if (now - was < 5000 || InterlockedCompareExchange64(&t0, now, was) != was) return;
     fprintf(stderr, "[spu-native] GT5 table clears %lld (%lld words)%c",
             InterlockedExchange64(&s_clears, 0), InterlockedExchange64(&s_clear_words, 0), 10);
+    fprintf(stderr, "[spu-native] GT5 bulk fills %lld (%lld bytes)%c",
+            InterlockedExchange64(&s_fills, 0), InterlockedExchange64(&s_fill_bytes, 0), 10);
 }
 /* LS 0x4C14: zeroes words r15, r15+4, ... up to r6 (1280) at local store
  * r83 + r15 (lqx, cwx, shufb of r7 = 0, stqx; ~3% of the lane time). Here the
@@ -182,6 +185,47 @@ void gt5p_spu_clear_words(spu_context* ctx)
     }
     if (!check) for (int i = 0; i < 4; i++) ctx->gpr[15]._u32[i] += (end - 4) - r15;
     if (s_stats) { InterlockedIncrement64(&s_clears); InterlockedAdd64(&s_clear_words, (end - 4 - r15) / 4); native_report2(); }
+}
+
+/* BCUS98114-v104 b01697100, LS 0x5BA8: repeat r5 up to r3 in 16-byte
+ * lines. Advance all but the final iteration; the lifted remainder produces
+ * the exact final r4/r82, PC and successor. The span is modular uint32_t;
+ * LS addresses wrap independently and quadword stores discard low bits.
+ * Inspired by gt5-recomp's nfill_fast (MIT, MormonFTP-hub, 2026).
+ * GT5P_NATIVE_FILL=1 opts in while measured; default/0 stays lifted.
+ */
+static int s_fill_mode = -1;
+static void fill_lines(uint8_t* dst, uint32_t bytes, const uint32_t be[4])
+{
+    if (!(be[0] | be[1] | be[2] | be[3])) { memset(dst, 0, bytes); return; }
+    for (uint32_t off = 0; off < bytes; off += 16) memcpy(dst + off, be, 16);
+}
+void gt5p_spu_fill_lines(spu_context* ctx)
+{
+    int enabled = __atomic_load_n(&s_fill_mode, __ATOMIC_ACQUIRE);
+    if (enabled < 0) {
+        const char* e = getenv("GT5P_NATIVE_FILL");
+        enabled = e && *e == '1';
+        if (getenv("SPU_LS_WATCH") || getenv("SPU_SMC_WATCH")) enabled = 0;
+        __atomic_store_n(&s_fill_mode, enabled, __ATOMIC_RELEASE);
+    }
+    if (!enabled || native_mode() != 1 ||
+        (ctx->int_enable && (ctx->event_status & ctx->event_mask)) ||
+        (ctx->image_id == 2 && ctx->policy_mode) ||
+        g_spu_ls_watch_n > 0 || g_spu_smc_watch > 0) return;
+    const uint32_t from = ctx->gpr[4]._u32[0];
+    const uint32_t span = ctx->gpr[3]._u32[0] - from;
+    if ((span & 15u) || span < 64u || span > SPU_LS_SIZE) return;
+    const uint32_t bytes = span - 16u, a = from & (SPU_LS_MASK & ~15u);
+    const uint32_t first = bytes < SPU_LS_SIZE - a ? bytes : SPU_LS_SIZE - a;
+    uint32_t be[4];
+    for (unsigned k = 0; k < 4; k++) be[k] = SPU_BSWAP32(ctx->gpr[5]._u32[k]);
+    fill_lines(ctx->ls + a, first, be);
+    fill_lines(ctx->ls, bytes - first, be);
+    for (unsigned k = 0; k < 4; k++) ctx->gpr[4]._u32[k] += bytes;
+    if (s_stats) {
+        InterlockedIncrement64(&s_fills); InterlockedAdd64(&s_fill_bytes, bytes); native_report2();
+    }
 }
 
 /* Register promotion of hot lifted functions (GT5 Phase 44).
