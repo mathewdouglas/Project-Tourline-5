@@ -144,9 +144,13 @@ def patch_image(image, regions, text, all_regs=True):
                 head = f"void gt5p_{image}_spu_func_{m:08X}(spu_context* ctx) {{"
                 s = lines.index(head)
                 e = lines.index("}", s + 1)
-                # A member's register-promotion switch (spu_regpromo.py) has no
-                # place inside the region: its check mode reads ctx->gpr.
-                heads[m], bodies[m] = s, [l for l in lines[s + 1:e] if "/* spu_regpromo */" not in l]
+                # A member's register-promotion switch (spu_regpromo.py) or native
+                # hook (spu_native_patch.py) has no place inside the region: both
+                # read ctx->gpr directly and run before entering the region.
+                heads[m], bodies[m] = s, [
+                    l for l in lines[s + 1:e]
+                    if "/* spu_regpromo */" not in l and "/* spu_native_patch */" not in l
+                ]
             name, fn, what = region_lines(image, members, bodies, all_regs)
         except ValueError as ex:
             report.append(f"region 0x{members[0]:X}: skipped, {ex or 'member not found'}")
@@ -158,14 +162,20 @@ def patch_image(image, regions, text, all_regs=True):
         report.append(f"region 0x{members[0]:X}: {what}")
     out = []
     first = min(blocks) if blocks else None
+    pending_redirect = None
     for i, line in enumerate(lines):
+        if pending_redirect is not None and "/* spu_native_patch */" not in line:
+            out.append(pending_redirect)
+            pending_redirect = None
         if i == first:
             out.extend(PROLOGUE)
         if i in blocks:
             out.extend(blocks[i])
         out.append(line)
         if i in redirect:
-            out.append(redirect[i])
+            pending_redirect = redirect[i]
+    if pending_redirect is not None:
+        out.append(pending_redirect)
     new = "\n".join(out)
     return (new.replace("\n", "\r\n") if crlf else new), report
 

@@ -365,7 +365,7 @@ int gt5p_cull_b210(spu_context* ctx, int fused)
     static int mode = -1;
     int enabled = __atomic_load_n(&mode, __ATOMIC_ACQUIRE);
     if (enabled < 0) {
-        const char* e = getenv("GT5P_NATIVE_CULL_TABLE"); enabled = e && *e == '1';
+        const char* e = getenv("GT5P_NATIVE_CULL_TABLE"); enabled = !(e && *e == '0');
         __atomic_store_n(&mode, enabled, __ATOMIC_RELEASE);
     }
 #ifdef NC_TABLE_FORCE_OFF

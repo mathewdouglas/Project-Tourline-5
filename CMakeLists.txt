@@ -221,6 +221,8 @@ if(GT5P_ENABLE_SPU)
     # spu_native_hooks); its AVX2 code is chosen at run time.
     set_source_files_properties(src/gt5p_native_cull.c PROPERTIES
         INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu" COMPILE_OPTIONS "-msse4.1")
+    set_source_files_properties(src/gt5p_native_eiger.c PROPERTIES
+        INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu" COMPILE_OPTIONS "-msse4.1")
     # SSE4.1 for the lifted SPU code only. Its helpers (spu_shufb above all)
     # have a vector form behind __SSE4_1__ and fall back to a byte loop without
     # it; that loop was a sixth of the sound job thread. Any CPU with a D3D12
@@ -261,6 +263,7 @@ add_executable(gt5p
     src/gt5p_uifix.cpp
     src/gt5p_spu_native.c
     src/gt5p_native_cull.c
+    src/gt5p_native_eiger.c
     src/gt5p_settings.cpp
     src/gt5p_controls.cpp
     src/gt5p_profview.cpp

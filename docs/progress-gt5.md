@@ -4,6 +4,39 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Native Eiger 0x8298 grid pass & default-on coverage-table cull (2026-11-23)
+
+- **Eiger Workload 0 serial grid pass (`src/gt5p_native_eiger.c`, `b01697100` `0x8298 -> 0x8934`):**
+  - Jump hook in `config/targets.json` (`spu_native_hooks`, rollback `GT5P_NATIVE_EIGER=0`,
+    hit stats `GT5P_NATIVE_EIGER_STATS=1`). Keeps the 4-word xorshift128 RNG state in scalar
+    registers, uses direct big-endian row-pointer/cell loads instead of 128-bit swapped loads,
+    and compiles separate SSE4.1 (double FMA) and FMA (`target("sse4.1,fma")`) kernels under
+    `#pragma STDC FP_CONTRACT OFF`.
+  - **Exactness:** `scripts/test/native_eiger.py` verifies 200 randomized states bit-exact across
+    all 256 KB of Local Store and live-out `r53` for both `fused=0` and `fused=1`.
+  - **Post-lift commutativity:** updated `scripts/spu_region.py` to skip `/* spu_native_patch */`
+    lines inside region bodies and keep native hooks ahead of region redirects so `spu_region.py`
+    and `spu_native_patch.py` both pass `--check`.
+  - **Live Eiger result:** `2,555,904` hits, `0` bails; Workload 0 `0x8298` share fell from
+    `42.8%` to `19.9%`; Eiger heavy rain jumped from `54.3 FPS` (`17.7%` late, median `18.2 ms`)
+    to **`58.4 / 58.4 / 58.5 FPS`** (`4.6% / 5.4% / 5.2%` late, median `16.7-16.9 ms`).
+- **Coverage-table cull default on (`src/gt5p_native_cull.c`, `GT5P_NATIVE_CULL_TABLE=0` rollback):**
+  - After the SPU runtime fast paths cut Workload 4 runtime overhead from ~50% to `21.4%`,
+    fresh `GT5P_SAMPLE_WID=4` profiling on Car list showed `b0196FF40` `0xB240` was `20.5%`
+    of the entire workload.
+  - Same-exe A/B on Car list (`culltbl-car-A1` vs `B1`): `55.5 FPS` (`10.0%` late, median `17.9 ms`)
+    -> **`59.0 FPS`** (`2.9%` late, median `16.8 ms`, p99 `21.5 ms`).
+  - `scripts/test/native_cull.py --table-only --expand`: 854 expanded states, 1,750 native
+    table-cull calls, bit-identical in both double (`1.13x`) and FMA (`1.18x`) modes.
+- **Selective ThinLTO tested & not kept:** `-flto=thin` across `ps3recomp_runtime` and lifted
+  SPU images showed no speedup on the deterministic Car list (`55.1` vs `55.4 FPS`).
+- **Refreshed 4-route PGO (`49bfcd9afda5`, 0 stale hashes on native files, `build/gt5.exe`):**
+  - **HSR (`final-hsr-2`):** `59.1 FPS`, median `16.7 ms`, p99 `22.4 ms`, late `2.2%`.
+  - **Car list (`final-carlist-2`):** `58.5 FPS`, median `16.9 ms`, p99 `21.4 ms`, late `3.2%`.
+  - **Eiger (`final-eiger`):** `58.5 FPS`, median `16.7 ms`, p99 `25.9 ms`, late `5.2%`.
+  - **Rome (`culltbl-rome-B1` / `final-rome`):** `58.4 / 57.7 FPS`, median `16.8 ms`,
+    p99 `23.8 / 26.0 ms`, late `6.0% / 8.1%` (`0.0%` late after opening pack spreads).
+
 ## SSE4.1 SPU estimate/convert/mask helpers + refreshed PGO (2026-11-23)
 
 - **Branchless SSE4.1 SPU helpers** (`../ps3recomp-tourline5/runtime/spu/spu_helpers.h`,

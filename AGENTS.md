@@ -267,6 +267,18 @@ checks): with refreshed PGO, HSR `59.5 FPS` (`1.3%` late, p99 `20.6 ms`), Rome `
 p99 `24.1 ms`), Eiger heavy rain `54.3 FPS` (`17.7%` late, p99 `23.8 ms`, `4.89 cores`), Car list
 `55.4 FPS` (`10.4%` late, p99 `24.0 ms`). See progress-gt5.md.
 
+**Eiger native grid pass & default-on coverage-table cull (2026-11-23).** `src/gt5p_native_eiger.c`
+hooks `b01697100` `0x8298 -> 0x8934` (`GT5P_NATIVE_EIGER=0` off; `scripts/test/native_eiger.py`,
+200 randomized states bit-exact for both double and FMA; `scripts/spu_region.py` updated to
+preserve `/* spu_native_patch */` lines): 2.55M live hits, 0 bails, Eiger `54.3 -> 58.5 FPS`
+(`17.7% -> 5.2%` late, median `16.7 ms`). With SPU runtime overhead down to `21.4%` of Workload 4,
+`0xB240` became `20.5%` of Car list; `GT5P_NATIVE_CULL_TABLE` is now default on (`=0` off;
+`native_cull.py --table-only --expand` 854 states / 1,750 calls bit-identical): Car list
+`55.5 -> 59.0 FPS` (`10.0% -> 2.9%` late). Selective ThinLTO (`-flto=thin` on SPU+runtime) was
+tested and not kept (no Car list gain). Refreshed 4-route PGO `build/gt5.exe`: HSR `59.1 FPS`
+(`2.2%` late), Car list `58.5 FPS` (`3.2%` late), Eiger `58.5 FPS` (`5.2%` late), Rome `57.7-58.4 FPS`
+(`6.0-8.1%` late). Re-run `spu_native_patch.py` after lifting. See progress-gt5.md.
+
 **Game sound fixed (2026-11-14).** Menus and races were silent: the DSP
 image `j9804ABA8` produced NaN PCM from two SPU arithmetic differences (0 x
 extended-range is 0; single precision truncates). Audio images force-include
