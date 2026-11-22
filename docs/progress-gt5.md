@@ -4,6 +4,45 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## SPU runtime fast paths, PPU `func_00C350C0` spin-yield, and SPU kick wake (2026-11-23)
+
+- **SPU runtime fast paths** (`../ps3recomp-tourline5/runtime/spu/spu_channels.c`, folded into
+  `patches/ps3recomp-5244db9-local.patch`, verified clean single-shot apply on fresh `5244db9`
+  export):
+  - `SPU_OVL_FAST` (default on, `=0` linear scan): O(1) EA range+hash table and 64-bit
+    signature bloom+hash in `spu_overlay_note_get` plus cached `SPU_DUMP_OVL` gate (replaces
+    ~13B loop iterations scanning `s_ovl_src[]` on data DMA GETs).
+  - `SPU_FLAT_DISPATCH` (default on, `=0` TLS hash memo): lazy per-image flat 64K-entry
+    `spu_fn*` table indexed by `(pc >> 2)` in `spu_lookup_fast`.
+  - `SPU_IRQ_FAST` (default on, `=0` old): keeps `spu_indirect_branch` on `SPU_FAST` while
+    inside an IRQ handler (`ctx->irq_saved && !ctx->int_enable`).
+  - `SPU_TSC_CLOCK` (default on, `=0` QPC): invariant `__rdtsc()` calibrated once against QPC
+    in `spu_host_ns()` (avoids ~26.7M `QueryPerformanceCounter` calls during SPU decrementer
+    polls).
+  - **Same-exe A/B** (switches off vs on, before PGO refresh):
+    - **Car list (2 pairs, A/B/B/A):** `49.1 / 51.5 FPS` off -> **`52.8 / 53.8 FPS`** on
+      (**+6.0% mean FPS**), late frames `48.8% / 21.7%` -> **`20.0% / 15.9%`**, median
+      `19.9 / 18.8 ms` -> **`18.4 / 18.4 ms`**, p99 `27.8 / 60.8 ms` -> **`26.6 / 22.8 ms`**.
+    - **Rome (1 pair):** `57.4 FPS` off -> **`58.1 FPS`** on, late `9.9%` -> **`6.8%`**,
+      p99 `25.8 ms` -> **`23.2 ms`**, max `38.5 ms` -> **`27.7 ms`**.
+- **PPU completion-poll spin yield** (`config/targets.json` `BCUS98114-v104` `spin_waits`):
+  added `["0x00C350C0", "0x00C350C0"]` (`scripts/spin_patch.py`; rollback `GT5P_SPIN_YIELD=0`).
+  On Eiger rain, top PPU thread (`gFKsE`) fell **`70.1% -> 43.1%`** of a core and total
+  process CPU fell **`5.75 -> 5.41 cores`** (-5.9%) at identical 17.9 ms median.
+- **SPU kick wake** (`src/main.cpp`): enabled `SPURS_SPU_KICK_WAKE=1` by default for GT5
+  (rollback `SPURS_SPU_KICK_WAKE=0`). On Eiger rain (on top of spin-yield): `53.6 -> 55.6 FPS`,
+  median `17.9 -> 17.0 ms` (-0.9 ms), late frames `30.0% -> 20.0%`.
+- **RSX `present`/`present-replay` sampling** (`s4-hsr-prof`, `RSX_DRAWPROF=1 GT5P_SAMPLE=4`):
+  `present-replay` is ~83.7% inside D3D12 driver/wait DLL calls (`DrawIndexedInstanced` /
+  `ExecuteCommandLists` / `Present`), ~9.8 ms/frame in pack, `walker waited 0.00-1.51 ms` for GPU.
+- **Refreshed 4-route PGO** (`hsr,rome,eiger,carlist` merged into `scratch/pgo/gt5.profdata`,
+  rebuilt `build/gt5.exe` with **0 stale hash mismatches**):
+  - HSR: `58.9 FPS`, median `16.7 ms`, p99 `22.9 ms`, late `3.5%`, `5.55 cores`.
+  - Rome: `57.8 FPS`, median `16.8 ms`, p99 `25.3 ms`, max `31.3 ms`, late `8.6%`, `4.98 cores`.
+  - Eiger rain: `51.7 FPS` (bimodal weather, top SPU lane 89.3% on wid0 `region_00008298`),
+    median `19.2 ms`, p99 `25.0 ms`, **`4.84 cores`** (top PPU thread `38.1%`).
+  - Car list: `52.9 FPS`, median `18.5 ms`, p99 `24.5 ms`, late `21.7%`, `5.51 cores`.
+
 ## Mixed-route PGO selected as the default (2026-11-22)
 
 The user accepted the measured Eiger pacing tradeoff below and selected the refreshed

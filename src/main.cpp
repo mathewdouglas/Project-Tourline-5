@@ -884,6 +884,7 @@ static void apply_env_defaults()
         {"SPURS_LANE_STAGGER_MS", "0",               stagger},
         {"SPURS_LANE_PIN_SCOPE", "1",                gt5 && race_scope},
         {"SPURS_LANE_RETRY",     "0",                gt5},
+        {"SPURS_SPU_KICK_WAKE",  "1",                gt5},
         {"SPURS_KEVLOG",         "4",                gt5},
         {"RSX_SHADER_ASYNC",     "1",                true},
         {"RSX_SHADER_INTERP",    "1",                gt5},

@@ -250,6 +250,18 @@ falls back to unprofiled. Explicit compiler launchers and 2.11 are unchanged.
 the private checkout profile by default; `--no-profile` opts out. Profiles still
 need refreshing for changed compiled sources; release source-fit checks remain.
 
+**SPU runtime fast paths & Eiger PPU/wake fixes (2026-11-23).** `runtime/spu/spu_channels.c`
+adds `SPU_OVL_FAST` (O(1) EA hash + 64-bit sig bloom in `spu_overlay_note_get`),
+`SPU_FLAT_DISPATCH` (lazy per-image 64K flat `spu_fn` table in `spu_lookup_fast`),
+`SPU_IRQ_FAST` (stay on `SPU_FAST` during IRQ handlers when `int_enable == 0`), and
+`SPU_TSC_CLOCK` (calibrated invariant `__rdtsc()` in `spu_host_ns()`), each `=0` off.
+Same-exe A/B: Car list `50.3 -> 53.3 FPS` (+6.0%, late `48.8/21.7% -> 20.0/15.9%`), Rome
+`57.4 -> 58.1 FPS` (p99 `25.8 -> 23.2 ms`, late `9.9% -> 6.8%`). `config/targets.json`
+(01.04 `spin_waits`) adds `0x00C350C0` (`GT5P_SPIN_YIELD=0` off; Eiger top PPU thread
+`70.1% -> 43.1%`, process CPU `5.75 -> 5.41 cores`), and `src/main.cpp` defaults
+`SPURS_SPU_KICK_WAKE=1` for GT5 (`=0` off; Eiger `53.6 -> 55.6 FPS`, median `17.9 -> 17.0 ms`).
+Refreshed 4-route PGO rebuilt `build/gt5.exe` with 0 stale hash mismatches. See progress-gt5.md.
+
 **Game sound fixed (2026-11-14).** Menus and races were silent: the DSP
 image `j9804ABA8` produced NaN PCM from two SPU arithmetic differences (0 x
 extended-range is 0; single precision truncates). Audio images force-include
