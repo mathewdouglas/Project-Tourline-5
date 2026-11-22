@@ -4,6 +4,36 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Rome, and where Eiger and the car render pass spend their time (2026-11-22)
+
+Players report Rome as heavy. `gt5boot.ps1 -Route race -Tab 2` now drives there (track
+list: Up to the tabs, Right x2 = City, Cross; Rome is City's first track; `-Tab` combines with
+`-Track`). All runs on `perf/gt5recomp-natives` (PPU shuffles, native mixer/EQ), 1080p, the
+scripted car stuck against the first wall, so the field drives away from the camera.
+
+- **Rome**: 56-57 FPS mean, 11-14% of frames late, but 48-53 FPS for the ~25 s the field is
+  bunched in view after the start (60 again once it has gone). `SPURS_LANE_CYC=1` against the
+  frame log: in those windows workload 4's lane runs grow from 0.66 ms to 3.3-4.8 ms (about 400
+  a second) and workload 6's to 2-6 ms. Workload 4 is the car render pass, body `b0196FF40`
+  (gt5-recomp's `w018CAD00`, byte-identical); the car list's 39 FPS is the same workload at
+  ~23 ms a run. So Rome's cost is many cars in view, not the city scenery.
+- **Workload 4 profile at Rome** (`GT5P_SAMPLE_WID=4`, `scripts/diag/widprof.py`): job code
+  48%, runtime 50%. Top job functions 0xB240 (9.8%), 0xAD30 (6.5%), 0xAFC0 (4.4%) are the
+  triangle cull (0xAB00-0xB4E0); runtime: `mfc_do_transfer` 8.3%, `spu_indirect_branch` 7.0%,
+  `spu_drain_call_impl` 6.1%, `spu_lookup_fast` 5.0%, `spu_irq_regs_maybe_restore` 4.0%.
+- **Interpreter**: `SPU_INTERP_STATS=1` (new, runtime: interpreter handoffs per image every
+  5 s) printed nothing in a Rome race: the eight `[spu-smc] ... handing to the interpreter`
+  lines are a one-off at boot (image 15). gt5-recomp's interpreted copy at 0x8F40 does not
+  happen here.
+- **Eiger** (`-Track 6`, 53.2 FPS, 27.8% late): in workload 0, `region_00008298` is 42.8% and
+  `region_00007E58` 9.0% of samples (widprof lists the static region functions under
+  "runtime/other"), the fill loop 0x5BA4 1.9%. That is the grid-pass loop gt5-recomp replaced
+  natively (0x8038-0x8948): about half of the workload that gates Eiger's frame (Phase 45).
+- **Busy waits**: at High Speed Ring (`GT5P_SAMPLE=6`) the present, present-replay, lane, job
+  chain and PPU threads spend 50-68% of their samples blocked in OS waits
+  (`present_thread`, `rt_main`, `spurs_pool_lane`, `sys_lwcond_wait`, `jc_thread`); none
+  spins. gt5-recomp's spin-to-sleep change has nothing to remove here.
+
 ## Ideas from gt5-recomp: PPU shuffles, native sound mixer and EQ (2026-11-22)
 
 Branch `perf/gt5recomp-natives`. [gt5-recomp](https://github.com/MormonFTP-hub/gt5-recomp)

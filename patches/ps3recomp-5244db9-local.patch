@@ -72591,3 +72591,30 @@ index 00000000..ae450be7
 +#endif
 +
 +#endif /* PPU_VSHUF_H */
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -2285,6 +2285,23 @@
+          * III`s job kernel dies here on an `ilh` at LS 0x6638 -- a perfectly
+          * ordinary instruction the interpreter handles -- and with it the
+          * decompression job it was running never completes. */
++        /* SPU_INTERP_STATS=1: every 5 s, the handoffs to the interpreter per
++         * image (the log lines below stop after the first 8). Windows only. */
++#ifdef _WIN32
++        { static int st = -1; if (st < 0) st = getenv("SPU_INTERP_STATS") ? 1 : 0;
++          if (st) {
++              static volatile LONG s_cnt[64]; static volatile LONG64 s_t0;
++              InterlockedIncrement(&s_cnt[(unsigned)ctx->image_id & 63]);
++              const LONG64 now = (LONG64)GetTickCount64();
++              if (!s_t0) s_t0 = now;
++              if (now - s_t0 >= 5000 && InterlockedExchange64(&s_t0, now) != now) {
++                  char line[512]; int ln = snprintf(line, sizeof line, "[spu-interp] 5 s:");
++                  for (int k = 0; k < 64; k++) { const LONG c = InterlockedExchange(&s_cnt[k], 0);
++                      if (c && ln < (int)sizeof line - 32) ln += snprintf(line + ln, sizeof line - ln, " img%d=%ld", k, (long)c); }
++                  fprintf(stderr, "%s\n", line);
++              }
++          } }
++#endif
+         { static int _n = 0, _hi = 0;
+           /* Boot-time stubs use up the first 8; job-body code the job
+            * manager (image 1) runs, at LS 0x4000 up, gets 8 of its own. */
