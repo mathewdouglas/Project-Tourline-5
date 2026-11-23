@@ -62,6 +62,10 @@ struct Gt5pSettings {
     int ffb_springs = 100;      /* spring, damper and friction effects, 0..200 % (PS3_WHEEL_FFB_SPRING) */
     int ffb_min_force = 0;      /* minimum steering force, 0..50 % (PS3_WHEEL_FFB_MIN) */
     bool ffb_pause = true;      /* no forces while F1 is open or the game is in the background (PS3_WHEEL_FFB_MUTE) */
+    std::string wheel_preset = "auto"; /* auto, g29, g920, g27, thrustmaster, custom */
+    std::string wheel_steer;           /* "" (auto=X) or axis name X..S1 (PS3_WHEEL_STEER) */
+    std::string wheel_pedals;          /* "" (auto) or "throttle=Y,brake=RZ,clutch=Z" (PS3_WHEEL_PEDALS) */
+    std::string wheel_buttons;         /* "" (auto) or "cross=1,circle=3,..." (PS3_WHEEL_BUTTONS) */
 
     /* [game] */
     bool skip_movie = false;    /* press through the opening movie (PAD_SKIP_MOVIE) */

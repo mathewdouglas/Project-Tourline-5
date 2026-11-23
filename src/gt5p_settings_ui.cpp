@@ -58,7 +58,18 @@ extern volatile int g_pad_input_blocked;        /* cellPad.c */
 extern volatile uint32_t g_pad_menu_buttons;    /* cellPad.c: bit 16 = PS button */
 extern volatile uint32_t g_pad_inject_buttons;  /* cellPad.c: pressed for the title on port 0 */
 void pad_set_keyboard_enabled(int on);          /* cellPad.c */
+struct WheelRawUi {
+    int connected;
+    char name[128];
+    uint16_t vid, pid;
+    int ffb;
+    float axis[8];
+    uint32_t buttons;
+    int pov;
+};
+int  wheel_host_raw(WheelRawUi* out);           /* wheel_host_win.c */
 void wheel_host_set_ffb(int gain, int invert, int spring, int min_force);   /* wheel_host_win.c */
+void wheel_host_set_map(const char* steer, const char* pedals, const char* buttons); /* wheel_host_win.c */
 void rsx_d3d12_set_present_sync(int interval);  /* rsx_d3d12_backend.c */
 void gt5p_shader_indicator_enable(int on);      /* gt5p_shaderbusy.cpp */
 void gt5p_preload_indicator_enable(int on);
@@ -96,6 +107,7 @@ struct Item {
     void (*set)(UiSettings&, int);
     void (*apply)(int);                      /* live; nullptr: after a restart */
     int key = -1;                            /* a keyboard binding: its button (gt5p_keymap.h) */
+    int wmap = -1;                           /* a wheel mapping slot (0..3 axes, 4..15 buttons) */
 };
 
 /* Whether an item is overridden by variable `name`. Some items have no
@@ -160,6 +172,130 @@ void wheel_ffb_apply(int which, int v)
     cur[which] = v;
     wheel_host_set_ffb(cur[kFfbGain], cur[kFfbInvert], cur[kFfbSpring], cur[kFfbMin]);
 }
+
+/* Wheel presets and interactive axis/button mapping (F1 > WHEEL & WHEEL MAP). */
+enum { kPresetAuto = 0, kPresetG29, kPresetG920, kPresetG27, kPresetThrustmaster, kPresetCustom };
+static const char* const kWheelAxisNames[8] = { "X", "Y", "Z", "RX", "RY", "RZ", "S0", "S1" };
+static const char* const kWheelPedalKeys[3] = { "throttle", "brake", "clutch" };
+/* 12 primary G27 buttons exposed on the 2-column WHEEL MAP page (slots 4..15). */
+struct WheelBtnSlot { const char* key; const wchar_t* label; };
+static const WheelBtnSlot kWheelBtnSlots[12] = {
+    { "r1",       L"Shift Up (R1)" },
+    { "l1",       L"Shift Down (L1)" },
+    { "cross",    L"Cross" },
+    { "circle",   L"Circle" },
+    { "square",   L"Square" },
+    { "triangle", L"Triangle" },
+    { "l2",       L"L2" },
+    { "r2",       L"R2" },
+    { "l3",       L"L3" },
+    { "r3",       L"R3" },
+    { "start",    L"Start" },
+    { "select",   L"Select" },
+};
+
+int wheel_preset_id(const std::string& p)
+{
+    if (p == "g29") return kPresetG29;
+    if (p == "g920") return kPresetG920;
+    if (p == "g27") return kPresetG27;
+    if (p == "thrustmaster") return kPresetThrustmaster;
+    if (p == "custom") return kPresetCustom;
+    return kPresetAuto;
+}
+
+void wheel_apply_preset_values(UiSettings& s, int p)
+{
+    switch (p) {
+    case kPresetG29:
+        s.wheel_preset = "g29";
+        s.wheel_steer = "X";
+        s.wheel_pedals = "throttle=Y,brake=RZ,clutch=Z";
+        s.wheel_buttons = "cross=1,square=2,circle=3,triangle=4,r1=5,l1=6,r2=7,l2=8,select=9,start=10,r3=11,l3=12";
+        break;
+    case kPresetG920:
+        s.wheel_preset = "g920";
+        s.wheel_steer = "X";
+        s.wheel_pedals = "throttle=Y,brake=Z,clutch=RZ";
+        s.wheel_buttons = "cross=1,circle=2,square=3,triangle=4,r1=5,l1=6,start=7,select=8,r3=9,l3=10,r2=0,l2=0";
+        break;
+    case kPresetG27:
+        s.wheel_preset = "g27";
+        s.wheel_steer = "X";
+        s.wheel_pedals = "throttle=Y,brake=Z,clutch=RZ";
+        s.wheel_buttons = "cross=1,square=2,circle=3,triangle=4,r1=5,l1=6,r2=7,l2=8,select=9,start=10,r3=11,l3=12";
+        break;
+    case kPresetThrustmaster:
+        s.wheel_preset = "thrustmaster";
+        s.wheel_steer = "X";
+        s.wheel_pedals = "throttle=RZ,brake=Y,clutch=S0";
+        s.wheel_buttons = "";
+        break;
+    case kPresetCustom:
+        s.wheel_preset = "custom";
+        break;
+    default:
+        s.wheel_preset = "auto";
+        s.wheel_steer = "";
+        s.wheel_pedals = "";
+        s.wheel_buttons = "";
+        break;
+    }
+}
+
+/* Parse/format key=val pairs in a comma-separated string (case-insensitive key). */
+std::string wheel_kv_get(const std::string& csv, const char* key)
+{
+    const size_t klen = strlen(key);
+    for (size_t i = 0; i < csv.size();) {
+        size_t j = csv.find(',', i);
+        if (j == std::string::npos) j = csv.size();
+        const std::string tok = csv.substr(i, j - i);
+        const size_t eq = tok.find('=');
+        if (eq == klen && _strnicmp(tok.c_str(), key, klen) == 0)
+            return tok.substr(eq + 1);
+        i = j + 1;
+    }
+    return "";
+}
+
+std::string wheel_kv_set(const std::string& csv, const char* key, const std::string& val)
+{
+    const size_t klen = strlen(key);
+    std::string out;
+    bool replaced = false;
+    for (size_t i = 0; i < csv.size();) {
+        size_t j = csv.find(',', i);
+        if (j == std::string::npos) j = csv.size();
+        const std::string tok = csv.substr(i, j - i);
+        const size_t eq = tok.find('=');
+        if (eq == klen && _strnicmp(tok.c_str(), key, klen) == 0) {
+            if (!val.empty()) {
+                if (!out.empty()) out += ',';
+                out += std::string(key) + "=" + val;
+            }
+            replaced = true;
+        } else if (!tok.empty()) {
+            if (!out.empty()) out += ',';
+            out += tok;
+        }
+        i = j + 1;
+    }
+    if (!replaced && !val.empty()) {
+        if (!out.empty()) out += ',';
+        out += std::string(key) + "=" + val;
+    }
+    return out;
+}
+
+const wchar_t* const kWheelAxisHelp =
+    L"Enter / Click: turn wheel or press pedal to bind.  I: invert pedal axis.  Delete: clear / auto.";
+const wchar_t* const kWheelBtnHelp =
+    L"Enter / Click: press a button on your wheel to bind it (applies live).  Delete: clear.";
+#define WMAP_AXIS(slot, label) { L"WHEEL MAP", label, kWheelAxisHelp, (slot) == 0 ? "PS3_WHEEL_STEER" : "PS3_WHEEL_PEDALS", {}, \
+    [](const UiSettings&) { return 0; }, [](UiSettings&, int) {}, [](int) {}, -1, slot }
+#define WMAP_BTN(slot, label) { L"WHEEL MAP", label, kWheelBtnHelp, "PS3_WHEEL_BUTTONS", {}, \
+    [](const UiSettings&) { return 0; }, [](UiSettings&, int) {}, [](int) {}, -1, slot }
 
 const std::vector<Item>& items()
 {
@@ -306,6 +442,15 @@ const std::vector<Item>& items()
           "PS3_WHEEL", kOnOff,
           [](const UiSettings& s) { return s.wheel ? 1 : 0; },
           [](UiSettings& s, int v) { s.wheel = v != 0; }, nullptr },
+        { L"WHEEL", L"Wheel preset",
+          L"Quick axis and button layout for common wheels. Auto detects Logitech G29/G920/G27 and "
+          L"Thrustmaster by USB ID; fine-tune individual axes and buttons on the Wheel map tab. Applies live.",
+          nullptr, { {kPresetAuto, L"Auto (by model)"}, {kPresetG29, L"Logitech G29 / G923 PS"},
+                     {kPresetG920, L"Logitech G920 / G923 Xbox"}, {kPresetG27, L"Logitech G25 / G27 / DFGT"},
+                     {kPresetThrustmaster, L"Thrustmaster (separate)"}, {kPresetCustom, L"Custom"} },
+          [](const UiSettings& s) { return wheel_preset_id(s.wheel_preset); },
+          [](UiSettings& s, int v) { wheel_apply_preset_values(s, v); },
+          [](int) { /* pushed in set_value via wheel_host_set_map */ } },
         { L"WHEEL", L"Wheel rotation",
           L"Degrees your wheel turns lock to lock, as set in its own software (Logitech G HUB: 900). "
           L"The game sets each car's own rotation from this. Restart to apply.",
@@ -347,6 +492,10 @@ const std::vector<Item>& items()
           "PS3_WHEEL_FFB_MUTE", kOnOff,
           [](const UiSettings& s) { return s.ffb_pause ? 1 : 0; },
           [](UiSettings& s, int v) { s.ffb_pause = v != 0; }, nullptr },
+        WMAP_AXIS(0, L"Steer axis"), WMAP_AXIS(1, L"Throttle"), WMAP_AXIS(2, L"Brake"), WMAP_AXIS(3, L"Clutch"),
+        WMAP_BTN(4, L"Shift Up (R1)"), WMAP_BTN(5, L"Shift Down (L1)"), WMAP_BTN(6, L"Cross"), WMAP_BTN(7, L"Circle"),
+        WMAP_BTN(8, L"Square"), WMAP_BTN(9, L"Triangle"), WMAP_BTN(10, L"L2"), WMAP_BTN(11, L"R2"),
+        WMAP_BTN(12, L"L3"), WMAP_BTN(13, L"R3"), WMAP_BTN(14, L"Start"), WMAP_BTN(15, L"Select"),
         { L"GAME", L"Game version",
           L"Restart into an installed version. Each keeps separate game data, saves and shaders. 2.11 is experimental. Set it up through the launcher before switching.",
           "GT5P_GAME_VERSION", {{104,L"GT5 01.04"},{211,L"GT5 2.11 (experimental)"}},
@@ -470,13 +619,17 @@ int s_quit_sel;                 /* 0 Cancel, 1 OK */
 volatile LONG s_quit_req;       /* Escape pressed in the game window */
 int s_capture = -1;             /* a key item waiting for its new key */
 uint8_t s_cap_was[256];         /* keys held when the wait began */
+int s_wcap = -1;                /* a wheel-map item waiting for an axis or button */
+WheelRawUi s_wcap_base = {};    /* wheel axes/buttons when wheel capture began */
 
 enum { kRowRestart = -1, kRowClose = -2, kRowHead = -3, kRowDefaults = -4, kRowSetup211 = -5, kRowMods = -6 };
 bool is_button(int id) { return id == kRowRestart || id == kRowClose || id == kRowDefaults || id == kRowSetup211 || id == kRowMods; }
 
-/* The Keyboard page: sixteen bindings in two columns of eight. */
+/* The Keyboard & Wheel Map pages: sixteen bindings in two columns of eight. */
 const int kKeyY = 180, kKeyH = 34, kKeyFieldW = 130;
 bool keyboard_page();
+bool wheel_page();
+bool wheel_map_page();
 
 bool legacy_ui_flag()
 {
@@ -519,12 +672,14 @@ std::vector<int> rows()
     if (pt5_restart::managed() && !wcscmp(sec,L"GAME") && supported211 && !strcmp(supported211,"1") && (!ready211 || strcmp(ready211,"1"))) r.push_back(kRowSetup211);
     if (!wcscmp(sec, L"GAME") && mods_available()) r.push_back(kRowMods);
     if (restart_pending()) r.push_back(kRowRestart);
-    if (keyboard_page()) r.push_back(kRowDefaults);
+    if (keyboard_page() || wheel_map_page()) r.push_back(kRowDefaults);
     r.push_back(kRowClose);
     return r;
 }
 
 bool keyboard_page() { return !wcscmp(sections()[s_section], L"KEYBOARD"); }
+bool wheel_page() { return !wcscmp(sections()[s_section], L"WHEEL"); }
+bool wheel_map_page() { return !wcscmp(sections()[s_section], L"WHEEL MAP"); }
 
 /* Where each row sits: items down the panel, buttons side by side, centred. */
 struct Slot { int x0, x1, y; };
@@ -534,17 +689,17 @@ std::vector<Slot> layout(const std::vector<int>& r)
     int nbtn = 0, nitems = 0, y = kRowY;
     for (int id : r) {
         nbtn += is_button(id);
-        nitems += id >= 0 && items()[id].key < 0;
+        nitems += id >= 0 && items()[id].key < 0 && items()[id].wmap < 0;
     }
     /* Six shader rows must leave space for the selected row's help. Keyboard
-     * bindings retain their separate two-column layout. */
+     * and wheel bindings retain their separate two-column layout. */
     const int available_pitch = nitems > 1 ? (kHelpY - 12 - kFieldH - kRowY) / (nitems - 1) : kRowH;
     const int pitch = available_pitch < kRowH ? available_pitch : kRowH;
     int bx = kW / 2 - (nbtn * kBtnW + (nbtn - 1) * kBtnGap) / 2;
     for (int id : r) {
         if (id == kRowHead) out.push_back({ kPx0 + 40, kPx1 - 40, kBarY });
-        else if (id >= 0 && items()[id].key >= 0) {
-            const int k = items()[id].key, col = k / 8;
+        else if (id >= 0 && (items()[id].key >= 0 || items()[id].wmap >= 0)) {
+            const int k = items()[id].key >= 0 ? items()[id].key : items()[id].wmap, col = k / 8;
             const int x0 = col ? kW / 2 + 10 : kPx0 + 30;
             out.push_back({ x0, x0 + (kPx1 - kPx0) / 2 - 40, kKeyY + (k % 8) * kKeyH });
         }
@@ -600,6 +755,8 @@ void set_open(bool open);
 void set_value(int id, int v);
 
 void reset_keys();
+void reset_wheel_map();
+void wheel_map_push();
 
 void change(int id, int dir)
 {
@@ -613,9 +770,9 @@ void change(int id, int dir)
         if (MessageBoxW(nullptr,L"Close the game and open the mod manager? It installs a mod from a ZIP file or removes one, then starts the game again. Finish or save your current session before continuing.",L"Game mods",MB_OKCANCEL|MB_ICONQUESTION)==IDOK) { fflush(stdout); fflush(stderr); ExitProcess(pt5_restart::mods_manage); }
         return;
     }
-    if (id == kRowDefaults) { reset_keys(); return; }
+    if (id == kRowDefaults) { if (wheel_map_page()) reset_wheel_map(); else reset_keys(); return; }
     const Item& it = items()[id];
-    if (it.key >= 0) return;
+    if (it.key >= 0 || it.wmap >= 0) return;
     const int n = (int)it.choices.size();
     set_value(id, it.choices[(choice_index(it) + dir + n) % n].value);
 }
@@ -647,7 +804,8 @@ void set_value(int id, int v)
     else s_status = L"Saved.";
     if (over) s_status += L"  " + widen(it.env) + L" is set in the environment and wins over this.";
     else if (it.apply) {
-        it.apply(v);
+        if (!wcscmp(it.label, L"Wheel preset")) wheel_map_push();
+        else it.apply(v);
         s_status += it.env && !strcmp(it.env,"PAD_MODERN_CONTROLS") ?
             L"  Mapping requested. Use the game's normal Save to keep it." : L"  Applied.";
     }
@@ -699,6 +857,168 @@ void begin_capture(int id)
     s_capture = id;
     for (int vk = 0; vk < 256; vk++) s_cap_was[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
     s_status = L"";
+}
+
+/* ---- interactive wheel mapping (WHEEL MAP tab) ---- */
+
+int wmap_item(int slot)
+{
+    for (int i = 0; i < (int)items().size(); i++) if (items()[i].wmap == slot) return i;
+    return -1;
+}
+
+void wheel_map_push()
+{
+    wheel_host_set_map(s_edit.wheel_steer.c_str(), s_edit.wheel_pedals.c_str(), s_edit.wheel_buttons.c_str());
+}
+
+void wheel_map_save_and_apply(const std::wstring& msg)
+{
+    if (!gt5p_settings_enabled()) s_status = msg + L"  (GT5P_NO_SETTINGS: not saved)";
+    else if (!gt5p_settings_store(s_edit)) s_status = L"Could not write " + widen(gt5p_settings_path());
+    else s_status = msg + L"  Saved and applied.";
+    wheel_map_push();
+}
+
+void reset_wheel_map()
+{
+    wheel_apply_preset_values(s_edit, kPresetAuto);
+    wheel_map_save_and_apply(L"Wheel map reset to Auto.");
+}
+
+std::wstring wheel_slot_display(const UiSettings& s, int slot)
+{
+    if (slot == 0) {
+        if (s.wheel_steer.empty()) return L"Auto (X)";
+        return widen(s.wheel_steer);
+    }
+    if (slot >= 1 && slot <= 3) {
+        std::string v = wheel_kv_get(s.wheel_pedals, kWheelPedalKeys[slot - 1]);
+        if (v.empty()) return L"Auto";
+        std::string up = v;
+        for (char& c : up) c = (char)toupper((unsigned char)c);
+        if (up == "NONE") return L"None";
+        size_t inv = up.find("INV");
+        if (inv != std::string::npos) return widen(up.substr(0, inv)) + L" (inv)";
+        return widen(up);
+    }
+    if (slot >= 4 && slot < 16) {
+        std::string v = wheel_kv_get(s.wheel_buttons, kWheelBtnSlots[slot - 4].key);
+        if (v.empty()) return L"Auto";
+        int b = atoi(v.c_str());
+        if (b <= 0) return L"None";
+        return L"Btn " + std::to_wstring(b);
+    }
+    return L"?";
+}
+
+void begin_wheel_capture(int id)
+{
+    WheelRawUi raw = {};
+    if (!wheel_host_raw(&raw) || !raw.connected) {
+        s_status = L"No wheel detected — plug in your wheel, or pick a preset on the Wheel tab.";
+        return;
+    }
+    s_wcap = id;
+    s_wcap_base = raw;
+    s_status = L"";
+}
+
+void wheel_clear_slot(int id)
+{
+    const int slot = items()[id].wmap;
+    if (slot < 0) return;
+    s_edit.wheel_preset = "custom";
+    if (slot == 0) {
+        s_edit.wheel_steer.clear();
+        wheel_map_save_and_apply(L"Steer axis set to Auto.");
+    } else if (slot >= 1 && slot <= 3) {
+        const char* pk = kWheelPedalKeys[slot - 1];
+        std::string cur = wheel_kv_get(s_edit.wheel_pedals, pk);
+        /* Toggle between None (for clutch/unused) and Auto on repeated Delete. */
+        std::string next = (_stricmp(cur.c_str(), "NONE") == 0) ? "" : "NONE";
+        s_edit.wheel_pedals = wheel_kv_set(s_edit.wheel_pedals, pk, next);
+        wheel_map_save_and_apply(std::wstring(items()[id].label) + (next.empty() ? L" set to Auto." : L" cleared."));
+    } else if (slot >= 4 && slot < 16) {
+        s_edit.wheel_buttons = wheel_kv_set(s_edit.wheel_buttons, kWheelBtnSlots[slot - 4].key, "0");
+        wheel_map_save_and_apply(std::wstring(items()[id].label) + L" cleared.");
+    }
+}
+
+void wheel_invert_pedal_slot(int id)
+{
+    const int slot = items()[id].wmap;
+    if (slot < 1 || slot > 3) return;
+    const char* pk = kWheelPedalKeys[slot - 1];
+    std::string cur = wheel_kv_get(s_edit.wheel_pedals, pk);
+    if (cur.empty() || _stricmp(cur.c_str(), "NONE") == 0) {
+        /* Start from default G29 axis if unset, then invert. */
+        static const char* const def_ax[3] = { "Y", "RZ", "Z" };
+        cur = def_ax[slot - 1];
+    }
+    std::string up = cur;
+    for (char& c : up) c = (char)toupper((unsigned char)c);
+    size_t inv = up.find("INV");
+    std::string next = (inv != std::string::npos) ? up.substr(0, inv) : (up + "inv");
+    s_edit.wheel_preset = "custom";
+    s_edit.wheel_pedals = wheel_kv_set(s_edit.wheel_pedals, pk, next);
+    wheel_map_save_and_apply(std::wstring(items()[id].label) + L" -> " + wheel_slot_display(s_edit, slot) + L".");
+}
+
+/* Called each UI tick while waiting for a wheel axis or button. Returns true when captured. */
+bool poll_wheel_capture()
+{
+    if (s_wcap < 0) return false;
+    WheelRawUi now = {};
+    if (!wheel_host_raw(&now) || !now.connected) {
+        s_wcap = -1;
+        s_status = L"Wheel disconnected.";
+        return true;
+    }
+    const int slot = items()[s_wcap].wmap;
+    if (slot >= 0 && slot <= 3) {
+        int best = -1;
+        float best_d = 0.22f;
+        for (int a = 0; a < 8; a++) {
+            const float d = fabsf(now.axis[a] - s_wcap_base.axis[a]);
+            if (d > best_d) { best_d = d; best = a; }
+        }
+        if (best >= 0) {
+            const int id = s_wcap;
+            s_wcap = -1;
+            s_edit.wheel_preset = "custom";
+            if (slot == 0) {
+                s_edit.wheel_steer = kWheelAxisNames[best];
+            } else {
+                s_edit.wheel_pedals = wheel_kv_set(s_edit.wheel_pedals, kWheelPedalKeys[slot - 1], kWheelAxisNames[best]);
+            }
+            wheel_map_save_and_apply(std::wstring(items()[id].label) + L" -> " + widen(kWheelAxisNames[best]) + L".");
+            return true;
+        }
+    } else if (slot >= 4 && slot < 16) {
+        const uint32_t newly = now.buttons & ~s_wcap_base.buttons;
+        if (newly) {
+            int btn1 = 0;
+            for (int b = 0; b < 32; b++) if (newly & (1u << b)) { btn1 = b + 1; break; }
+            if (btn1 > 0) {
+                const int id = s_wcap;
+                s_wcap = -1;
+                s_edit.wheel_preset = "custom";
+                const std::string num = std::to_string(btn1);
+                /* Clear any other slot in WHEEL MAP that already used this button. */
+                for (int j = 0; j < 12; j++) {
+                    if (j + 4 == slot) continue;
+                    std::string ex = wheel_kv_get(s_edit.wheel_buttons, kWheelBtnSlots[j].key);
+                    if (!ex.empty() && atoi(ex.c_str()) == btn1)
+                        s_edit.wheel_buttons = wheel_kv_set(s_edit.wheel_buttons, kWheelBtnSlots[j].key, "0");
+                }
+                s_edit.wheel_buttons = wheel_kv_set(s_edit.wheel_buttons, kWheelBtnSlots[slot - 4].key, num);
+                wheel_map_save_and_apply(std::wstring(items()[id].label) + L" -> Btn " + std::to_wstring(btn1) + L".");
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 /* ---- drawing ---- */
@@ -1030,17 +1350,24 @@ void paint(HDC dc)
         }
         const Item& it = items()[id];
         const bool over = !launcher_item(it) && gt5p_settings_overridden(it.env);
-        if (it.key >= 0) {
-            /* A binding: the button's name, then its key in a box. */
+        if (it.key >= 0 || it.wmap >= 0) {
+            /* A binding: the button's name, then its key or wheel axis/button in a box. */
             const int x0 = sl[i].x0, fx = x0 + 160;
+            const bool cap = (it.key >= 0 && s_capture == id) || (it.wmap >= 0 && s_wcap == id);
             text_in(dc, fRow, x0, y, fx - 16, y + kKeyH - 6, over ? grey(100) : grey(190), it.label, DT_RIGHT);
             fill(dc, fx - 1, y - 1, fx + kKeyFieldW + 1, y + kKeyH - 5, sel ? RGB(168, 0, 0) : grey(5));
             fill(dc, fx, y, fx + kKeyFieldW, y + kKeyH - 6, RGB(0, 4, 0));
-            const char* kn = gt5p_key_name(it.get(s_edit));
-            const std::wstring v = s_capture == id ? L"Press a key" : kn ? widen(kn) : L"?";
+            std::wstring v;
+            if (it.key >= 0) {
+                const char* kn = gt5p_key_name(it.get(s_edit));
+                v = cap ? L"Press a key" : kn ? widen(kn) : L"?";
+            } else {
+                v = cap ? (it.wmap == 0 ? L"Turn wheel" : it.wmap <= 3 ? L"Press pedal" : L"Press button")
+                        : wheel_slot_display(s_edit, it.wmap);
+            }
             text_in(dc, fRow, fx + 12, y, fx + kKeyFieldW - 6, y + kKeyH - 7,
-                    s_capture == id ? RGB(237, 60, 60) : over ? grey(100) : grey(204), v.c_str(), DT_LEFT);
-            if (sel && s_capture != id) cursor(dc, fx + kKeyFieldW - 18, y + 8);
+                    cap ? RGB(237, 60, 60) : over ? grey(100) : grey(204), v.c_str(), DT_LEFT | DT_END_ELLIPSIS);
+            if (sel && !cap) cursor(dc, fx + kKeyFieldW - 18, y + 8);
             continue;
         }
         const bool later = !it.apply && !over && it.get(s_edit) != it.get(s_boot);
@@ -1065,7 +1392,27 @@ void paint(HDC dc)
         if (sel && s_drop) drop_row = (int)i;
     }
 
-    /* The selected item's help. */
+    /* The selected item's help, plus live wheel telemetry on WHEEL / WHEEL MAP. */
+    std::wstring wheel_line;
+    if (wheel_page() || wheel_map_page()) {
+        WheelRawUi raw = {};
+        if (wheel_host_raw(&raw) && raw.connected) {
+            char buf[256];
+            int held_btn = 0;
+            for (int b = 0; b < 32; b++) if (raw.buttons & (1u << b)) { held_btn = b + 1; break; }
+            if (held_btn)
+                snprintf(buf, sizeof buf, "Wheel: %s (%04X:%04X%s)  X:%.2f Y:%.2f Z:%.2f RZ:%.2f  Btn %d",
+                         raw.name, raw.vid, raw.pid, raw.ffb ? " FFB" : "",
+                         raw.axis[0], raw.axis[1], raw.axis[2], raw.axis[5], held_btn);
+            else
+                snprintf(buf, sizeof buf, "Wheel: %s (%04X:%04X%s)  X:%.2f Y:%.2f Z:%.2f RZ:%.2f",
+                         raw.name, raw.vid, raw.pid, raw.ffb ? " FFB" : "",
+                         raw.axis[0], raw.axis[1], raw.axis[2], raw.axis[5]);
+            wheel_line = widen(buf);
+        } else {
+            wheel_line = L"Wheel: none detected (plug in before starting, or pick a preset)";
+        }
+    }
     if (s_sel >= 0 && s_sel < (int)r.size() && r[s_sel] >= 0) {
         RECT rc = { kPx0 + 40, kHelpY, kPx1 - 40, kRule2 - 6 };
         HGDIOBJ o = SelectObject(dc, fHelp);
@@ -1074,10 +1421,19 @@ void paint(HDC dc)
         if (s_capture >= 0)
             help = std::wstring(L"Press the key for ") + items()[s_capture].label +
                    L". Escape (or Circle) cancels.";
+        else if (s_wcap >= 0) {
+            const int ws = items()[s_wcap].wmap;
+            help = (ws == 0 ? L"Turn your steering wheel to bind " : ws <= 3 ? L"Press the pedal to bind " : L"Press a wheel button to bind ")
+                 + std::wstring(items()[s_wcap].label) + L". Escape (or Circle) cancels.";
+        }
+        if (!wheel_line.empty() && s_capture < 0)
+            help = wheel_line + L"\n" + help;
         DrawTextW(dc, help.c_str(), -1, &rc, DT_WORDBREAK | DT_NOPREFIX | DT_CENTER);
         SelectObject(dc, o);
     } else if (s_sel == 0) {
         text_in(dc, fHelp, kPx0, kHelpY, kPx1, kHelpY + 24, grey(150), L"L1 / R1, or Left / Right here: the other settings pages");
+    } else if (!wheel_line.empty()) {
+        text_in(dc, fHelp, kPx0 + 40, kHelpY, kPx1 - 40, kRule2 - 6, grey(150), wheel_line.c_str());
     }
     if (!s_status.empty()) text_in(dc, fStatus, kPx0, kBtnY + kBtnH + 4, kPx1, kPy1 - 2, grey(130), s_status.c_str());
     if (drop_row >= 0) {
@@ -1145,7 +1501,7 @@ void click(int mx, int my)
             }
         } else if (id < 0) {
             if (my >= y && my < y + kBtnH && mx >= sl[i].x0 && mx < sl[i].x1) { s_sel = (int)i; press(); return; }
-        } else if (items()[id].key >= 0) {
+        } else if (items()[id].key >= 0 || items()[id].wmap >= 0) {
             if (my >= y && my < y + kKeyH - 4 && mx >= sl[i].x0 && mx < sl[i].x1) { s_sel = (int)i; press(); return; }
         } else if (my >= y && my < y + kFieldH && mx >= kPx0 && mx < kFieldX + kFieldW + 12 + kDropW) {
             s_sel = (int)i;
@@ -1773,6 +2129,7 @@ void switch_section(int dir)
     s_section = (s_section + dir + n) % n;
     s_drop = false;
     s_capture = -1;
+    s_wcap = -1;
     if (s_sel != 0) s_sel = 1;
 }
 
@@ -1786,6 +2143,11 @@ void activate(int dir)
     if (r[s_sel] == kRowHead) { switch_section(dir); return; }
     if (r[s_sel] >= 0 && items()[r[s_sel]].key >= 0) {   /* the other column, same line */
         const int other = key_item((items()[r[s_sel]].key + 8) % 16);
+        for (int i = 0; i < (int)r.size(); i++) if (r[i] == other) s_sel = i;
+        return;
+    }
+    if (r[s_sel] >= 0 && items()[r[s_sel]].wmap >= 0) {  /* the other column, same line */
+        const int other = wmap_item((items()[r[s_sel]].wmap + 8) % 16);
         for (int i = 0; i < (int)r.size(); i++) if (r[i] == other) s_sel = i;
         return;
     }
@@ -1814,6 +2176,7 @@ void press()
     if (s_sel < 0 || s_sel >= (int)r.size()) return;
     if (r[s_sel] == kRowHead) { switch_section(+1); return; }
     if (r[s_sel] >= 0 && items()[r[s_sel]].key >= 0) { begin_capture(r[s_sel]); return; }
+    if (r[s_sel] >= 0 && items()[r[s_sel]].wmap >= 0) { begin_wheel_capture(r[s_sel]); return; }
     if (r[s_sel] >= 0) { s_drop = true; s_drop_sel = choice_index(items()[r[s_sel]]); return; }
     change(r[s_sel], +1);
 }
@@ -1822,6 +2185,7 @@ void press()
 void back()
 {
     if (s_capture >= 0) { s_capture = -1; s_status = L"Not changed."; }
+    else if (s_wcap >= 0) { s_wcap = -1; s_status = L"Not changed."; }
     else if (s_drop) s_drop = false;
     else set_open(false);
 }
@@ -1858,12 +2222,30 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             return 0;
         }
         if (s_capture >= 0) { capture_key((int)w); redraw(); return 0; }
+        if (s_wcap >= 0) {
+            if (w == VK_ESCAPE || w == VK_BACK) { s_wcap = -1; s_status = L"Not changed."; redraw(); }
+            return 0;
+        }
         switch (w) {
         case VK_UP:    move_sel(-1); break;
         case VK_DOWN:  move_sel(+1); break;
         case VK_LEFT:  activate(-1); break;
         case VK_RIGHT: activate(+1); break;
         case VK_RETURN: case VK_SPACE: press(); break;
+        case VK_DELETE: {
+            const std::vector<int> r = rows();
+            if (s_sel >= 0 && s_sel < (int)r.size() && r[s_sel] >= 0 && items()[r[s_sel]].wmap >= 0)
+                wheel_clear_slot(r[s_sel]);
+            else return 0;
+            break;
+        }
+        case 'I': {
+            const std::vector<int> r = rows();
+            if (s_sel >= 0 && s_sel < (int)r.size() && r[s_sel] >= 0 && items()[r[s_sel]].wmap >= 1 && items()[r[s_sel]].wmap <= 3)
+                wheel_invert_pedal_slot(r[s_sel]);
+            else return 0;
+            break;
+        }
         case VK_PRIOR: switch_section(-1); break;
         case VK_NEXT:  switch_section(+1); break;
         case VK_ESCAPE: case VK_BACK: back(); break;
@@ -1970,7 +2352,7 @@ DWORD WINAPI ui_thread(LPVOID)
          * window has the focus, a held arrow repeating. A key already held
          * when either opens (the Escape that asked) is not a press. */
         static const int keys[] = { VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, VK_RETURN, VK_SPACE,
-                                    VK_ESCAPE, VK_BACK, VK_LBUTTON, VK_PRIOR, VK_NEXT, 'Q', 'W' };
+                                    VK_ESCAPE, VK_BACK, VK_LBUTTON, VK_PRIOR, VK_NEXT, 'Q', 'W', VK_DELETE, 'I' };
         static uint8_t key_was[256];
         static ULONGLONG key_repeat_at;
         const bool modal = s_quit || (s_open && s_overlay);
@@ -2017,6 +2399,10 @@ DWORD WINAPI ui_thread(LPVOID)
                     continue;
                 }
                 if (!s_open) continue;
+                if (s_wcap >= 0) {
+                    if (vk == VK_ESCAPE || vk == VK_BACK) { back(); changed = true; }
+                    continue;
+                }
                 changed = true;
                 switch (vk) {
                 case VK_UP:    move_sel(-1); break;
@@ -2025,6 +2411,20 @@ DWORD WINAPI ui_thread(LPVOID)
                 case VK_RIGHT: activate(+1); break;
                 case VK_RETURN: case VK_SPACE: press(); break;
                 case VK_ESCAPE: case VK_BACK: back(); break;
+                case VK_DELETE: {
+                    const std::vector<int> r = rows();
+                    if (s_sel >= 0 && s_sel < (int)r.size() && r[s_sel] >= 0 && items()[r[s_sel]].wmap >= 0)
+                        wheel_clear_slot(r[s_sel]);
+                    else changed = false;
+                    break;
+                }
+                case 'I': {
+                    const std::vector<int> r = rows();
+                    if (s_sel >= 0 && s_sel < (int)r.size() && r[s_sel] >= 0 && items()[r[s_sel]].wmap >= 1 && items()[r[s_sel]].wmap <= 3)
+                        wheel_invert_pedal_slot(r[s_sel]);
+                    else changed = false;
+                    break;
+                }
                 case VK_PRIOR: case 'Q': switch_section(-1); break;   /* Q/W: the game's L1/R1 keys */
                 case VK_NEXT:  case 'W': switch_section(+1); break;
                 case VK_LBUTTON: {
@@ -2057,7 +2457,7 @@ DWORD WINAPI ui_thread(LPVOID)
             else if (act & kCircle) set_quit(false);
         } else if ((down & kSelect) && !s_open && s_in_options && hint_enabled() && game_fg) set_open(true);
         else if ((down & kPs) && (s_open || game_fg)) set_open(!s_open);
-        else if (s_open && s_capture >= 0) {
+        else if (s_open && (s_capture >= 0 || s_wcap >= 0)) {
             if (act & kCircle) { back(); redraw(); }
         }
         else if (s_open) {
@@ -2084,6 +2484,29 @@ DWORD WINAPI ui_thread(LPVOID)
             if (want_hint) { hint_id = gt5p_glyphs_select_id(); push_image(kHintW, kHintH, paint_hint, true, 0); }
             else if (!s_open && !s_quit) rsx_d3d12_overlay_set(nullptr, 0, 0, 0, 0);
             s_hint_shown = want_hint;
+        }
+
+        /* Live wheel capture and telemetry refresh on WHEEL / WHEEL MAP. */
+        if (s_open) {
+            if (s_wcap >= 0) {
+                if (poll_wheel_capture()) redraw();
+            }
+            if (wheel_page() || wheel_map_page()) {
+                static ULONGLONG w_next = 0;
+                static WheelRawUi w_last = {};
+                if (now >= w_next) {
+                    w_next = now + 66;   /* ~15 Hz telemetry refresh */
+                    WheelRawUi wr = {};
+                    wheel_host_raw(&wr);
+                    bool diff = wr.connected != w_last.connected || wr.buttons != w_last.buttons;
+                    if (!diff && wr.connected)
+                        for (int a = 0; a < 8; a++)
+                            if (fabsf(wr.axis[a] - w_last.axis[a]) >= 0.02f) { diff = true; break; }
+                    if (diff) { w_last = wr; redraw(); }
+                }
+            }
+        } else {
+            s_wcap = -1;
         }
 
         if (s_inject_until && GetTickCount64() >= s_inject_until) { g_pad_inject_buttons = 0; s_inject_until = 0; }

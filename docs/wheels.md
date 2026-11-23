@@ -54,26 +54,27 @@ addresses, so no per-build constants are needed here. Changes from theirs:
 
 ## Settings
 
-F1 > WHEEL, or `[wheel]` in `gt5p_settings.toml`. Force-feedback rows apply
-live; the others after a restart.
+F1 > **WHEEL** (and **WHEEL MAP** for interactive axis/button binding), or `[wheel]` in `gt5p_settings.toml`. Presets, axis/button bindings, and force-feedback rows apply live; the others after a restart.
 
 | Setting | Key | Variable | Default |
 | --- | --- | --- | --- |
 | Steering wheel | `enabled` | `PS3_WHEEL` (`auto`, `off`, `virtual`, or part of a name / `vid:pid`) | On |
+| Wheel preset | `preset` | — (`auto`, `g29`, `g920`, `g27`, `thrustmaster`, `custom`) | Auto (by model) |
 | Wheel rotation | `rotation` | `PS3_WHEEL_RANGE` | 900 |
 | Force feedback strength | `ffb_strength` | `PS3_WHEEL_FFB` (0-100) | 80 |
 | Force direction | `ffb_invert` | `PS3_WHEEL_FFB_INVERT` | Normal |
 | Centring and damping | `ffb_springs` | `PS3_WHEEL_FFB_SPRING` (0-200 %) | 100 |
 | Minimum force | `ffb_min_force` | `PS3_WHEEL_FFB_MIN` (0-50 %) | 0 |
 | Pause forces in background | `ffb_pause` | `PS3_WHEEL_FFB_MUTE` | On |
+| Steer axis | `steer` | `PS3_WHEEL_STEER` | Auto (`X`) |
+| Pedal axes | `pedals` | `PS3_WHEEL_PEDALS` (e.g. `throttle=Y,brake=RZ,clutch=Z`, append `inv` to invert) | Auto |
+| Wheel buttons | `buttons` | `PS3_WHEEL_BUTTONS` (e.g. `cross=1,circle=3,start=10`) | Auto |
+
+On **F1 > WHEEL MAP**, press Enter/Click on any axis (`Steer`, `Throttle`, `Brake`, `Clutch`) or button (`Shift Up`, `Shift Down`, `Cross`–`Select`) and turn the wheel, press the pedal, or press the wheel button to bind it live. Press **I** on a pedal row to toggle axis inversion, **Delete** to clear a binding, or **Defaults** to return to `Auto`. Live connected-wheel telemetry (device name, VID:PID, FFB status, axes, and pressed button number) is shown at the bottom of both **WHEEL** and **WHEEL MAP**.
 
 Variables with no settings row:
 
-- `PS3_WHEEL_PEDALS`, for example `throttle=Y,brake=RZ,clutch=Z`; append `inv`
-  to reverse one.
-- `PS3_WHEEL_BUTTONS`, for example `cross=1,start=10`, by the numbers Windows'
-  `joy.cpl` shows.
-- `PS3_WHEEL_STEER`, `PS3_WHEEL_SHIFTER` and `PS3_WHEEL_MENU`.
+- `PS3_WHEEL_SHIFTER` and `PS3_WHEEL_MENU`.
 - `PS3_WHEEL_TRACE=1` logs axes, reports and force commands.
 - `PAD_SDL_WHEELS=1` lets SDL read wheels as pads again.
 

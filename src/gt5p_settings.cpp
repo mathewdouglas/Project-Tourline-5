@@ -46,6 +46,7 @@ const char* const kEnvNames[] = {
     "AUDIO_OUTPUT_CHANNELS", "PS3_USER_NAME",
     "PS3_WHEEL", "PS3_WHEEL_RANGE", "PS3_WHEEL_FFB", "PS3_WHEEL_FFB_INVERT", "PS3_WHEEL_FFB_SPRING",
     "PS3_WHEEL_FFB_MIN", "PS3_WHEEL_FFB_MUTE",
+    "PS3_WHEEL_STEER", "PS3_WHEEL_PEDALS", "PS3_WHEEL_BUTTONS",
 };
 bool g_env_set[sizeof kEnvNames / sizeof kEnvNames[0]];
 
@@ -236,6 +237,7 @@ bool known_key(std::string_view section, std::string_view key)
         {"input", "sdl_rumble"},
         {"wheel", "enabled"}, {"wheel", "rotation"}, {"wheel", "ffb_strength"}, {"wheel", "ffb_invert"},
         {"wheel", "ffb_springs"}, {"wheel", "ffb_min_force"}, {"wheel", "ffb_pause"},
+        {"wheel", "preset"}, {"wheel", "steer"}, {"wheel", "pedals"}, {"wheel", "buttons"},
         {"game", "skip_movie"},       {"game", "smooth_colour"},    {"game", "anisotropy"}, {"game", "player_name"},
         {"audio", "output"},
         {"performance", "vblank_hz"}, {"performance", "lane_pinning"},
@@ -362,6 +364,18 @@ void parse_into(const toml::table& tbl, Gt5pSettings& s)
     read_int_range(tbl["wheel"]["ffb_springs"], "wheel.ffb_springs", 0, 200, s.ffb_springs);
     read_int_range(tbl["wheel"]["ffb_min_force"], "wheel.ffb_min_force", 0, 50, s.ffb_min_force);
     read_bool(tbl["wheel"]["ffb_pause"], "wheel.ffb_pause", s.ffb_pause);
+    if (auto n = tbl["wheel"]["preset"]) {
+        if (auto v = n.value<std::string>()) s.wheel_preset = *v;
+    }
+    if (auto n = tbl["wheel"]["steer"]) {
+        if (auto v = n.value<std::string>()) s.wheel_steer = *v;
+    }
+    if (auto n = tbl["wheel"]["pedals"]) {
+        if (auto v = n.value<std::string>()) s.wheel_pedals = *v;
+    }
+    if (auto n = tbl["wheel"]["buttons"]) {
+        if (auto v = n.value<std::string>()) s.wheel_buttons = *v;
+    }
     read_audio_output(tbl["audio"]["output"], s.audio_channels);
     read_vblank(tbl["performance"]["vblank_hz"], s.vblank_hz100);
     read_lane_cores(tbl["performance"]["lane_pinning"], s.lane_cores);
@@ -411,6 +425,9 @@ void apply_env(const Gt5pSettings& s)
     snprintf(buf, sizeof buf, "%d", s.ffb_springs); set_default_env("PS3_WHEEL_FFB_SPRING", buf);
     snprintf(buf, sizeof buf, "%d", s.ffb_min_force); set_default_env("PS3_WHEEL_FFB_MIN", buf);
     set_default_env("PS3_WHEEL_FFB_MUTE", s.ffb_pause ? "1" : "0");
+    if (!s.wheel_steer.empty()) set_default_env("PS3_WHEEL_STEER", s.wheel_steer.c_str());
+    if (!s.wheel_pedals.empty()) set_default_env("PS3_WHEEL_PEDALS", s.wheel_pedals.c_str());
+    if (!s.wheel_buttons.empty()) set_default_env("PS3_WHEEL_BUTTONS", s.wheel_buttons.c_str());
     /* The screen whose first read starts the presses (cellPad.c). */
     /* GT5P_MOVIE_SCREEN: the target's opening-movie screen (src/main.cpp,
      * config/targets.json movie_screen); Prologue's script name otherwise. */
@@ -492,6 +509,9 @@ void reflect_env(Gt5pSettings& s)
     }
     if (const char* e = getenv("PS3_WHEEL_FFB_INVERT")) s.ffb_invert = e[0] == '1';
     if (const char* e = getenv("PS3_WHEEL_FFB_MUTE")) s.ffb_pause = e[0] != '0';
+    if (const char* e = getenv("PS3_WHEEL_STEER")) s.wheel_steer = e;
+    if (const char* e = getenv("PS3_WHEEL_PEDALS")) s.wheel_pedals = e;
+    if (const char* e = getenv("PS3_WHEEL_BUTTONS")) s.wheel_buttons = e;
     { const char* e = getenv("PAD_SKIP_MOVIE"); s.skip_movie = e && *e && strcmp(e, "0") != 0; }
     { const char* e = getenv("RSX_HIGH_PRECISION"); s.smooth_colour = !(e && e[0] == '0'); }
     if (const char* e = getenv("PS3_USER_NAME"); e && gt5p_player_name_ok(e)) s.player_name = e;
@@ -658,6 +678,15 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "# Stop all forces while F1 is open or the game window is in the background.\n"
          "# Restart to apply. [PS3_WHEEL_FFB_MUTE]\n"
          "ffb_pause = " << (s.ffb_pause ? "true" : "false") << "\n"
+         "# Axis and button preset: \"auto\" (detect by model), \"g29\", \"g920\", \"g27\",\n"
+         "# \"thrustmaster\", or \"custom\". Set from F1 > WHEEL or F1 > WHEEL MAP.\n"
+         "preset = \"" << s.wheel_preset << "\"\n"
+         "# Custom steering axis (empty = auto/X; or X, Y, Z, RX, RY, RZ, S0, S1). [PS3_WHEEL_STEER]\n"
+         "steer = \"" << s.wheel_steer << "\"\n"
+         "# Custom pedal axes (empty = auto; e.g. \"throttle=Y,brake=RZ,clutch=Z\"). [PS3_WHEEL_PEDALS]\n"
+         "pedals = \"" << s.wheel_pedals << "\"\n"
+         "# Custom wheel buttons (empty = auto; e.g. \"cross=1,circle=3,start=10\"). [PS3_WHEEL_BUTTONS]\n"
+         "buttons = \"" << s.wheel_buttons << "\"\n"
          "\n"
          "[game]\n"
          "# Skip the opening movie (it plays only when the TV content is installed):\n"

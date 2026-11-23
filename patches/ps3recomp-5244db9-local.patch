@@ -7414,10 +7414,10 @@ index 6d8dd233..f2f478fc 100644
  }
 diff --git a/libs/hardware/wheel.h b/libs/hardware/wheel.h
 new file mode 100644
-index 00000000..420e9451
+index 00000000..582fc3a9
 --- /dev/null
 +++ b/libs/hardware/wheel.h
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,137 @@
 +/*
 + * ps3recomp - steering wheel emulation (Logitech G27 on cellUsbd)
 + *
@@ -7544,6 +7544,11 @@ index 00000000..420e9451
 + * damper, friction) 0..200 %, minimum steering force 0..50 %. Overrides the
 + * PS3_WHEEL_FFB* environment values from the first call on. */
 +void wheel_host_set_ffb(int gain, int invert, int spring, int min_force);
++
++/* Axis and button mapping, live: empty string uses the wheel's model default.
++ * Uses the same syntax as PS3_WHEEL_STEER, PS3_WHEEL_PEDALS and PS3_WHEEL_BUTTONS.
++ * Overrides the environment values from the first call on. */
++void wheel_host_set_map(const char* steer, const char* pedals, const char* buttons);
 +
 +#ifdef __cplusplus
 +}
@@ -7972,10 +7977,10 @@ index 00000000..71b8264a
 +}
 diff --git a/libs/hardware/wheel_host_win.c b/libs/hardware/wheel_host_win.c
 new file mode 100644
-index 00000000..003cd227
+index 00000000..a8df1c95
 --- /dev/null
 +++ b/libs/hardware/wheel_host_win.c
-@@ -0,0 +1,1189 @@
+@@ -0,0 +1,1229 @@
 +/*
 + * ps3recomp - the PC steering wheel behind the emulated G27 (see wheel.h)
 + *
@@ -8133,7 +8138,14 @@ index 00000000..003cd227
 +    return -2;
 +}
 +
-+/* Defaults by model, then the PS3_WHEEL_* overrides. */
++/* Live mapping overrides from the settings page (wheel_host_set_map). */
++static volatile LONG s_map_gen;
++static int   s_map_ovr_set;
++static char  s_map_steer_ovr[32];
++static char  s_map_pedals_ovr[256];
++static char  s_map_buttons_ovr[512];
++
++/* Defaults by model, then live overrides (if set) or PS3_WHEEL_* env vars. */
 +static void build_map(WheelMap* m, u16 vid, u16 pid)
 +{
 +    m->steer = AX_X;
@@ -8166,13 +8178,14 @@ index 00000000..003cd227
 +            m->pedal[1] = AX_Z; m->pedal[2] = AX_RZ;              /* G25 / DFGT / G27 / DFP */
 +        }
 +    }
-+    const char* e = getenv("PS3_WHEEL_STEER");
++    const char* steer_s = s_map_ovr_set ? s_map_steer_ovr : getenv("PS3_WHEEL_STEER");
++    const char* pedals_s = s_map_ovr_set ? s_map_pedals_ovr : getenv("PS3_WHEEL_PEDALS");
++    const char* buttons_s = s_map_ovr_set ? s_map_buttons_ovr : getenv("PS3_WHEEL_BUTTONS");
 +    int inv;
-+    if (e && *e) { int a = axis_by_name(e, &inv); if (a >= 0) m->steer = a; }
-+    e = getenv("PS3_WHEEL_PEDALS");
-+    if (e && *e) {
++    if (steer_s && *steer_s) { int a = axis_by_name(steer_s, &inv); if (a >= 0) m->steer = a; }
++    if (pedals_s && *pedals_s) {
 +        static const char* const pn[3] = { "throttle", "brake", "clutch" };
-+        char buf[256]; snprintf(buf, sizeof buf, "%s", e); lower(buf);
++        char buf[256]; snprintf(buf, sizeof buf, "%s", pedals_s); lower(buf);
 +        for (int p = 0; p < 3; p++) {
 +            const char* at = strstr(buf, pn[p]);
 +            if (!at || at[strlen(pn[p])] != '=') continue;
@@ -8182,9 +8195,8 @@ index 00000000..003cd227
 +            if (inv == 2) m->pedal_inv[p] = 2;
 +        }
 +    }
-+    e = getenv("PS3_WHEEL_BUTTONS");
-+    if (e && *e) {
-+        char buf[512]; snprintf(buf, sizeof buf, "%s", e); lower(buf);
++    if (buttons_s && *buttons_s) {
++        char buf[512]; snprintf(buf, sizeof buf, "%s", buttons_s); lower(buf);
 +        int set[WHEEL_BTN_COUNT] = { 0 };
 +        for (char* tok = strtok(buf, ",; "); tok; tok = strtok(NULL, ",; ")) {
 +            char* eq = strchr(tok, '=');
@@ -8958,6 +8970,35 @@ index 00000000..003cd227
 +    InterlockedIncrement(&s_set_gen);
 +}
 +
++void wheel_host_set_map(const char* steer, const char* pedals, const char* buttons)
++{
++    AcquireSRWLockExclusive(&s_pub_lock);
++    snprintf(s_map_steer_ovr, sizeof s_map_steer_ovr, "%s", steer ? steer : "");
++    snprintf(s_map_pedals_ovr, sizeof s_map_pedals_ovr, "%s", pedals ? pedals : "");
++    snprintf(s_map_buttons_ovr, sizeof s_map_buttons_ovr, "%s", buttons ? buttons : "");
++    s_map_ovr_set = 1;
++    ReleaseSRWLockExclusive(&s_pub_lock);
++    InterlockedIncrement(&s_map_gen);
++}
++
++static void map_settings_follow(void)
++{
++    AcquireSRWLockShared(&s_pub_lock);
++    build_map(&s_map, s_vid, s_pid);
++    ReleaseSRWLockShared(&s_pub_lock);
++    if (s_dev) {
++        for (int p = 0; p < 3; p++)
++            if (s_map.pedal[p] >= 0 && !s_axis_present[s_map.pedal[p]]) s_map.pedal[p] = AX_NONE;
++        s_split = 0;
++        s_rest_known = 0;
++    }
++    fprintf(stderr, "[wheel] mapping updated live: steer %s, throttle %s%s, brake %s%s, clutch %s%s\n",
++            k_axis_name[s_map.steer],
++            s_map.pedal[0] >= 0 ? k_axis_name[s_map.pedal[0]] : "none", s_map.pedal_inv[0] == 2 ? "inv" : "",
++            s_map.pedal[1] >= 0 ? k_axis_name[s_map.pedal[1]] : "none", s_map.pedal_inv[1] == 2 ? "inv" : "",
++            s_map.pedal[2] >= 0 ? k_axis_name[s_map.pedal[2]] : "none", s_map.pedal_inv[2] == 2 ? "inv" : "");
++}
++
 +static void ffb_settings_follow(void)
 +{
 +    const int gain = (int)s_set_gain;
@@ -9019,6 +9060,8 @@ index 00000000..003cd227
 +        WheelInput press; memset(&press, 0, sizeof press);
 +        int press_steer = 0, press_thr = 0, press_brk = 0;
 +        while (!s_stop) {
++            { static LONG map_gen;
++              if (map_gen != s_map_gen) { map_gen = s_map_gen; map_settings_follow(); } }
 +            const ULONGLONG now = GetTickCount64();
 +            if (vf && *vf && now >= press_until) {
 +                FILE* f = fopen(vf, "rb");
@@ -9097,8 +9140,9 @@ index 00000000..003cd227
 +    int said_none = 0;
 +    while (!s_stop) {
 +        const ULONGLONG now = GetTickCount64();
-+        { static LONG set_gen;
-+          if (set_gen != s_set_gen) { set_gen = s_set_gen; ffb_settings_follow(); } }
++        { static LONG set_gen, map_gen;
++          if (set_gen != s_set_gen) { set_gen = s_set_gen; ffb_settings_follow(); }
++          if (map_gen != s_map_gen) { map_gen = s_map_gen; map_settings_follow(); } }
 +        if (!s_dev && now >= next_scan) {
 +            /* A wheel plugged in later is found within a few seconds early on,
 +             * within ten later; looking costs a little, on this thread only. */
@@ -9163,6 +9207,7 @@ index 00000000..003cd227
 +void wheel_host_ffb_changed(void) {}
 +int  wheel_host_raw(WheelRaw* out) { memset(out, 0, sizeof *out); return 0; }
 +void wheel_host_set_ffb(int gain, int invert, int spring, int min_force) { (void)gain; (void)invert; (void)spring; (void)min_force; }
++void wheel_host_set_map(const char* steer, const char* pedals, const char* buttons) { (void)steer; (void)pedals; (void)buttons; }
 +
 +#endif
 diff --git a/libs/input/cellKb.c b/libs/input/cellKb.c
