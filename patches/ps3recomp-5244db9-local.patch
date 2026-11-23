@@ -42413,10 +42413,10 @@ index acbaf126..b09e0ac4 100644
  }
  
 diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
-index e73a1512..e584cce6 100644
+index e73a1512..b23b946c 100644
 --- a/runtime/ppu/ppu_loader.cpp
 +++ b/runtime/ppu/ppu_loader.cpp
-@@ -1,3870 +1,4551 @@
+@@ -1,3870 +1,4601 @@
 -/*
 - * ps3recomp - PPU runtime loader
 - *
@@ -50346,6 +50346,7 @@ index e73a1512..e584cce6 100644
 + * way the main entry does and dispatch into the recompiled function, draining
 + * the tail-call trampoline chain so the thread body fully runs. */
 +extern "C" void (*g_ppu_thread_entry_trampoline)(ppu_context*);
++extern "C" void (*g_ppu_tls_free_fn)(uint32_t tp);
 +/* Carve a fresh TLS block for one guest thread, or 0 when there is no room
 + * (then the caller shares the main block, which is what every thread used to
 + * do).
@@ -50384,7 +50385,22 @@ index e73a1512..e584cce6 100644
 +            vaddr, filesz, memsz);
 +}
 +
-+static uint32_t ppu_tls_new_block(void)
++static volatile int s_tls_lock = 0;
++static uint32_t     s_tls_free[512];
++static uint32_t     s_tls_free_n = 0;
++
++static int ppu_tls_reuse_enabled(void)
++{
++    /* PS3_TLS_REUSE (default on): recycle exited threads' TLS blocks so long
++     * sessions that churn short-lived threads (GT5 #74: 714 creates / 666 exits
++     * filled the 248-slot window) never fall back to sharing main's TLS block.
++     * PS3_TLS_REUSE=0 restores the old bump-only allocator. */
++    static int s_reuse = -1;
++    if (s_reuse < 0) { const char* e = getenv("PS3_TLS_REUSE"); s_reuse = (e && *e == '0') ? 0 : 1; }
++    return s_reuse;
++}
++
++extern "C" uint32_t ppu_tls_new_block(void)
 +{
 +    if (!g_tls_memsz) return 0;                 /* no PT_TLS: nothing to copy */
 +    uint32_t total = (g_tls_memsz + 0x7000u + 0xFFFu) & ~0xFFFu;
@@ -50404,11 +50420,22 @@ index e73a1512..e584cce6 100644
 +    if (s_pack < 0) { const char* e = getenv("PS3_TLS_PACK"); s_pack = (e && *e == '0') ? 0 : 1; }
 +    uint32_t stride = s_pack ? ((g_tls_memsz + 0xFFFu) & ~0xFFFu) : total;
 +    uint32_t need   = s_pack ? g_tls_memsz : total;
-+    /* Threads are created concurrently, so hand out offsets atomically. */
++    const int reuse = ppu_tls_reuse_enabled();
++    /* Threads are created/exited concurrently, so guard free list + bump. */
 +    static uint32_t s_bump = 0;
-+    uint32_t off  = __atomic_fetch_add(&s_bump, stride, __ATOMIC_RELAXED);
-+    uint32_t base = PPU_TLS_IMG + total + off;  /* main block occupies the first */
-+    if (base + need > lim) {                    /* out of room: share, as before */
++    uint32_t base = 0;
++    while (__atomic_exchange_n(&s_tls_lock, 1, __ATOMIC_ACQUIRE)) {}
++    if (reuse && s_tls_free_n > 0) {
++        base = s_tls_free[--s_tls_free_n];
++    } else {
++        uint32_t cand = PPU_TLS_IMG + total + s_bump; /* main block occupies the first */
++        if (cand >= PPU_TLS_IMG + total && cand + need <= lim) {
++            base = cand;
++            s_bump += stride;
++        }
++    }
++    __atomic_store_n(&s_tls_lock, 0, __ATOMIC_RELEASE);
++    if (!base) {                                /* out of room: share, as before */
 +        static int s_warned = 0;
 +        if (!__atomic_exchange_n(&s_warned, 1, __ATOMIC_RELAXED))
 +            fprintf(stderr, "[ppu] TLS window full: further threads share the main "
@@ -50420,6 +50447,27 @@ index e73a1512..e584cce6 100644
 +    if (g_tls_memsz > g_tls_filesz)
 +        memset(vm_base + base + g_tls_filesz, 0, g_tls_memsz - g_tls_filesz);
 +    return base + 0x7000u;                      /* TLS data at r13 - 0x7000 */
++}
++
++extern "C" void ppu_tls_free_block(uint32_t tp)
++{
++    if (!g_tls_memsz || !tp || tp == PPU_TLS_TP) return;
++    if (!ppu_tls_reuse_enabled()) return;
++    uint32_t total = (g_tls_memsz + 0x7000u + 0xFFFu) & ~0xFFFu;
++    uint32_t lim   = 0x11000000u;
++    if (ppu_vm_size && ppu_vm_size < lim) lim = ppu_vm_size;
++    if (tp < PPU_TLS_IMG + total + 0x7000u) return;
++    uint32_t base = tp - 0x7000u;
++    if (base >= lim) return;
++    while (__atomic_exchange_n(&s_tls_lock, 1, __ATOMIC_ACQUIRE)) {}
++    int dup = 0;
++    for (uint32_t i = 0; i < s_tls_free_n; i++) {
++        if (s_tls_free[i] == base) { dup = 1; break; }
++    }
++    if (!dup && s_tls_free_n < (uint32_t)(sizeof(s_tls_free) / sizeof(s_tls_free[0]))) {
++        s_tls_free[s_tls_free_n++] = base;
++    }
++    __atomic_store_n(&s_tls_lock, 0, __ATOMIC_RELEASE);
 +}
 +
 +static void ppu_thread_entry_trampoline(ppu_context* ctx)
@@ -50453,6 +50501,7 @@ index e73a1512..e584cce6 100644
 +extern "C" void ppu_install_thread_trampoline(void)
 +{
 +    g_ppu_thread_entry_trampoline = ppu_thread_entry_trampoline;
++    g_ppu_tls_free_fn = ppu_tls_free_block;
 +}
 +
 +/* Call a guest function by OPD with up to 4 integer args, on a private scratch
@@ -50621,6 +50670,7 @@ index e73a1512..e584cce6 100644
 +    setvbuf(stdout, NULL, _IONBF, 0);
 +
 +    g_ppu_thread_entry_trampoline = ppu_thread_entry_trampoline;
++    g_ppu_tls_free_fn = ppu_tls_free_block;
 +    uint32_t code = 0, toc = 0;
 +    ppu_opd_resolve(entry_opd, &code, &toc);
 +    ppu_fn fn = ppu_lookup(code);
@@ -70199,13 +70249,15 @@ index 2e760ea5..7788f6ff 100644
  
  #ifdef _WIN32
 diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread.c
-index fb3906ae..bae7d71b 100644
+index fb3906ae..6f9b8fc6 100644
 --- a/runtime/syscalls/sys_ppu_thread.c
 +++ b/runtime/syscalls/sys_ppu_thread.c
-@@ -45,6 +45,22 @@ ppu_thread_info       g_ppu_threads[PPU_THREAD_MAX];
+@@ -44,6 +44,23 @@ static PPU_TLS int     s_exit_armed = 0;
+ ppu_thread_info       g_ppu_threads[PPU_THREAD_MAX];
  vm_stack_alloc        g_vm_stack_alloc;
  ppu_thread_entry_fn   g_ppu_thread_entry_trampoline = NULL;
- 
++void                (*g_ppu_tls_free_fn)(uint32_t tp) = NULL;
++
 +/* Diagnostics: the live thread whose guest stack holds ea (its id, and its
 + * name copied to name), or 0. Unlocked: a report helper, not for logic. */
 +int ppu_thread_stack_owner(uint32_t ea, char* name, size_t n)
@@ -70221,11 +70273,24 @@ index fb3906ae..bae7d71b 100644
 +    if (name && n) name[0] = 0;
 +    return 0;
 +}
-+
+ 
  /* Simple mutex for thread table access */
  #ifdef _WIN32
- static CRITICAL_SECTION s_table_lock;
-@@ -275,19 +291,28 @@ unsigned long long ppu_thread_cpu_us(unsigned tid)
+@@ -161,6 +178,13 @@ static void* ppu_host_thread_proc(void* param)
+                 (unsigned long long)info->ctx.thread_id);
+     }
+ 
++    /* Recycle the exited thread's TLS slot so long sessions with thread churn
++     * (GT5 issue #74) do not exhaust the 1 MB TLS window. */
++    if (g_ppu_tls_free_fn && info->ctx.gpr[13]) {
++        g_ppu_tls_free_fn((uint32_t)info->ctx.gpr[13]);
++        info->ctx.gpr[13] = 0;
++    }
++
+     /* Mark as finished */
+     table_lock();
+     info->exit_status = (int64_t)info->ctx.gpr[3];
+@@ -275,19 +299,28 @@ unsigned long long ppu_thread_cpu_us(unsigned tid)
      (void)tid; return 0;
  #endif
  }
@@ -70255,7 +70320,7 @@ index fb3906ae..bae7d71b 100644
  
  int ppu_prof_snapshot(int idx, unsigned* tid, unsigned* cia, const char** name)
  {
-@@ -296,12 +321,14 @@ int ppu_prof_snapshot(int idx, unsigned* tid, unsigned* cia, const char** name)
+@@ -296,12 +329,14 @@ int ppu_prof_snapshot(int idx, unsigned* tid, unsigned* cia, const char** name)
      if (idx == 0 && t->state == PPU_THREAD_STATE_FREE) {
          /* slot 0 stays FREE (the main thread never registers) -- serve its
           * dispatcher breadcrumb here so the profiler sees tid 1. */
@@ -70273,7 +70338,7 @@ index fb3906ae..bae7d71b 100644
      *name = t->name;
      return 1;
  }
-@@ -314,13 +341,258 @@ void ppu_prof_stamp(void* vctx, unsigned lr)
+@@ -314,13 +349,258 @@ void ppu_prof_stamp(void* vctx, unsigned lr)
      ppu_thread_info* t = (ppu_thread_info*)p;
      int in_range = (t >= g_ppu_threads && t < g_ppu_threads + PPU_THREAD_MAX);
      if (!in_range) { s_prof_main_pc = lr; return; }
@@ -70535,7 +70600,7 @@ index fb3906ae..bae7d71b 100644
  int64_t sys_ppu_thread_create(ppu_context* ctx)
  {
      uint32_t tid_out_addr = LV2_ARG_PTR(ctx, 0);
-@@ -404,9 +676,9 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
+@@ -404,9 +684,9 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
          *out = be_id;
      }
  
@@ -70547,7 +70612,7 @@ index fb3906ae..bae7d71b 100644
      /* YDKJ: dump the worker arg-object: func_000750A8 (thread body) does
       * this=[arg+0x8], vtable=[arg+0xC], method=[vtable+0]. If this(+0x8) is null
       * the worker dispatches its job on a null object -> construction never runs. */
-@@ -441,6 +713,9 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
+@@ -441,6 +721,9 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
      unsigned _initflag = STACK_SIZE_PARAM_IS_A_RESERVATION;
      int _gate_this = (g_gate_on > 0 && entry >= 0x10000 && entry < 0x10000000);
      if (_gate_this) _initflag |= CREATE_SUSPENDED;
@@ -70557,7 +70622,7 @@ index fb3906ae..bae7d71b 100644
      t->host_thread = (HANDLE)_beginthreadex(NULL, 256u * 1024 * 1024,
                                    (unsigned (__stdcall*)(void*))ppu_host_thread_proc, t,
                                    _initflag, (unsigned*)&t->host_tid);
-@@ -460,6 +735,8 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
+@@ -460,6 +743,8 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
       * ponytail: two host levels only; map the full range if a title needs it. */
      if (priority < 256)
          SetThreadPriority(t->host_thread, THREAD_PRIORITY_ABOVE_NORMAL);
@@ -70566,7 +70631,7 @@ index fb3906ae..bae7d71b 100644
  #else
      /* Same reservation, for the same reason. This is the HOST stack the
       * recompiled C frames run on, not the guest stack (allocated above out of
-@@ -499,6 +776,12 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
+@@ -499,6 +784,12 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
  #endif
  
      table_unlock();
@@ -70579,7 +70644,7 @@ index fb3906ae..bae7d71b 100644
      return CELL_OK;
  }
  
-@@ -555,7 +838,7 @@ int64_t sys_ppu_thread_join(ppu_context* ctx)
+@@ -555,7 +846,7 @@ int64_t sys_ppu_thread_join(ppu_context* ctx)
  {
      uint64_t tid          = LV2_ARG_U64(ctx, 0);
      uint32_t status_addr  = LV2_ARG_PTR(ctx, 1);
@@ -70588,7 +70653,7 @@ index fb3906ae..bae7d71b 100644
  
      table_lock();
      ppu_thread_info* t = find_thread(tid);
-@@ -600,8 +883,17 @@ int64_t sys_ppu_thread_join(ppu_context* ctx)
+@@ -600,8 +891,17 @@ int64_t sys_ppu_thread_join(ppu_context* ctx)
  #endif
      }
  
@@ -70607,7 +70672,7 @@ index fb3906ae..bae7d71b 100644
      table_lock();
      CloseHandle(t->host_thread);
      CloseHandle(t->finish_event);
-@@ -710,7 +1002,7 @@ int64_t sys_ppu_thread_yield(ppu_context* ctx)
+@@ -710,7 +1010,7 @@ int64_t sys_ppu_thread_yield(ppu_context* ctx)
            static unsigned long n;
            extern uint32_t vm_read32(uint64_t);
            const uint32_t r30 = (uint32_t)ctx->gpr[30];
@@ -70616,7 +70681,7 @@ index fb3906ae..bae7d71b 100644
                fprintf(stderr, "[spinwait] n=%lu lr=%08X ctr=%08X r2=%08X"
                                " r30=%08X w0=%08X w88=%08X r31=%08X\n",
                        n, (uint32_t)ctx->lr, (uint32_t)ctx->ctr,
-@@ -891,7 +1183,7 @@ int64_t sys_ppu_thread_yield(ppu_context* ctx)
+@@ -891,7 +1191,7 @@ int64_t sys_ppu_thread_yield(ppu_context* ctx)
                        for (int z = 0; z < n1; z++) if (seen_a1[z] == a1) f1 = 1;
                        if (!f0 && n0 < 8) seen_a0[n0++] = a0;
                        if (!f1 && n1 < 8) seen_a1[n1++] = a1;
@@ -70625,7 +70690,7 @@ index fb3906ae..bae7d71b 100644
                            fprintf(stderr, "[loopwatch] n=%lu pc=0x%08X"
                                            " a0=%08X a1=%08X a3=%08X"
                                            " distinct[a0=%d a1=%d]\n",
-@@ -1155,6 +1447,9 @@ int64_t sys_ppu_thread_set_priority(ppu_context* ctx)
+@@ -1155,6 +1455,9 @@ int64_t sys_ppu_thread_set_priority(ppu_context* ctx)
      }
  
      t->priority = priority;
@@ -70635,7 +70700,7 @@ index fb3906ae..bae7d71b 100644
      table_unlock();
      return CELL_OK;
  }
-@@ -1303,3 +1598,14 @@ void sys_ppu_thread_init(lv2_syscall_table* tbl)
+@@ -1303,3 +1606,14 @@ void sys_ppu_thread_init(lv2_syscall_table* tbl)
      lv2_syscall_register(tbl, SYS_PPU_THREAD_GET_STACK_INFORMATION, sys_ppu_thread_get_stack_information);
      lv2_syscall_register(tbl, SYS_PPU_THREAD_RENAME,              sys_ppu_thread_rename);
  }
@@ -70651,10 +70716,20 @@ index fb3906ae..bae7d71b 100644
 +    return base;
 +}
 diff --git a/runtime/syscalls/sys_ppu_thread.h b/runtime/syscalls/sys_ppu_thread.h
-index a297bf5c..d0a57142 100644
+index a297bf5c..ea7628e7 100644
 --- a/runtime/syscalls/sys_ppu_thread.h
 +++ b/runtime/syscalls/sys_ppu_thread.h
-@@ -89,6 +89,10 @@ int64_t sys_ppu_thread_create(ppu_context* ctx);
+@@ -80,6 +80,9 @@ extern vm_stack_alloc g_vm_stack_alloc;
+ /* Callback to invoke recompiled code - must be set by the runtime */
+ extern ppu_thread_entry_fn g_ppu_thread_entry_trampoline;
+ 
++/* Optional callback to recycle a finished thread's TLS block (r13) */
++extern void (*g_ppu_tls_free_fn)(uint32_t tp);
++
+ /* ---------------------------------------------------------------------------
+  * Syscall handlers
+  * -----------------------------------------------------------------------*/
+@@ -89,6 +92,10 @@ int64_t sys_ppu_thread_create(ppu_context* ctx);
   * Call before the first sys_ppu_thread_create so no created thread aliases
   * main (thread_id 0 broke every owner-tracking sync primitive). */
  uint64_t ppu_thread_register_main(void);

@@ -323,7 +323,10 @@ clamping behind-camera geometry to `z = 0.0`. `rsx_commands` now decodes `NV4097
 (`0x1D78`, reset default `1`), `rsx_cull_key` bit 3 encodes depth-clip-disable (`0 = TRUE`,
 matching `rsx_interp_classes`; `RSX_DEPTH_CLIP=0` rollback), and both PSO builders set
 `DepthClipEnable`. `#70` (8192 pipeline cache flush in long dealership sessions): raised
-`VP_FP_CACHE` `8192 -> 32768`, `FPI_N` `16384 -> 65536`, `s_fp_orphan` `512 -> 2048`.
+`VP_FP_CACHE` `8192 -> 32768`, `FPI_N` `16384 -> 65536`, `s_fp_orphan` `512 -> 2048`. `#74`
+(long-session TLS window exhaustion at 248 thread creates): `ppu_loader.cpp` now recycles
+exited threads' TLS blocks via `ppu_tls_free_block` / `g_ppu_tls_free_fn` (`PS3_TLS_REUSE=0`
+rollback; `scripts/test/tls_reuse.py`, 1,200 churn cycles).
 PGTA-inspired additions: SSE2 `spu_shlqbii`/`spu_rotqbii` (`-DSPU_QBI_SCALAR` rollback;
 `spu_helpers_sse.py`, 9M bit-exact), `s_stack_reset_hint[1024]`, `GCM_FAST_BLIT` (`=0` off),
 `PSO_WARM_MAX` `8192 -> 16384` + `RSX_PSO_RESERVE=4096` (`=0` off), Windows `GetWriteWatch`
