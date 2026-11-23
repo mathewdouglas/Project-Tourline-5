@@ -298,7 +298,10 @@ transform) and `gt5p_rain_a220` (`b016B5B00` `0xA220 -> RET`, `GT5P_NATIVE_RAIN_
 12-plane weather volume test; `"RET"` target added to `spu_native_patch.py`) are verified bit-exact
 (`scripts/test/native_spu_extra.py`, SSE4.1/FMA/AVX2+FMA): Car list `57.9 -> 58.7 FPS` (`6.6% -> 3.2%`
 late), Rome max `32.3 -> 27.5 ms`, Eiger rain `56.8 -> 58.5-59.3 FPS` (`8.1% -> 2.1-3.8%` late, p99
-`35.6 -> 21.1 ms`). Refreshed 4-route PGO `build/gt5.exe`: HSR `59.3 FPS` (`1.8%` late),
+`35.6 -> 21.1 ms`). `gt5p_cull_a3c0` (`b0196FF40` / 2.11 `b017BD780` `0xA3C0 -> RET`,
+`GT5P_NATIVE_A3C0=0` off; SSSE3 `palignr`+`pshufb` triangle-strip index decompressor directly in
+big-endian LS order; 500 states bit-exact across 256 KB LS in `native_spu_extra.py`): Car list
+`58.2 -> 59.1 FPS` (`4.0% -> 2.4%` late), Rome late `6.3% -> 5.4%` (`4.95 -> 4.81 cores`). Refreshed 4-route PGO `build/gt5.exe`: HSR `59.3 FPS` (`1.8%` late),
 Rome `58.7 FPS` (`4.5%` late, `4.43 cores`), Car list `58.8 FPS` (`2.9%` late), Eiger `57.6 FPS`
 (`5.7%` late). See progress-gt5.md.
 

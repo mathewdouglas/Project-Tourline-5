@@ -33,6 +33,12 @@ Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
     - Car list (`GT5P_NATIVE_F970=0 -> 1`): `57.9 -> 58.7 FPS`, late `6.6% -> 3.2%`, p99 `24.3 -> 22.2 ms`, max `64.5 -> 58.4 ms`.
     - Rome (`GT5P_NATIVE_F970=0 -> 1`): `58.4 -> 58.5 FPS`, p99 `23.5 -> 23.1 ms`, max `32.3 -> 27.5 ms`, top `spurs-lane` `60.6% -> 59.5%`, process `4.88 -> 4.82 cores`, final five 5 s buckets `301 301 301 301 301`.
     - Eiger heavy rain: both off `53.7 FPS` (`13.4%` late, p99 `49.9 ms`), `F970=1 / RAIN_VOL=0` `56.8 FPS` (`8.1%` late, p99 `35.6 ms`, top `spurs-lane` `48.3%`), both on **`58.5 / 59.3 FPS`** (`3.8% / 2.1%` late, median `16.8 / 16.7 ms`, p99 `23.4 / 21.1 ms`, top `spurs-lane` `43.8%`).
+- **Native `b0196FF40` `0xA3C0` triangle-strip index decompressor (`src/gt5p_native_cull.c`, `gt5p_cull_a3c0`):**
+  - Jump hook `b0196FF40` / 2.11 `b017BD780` `0xA3C0 -> RET` (rollback `GT5P_NATIVE_A3C0=0`), bypassing the #1 hottest function in `b0196FF40` (`0xA408`, 36.57B PGO block counts). Unpacks nibble-coded strip control bytes and big-endian 16-bit vertex indices directly in big-endian LS byte order via SSSE3 `palignr` + `pshufb` (no 128-bit bswaps or alignment shifts; benefits all tracks, Car List, Garage, and replays on 01.04 and 2.11).
+  - **Exactness:** `scripts/test/native_spu_extra.py` verifies 500 randomized states (every unaligned `src` and `ctrl` offset 0..15) bit-exact across all 256 KB of LS for SSE4.1, FMA, and AVX2+FMA.
+  - **Same-exe A/B (`-Settle 40`, pre-PGO-refresh):**
+    - Car list (`GT5P_NATIVE_A3C0=0 -> 1`): `58.2 -> 59.1 FPS`, late `4.0% -> 2.4%` (-40%), median `16.8 ms`, p99 `22.9 -> 22.0 ms`, 5 s buckets `300 295 300 296 298 299 299`.
+    - Rome (`GT5P_NATIVE_A3C0=0 -> 1`): `58.4 -> 58.4 FPS`, late `6.3% -> 5.4%`, max `30.2 -> 27.6 ms`, process `4.95 -> 4.81 cores`, final five 5 s buckets `301 301 301 301 301`.
 
 - **Refreshed 4-route PGO `build/gt5.exe` (`3eb08955f45f`, 60 s `-FrameTest -Cpu`):**
   - HSR: **59.3 FPS** (`1.8%` late, median `16.7 ms`, p99 `21.4 ms`, `4.90 cores`).

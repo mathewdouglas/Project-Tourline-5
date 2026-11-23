@@ -7,12 +7,22 @@ runtime = Path(os.environ.get("PS3RECOMP_DIR", root.parent / "ps3recomp-tourline
 folder = Path(tempfile.mkdtemp(prefix="spu-extra-", dir=root / "scratch"))
 
 try:
-    # 1. Extract lifted b0196FF40 0xF970_oc
+    # 1. Extract lifted b0196FF40 0xF970_oc and 0xA3C0 + 0xA408_oc
     s_cull = (root / "generated/spu_lifted/b0196FF40/spu_recomp.c").read_text(encoding="utf-8")
     h1 = "static void gt5p_b0196FF40_spu_func_0000F970_oc(spu_context* ctx) {"
     i1 = s_cull.index(h1)
     j1 = s_cull.index("\nstatic void gt5p_b0196FF40_spu_func_0000F970_rpc(", i1)
     (folder / "f970_oc.inc").write_text(s_cull[i1:j1] + "\n", encoding="utf-8")
+
+    ha1 = "void gt5p_b0196FF40_spu_func_0000A3C0(spu_context* ctx) {"
+    ia1 = s_cull.index(ha1)
+    ja1 = s_cull.index("\n/* spu_regpromo begin */", ia1)
+    a3c0_src = "\n".join(l for l in s_cull[ia1:ja1].splitlines() if "/* spu_native_patch */" not in l)
+    a3c0_src = a3c0_src.replace("gt5p_b0196FF40_spu_func_0000A408(ctx)", "gt5p_b0196FF40_spu_func_0000A408_oc(ctx)")
+    ha2 = "static void gt5p_b0196FF40_spu_func_0000A408_oc(spu_context* ctx) {"
+    ia2 = s_cull.index(ha2)
+    ja2 = s_cull.index("\nstatic void gt5p_b0196FF40_spu_func_0000A408_rpc(", ia2)
+    (folder / "a3c0_oc.inc").write_text("static void gt5p_b0196FF40_spu_func_0000A408_oc(spu_context* ctx);\n" + a3c0_src + "\n" + s_cull[ia2:ja2] + "\n", encoding="utf-8")
 
     # 2. Extract lifted b016B5B00 0xA128..0xA2AC
     s_rain = (root / "generated/spu_lifted/b016B5B00/spu_recomp.c").read_text(encoding="utf-8")
@@ -49,6 +59,7 @@ static void gt5p_b016B5B00_spu_func_0000A2A0(spu_context* ctx);
 static void gt5p_b016B5B00_spu_func_0000A2AC(spu_context* ctx);
 
 #include "f970_oc.inc"
+#include "a3c0_oc.inc"
 #include "rain_a220.inc"
 #include "gt5p_native_cull.c"
 #include "gt5p_native_eiger.c"
@@ -175,12 +186,69 @@ static int test_rain_a220(int fused) {
     return 0;
 }
 
+static int test_a3c0(int fused) {
+    static spu_context a, b;
+    static uint8_t lsa[SPU_LS_SIZE], lsb[SPU_LS_SIZE];
+    static const uint8_t tbl_10f40[16][16] = {
+        {0x08,0x09,0x0C,0x0D,0x10,0x11,0x08,0x09,0x08,0x09,0x10,0x11,0x12,0x13,0x08,0x09},
+        {0x08,0x09,0x0C,0x0D,0x10,0x11,0x08,0x09,0x10,0x11,0x0C,0x0D,0x12,0x13,0x10,0x11},
+        {0x08,0x09,0x0C,0x0D,0x10,0x11,0x08,0x09,0x12,0x13,0x14,0x15,0x16,0x17,0x12,0x13},
+        {0x08,0x09,0x0C,0x0D,0x10,0x11,0x08,0x09,0x12,0x13,0x14,0x15,0x16,0x17,0x12,0x13},
+        {0x0C,0x0D,0x0A,0x0B,0x10,0x11,0x0C,0x0D,0x0C,0x0D,0x10,0x11,0x12,0x13,0x0C,0x0D},
+        {0x0C,0x0D,0x0A,0x0B,0x10,0x11,0x0C,0x0D,0x10,0x11,0x0A,0x0B,0x12,0x13,0x10,0x11},
+        {0x0C,0x0D,0x0A,0x0B,0x10,0x11,0x0C,0x0D,0x12,0x13,0x14,0x15,0x16,0x17,0x12,0x13},
+        {0x0C,0x0D,0x0A,0x0B,0x10,0x11,0x0C,0x0D,0x12,0x13,0x14,0x15,0x16,0x17,0x12,0x13},
+        {0x10,0x11,0x12,0x13,0x14,0x15,0x10,0x11,0x10,0x11,0x14,0x15,0x16,0x17,0x10,0x11},
+        {0x10,0x11,0x12,0x13,0x14,0x15,0x10,0x11,0x14,0x15,0x12,0x13,0x16,0x17,0x14,0x15},
+        {0x10,0x11,0x12,0x13,0x14,0x15,0x10,0x11,0x16,0x17,0x18,0x19,0x1A,0x1B,0x16,0x17},
+        {0x10,0x11,0x12,0x13,0x14,0x15,0x10,0x11,0x16,0x17,0x18,0x19,0x1A,0x1B,0x16,0x17},
+        {0x10,0x11,0x12,0x13,0x14,0x15,0x10,0x11,0x10,0x11,0x14,0x15,0x16,0x17,0x10,0x11},
+        {0x10,0x11,0x12,0x13,0x14,0x15,0x10,0x11,0x14,0x15,0x12,0x13,0x16,0x17,0x14,0x15},
+        {0x10,0x11,0x12,0x13,0x14,0x15,0x10,0x11,0x16,0x17,0x18,0x19,0x1A,0x1B,0x16,0x17},
+        {0x10,0x11,0x12,0x13,0x14,0x15,0x10,0x11,0x16,0x17,0x18,0x19,0x1A,0x1B,0x16,0x17}
+    };
+    static const uint8_t c_11190[16] = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+    static const uint8_t c_11440[16] = {4,5,6,7,8,9,10,11,12,13,14,15,12,13,14,15};
+    uint32_t seed = 0xDEADBEEFu;
+    for (int tc = 0; tc < 500; tc++) {
+        memset(&a, 0, sizeof a); memset(lsa, 0, sizeof lsa); a.ls = lsa;
+        memcpy(lsa + 0x10F40, tbl_10f40, sizeof tbl_10f40);
+        memcpy(lsa + 0x11190, c_11190, 16);
+        memcpy(lsa + 0x11440, c_11440, 16);
+        const uint32_t src = 0x18000u + (tc & 15u); /* test every unaligned offset 0..15 */
+        const uint32_t ctrl = 0x20000u + ((tc * 3u) & 15u); /* test every ctrl alignment 0..15 */
+        const uint32_t dst = 0x24000u + ((tc & 3u) * 16u);
+        const uint32_t count = 1u + (xrnd(&seed) % 256u);
+        const uint32_t nblocks = (count + 3u) >> 2;
+        for (uint32_t i = 0; i < nblocks * 24u + 64u; i++) lsa[src + i] = (uint8_t)xrnd(&seed);
+        for (uint32_t i = 0; i < nblocks + 16u; i++) lsa[ctrl + i] = (uint8_t)xrnd(&seed);
+        lsa[ctrl] |= 0x80u; /* valid strip start: hi0 >= 8 */
+        a.gpr[3] = spu_splat_u32(src);
+        a.gpr[4] = spu_splat_u32(ctrl);
+        a.gpr[5] = spu_splat_u32(dst);
+        a.gpr[6] = spu_splat_u32(count);
+        a.gpr[0] = spu_splat_u32(0x7074u);
+        b = a; memcpy(lsb, lsa, sizeof lsa); b.ls = lsb;
+        gt5p_b0196FF40_spu_func_0000A3C0(&a);
+        if (!gt5p_cull_a3c0(&b, fused)) { fprintf(stderr, "FAIL a3c0 bailed tc=%d\n", tc); return 1; }
+        if (memcmp(lsa, lsb, SPU_LS_SIZE) != 0) {
+            fprintf(stderr, "FAIL a3c0 LS mismatch tc=%d count=%u src=%X ctrl=%X dst=%X\n", tc, count, src, ctrl, dst);
+            for (uint32_t i = 0; i < SPU_LS_SIZE; i++) {
+                if (lsa[i] != lsb[i]) { fprintf(stderr, "  first diff at 0x%X (dst+%d): lifted=%02X native=%02X\n", i, (int)i - (int)dst, lsa[i], lsb[i]); break; }
+            }
+            return 1;
+        }
+    }
+    printf("PASS: 500 randomized b0196FF40 0xA3C0 states bit-exact (fused=%d)\n", fused);
+    return 0;
+}
+
 int main(void) {
     int fused = 0;
 #if defined(__FMA__)
     fused = 1;
 #endif
-    return test_f970(fused) | test_rain_a220(fused);
+    return test_f970(fused) | test_rain_a220(fused) | test_a3c0(fused);
 }
 ''', encoding="utf-8")
 
