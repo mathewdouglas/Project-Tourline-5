@@ -4,6 +4,28 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Locked-60 SPU vertex stage, tightened Eiger & cold-cache stutter reduction (2026-11-23, `perf/v0.1.17-locked60`)
+
+- **Native AVX2 vertex transform (`src/gt5p_native_cull.c`, `gt5p_cull_ad30`):**
+  - Jump hook `b0196FF40` `0xAD30 -> 0xAEB4` (and byte-identical 2.11 `b017BD780`, hash `0x76FF30204F3B9A9E`, plus `ab00/af88/b210` for 2.11 parity in `config/targets.json`). Processes 8 vertices per step in AVX2 (with 4-vertex tail and per-lane scalar `fi` fallback for `e_est < 14`), rollback `GT5P_NATIVE_VTX=0`.
+  - Updated `scripts/spu_regpromo.py` to preserve leading `/* spu_native_patch */` hooks so both `--check` scripts pass.
+  - Verified bit-exact across 854 expanded captured states (`scripts/test/native_cull.py --expand`): **2.12x** through doubles (`7686.6 -> 3624.9 us`), **2.81x** fused (`5995.5 -> 2133.0 us`).
+  - Live same-exe A/B on Car list (refreshed 4-route PGO): `57.8 -> 58.8 FPS`, late `4.5% -> 2.9%`, 5 s buckets `292 301 300 296 297 300 299`.
+- **Tightened native Eiger grid pass (`src/gt5p_native_eiger.c`):**
+  - Replaced 4-lane `spu_frest`/`spu_frsqest`/`spu_fi` inside `eg_frest_fi`/`eg_frsqest_fi` with 1-lane scalar bit-ops + LUTs, replaced per-cell `spu_shufb` unpack/pack with direct byte unpacking and pre-packed `q_packed` stores (guarded by `0x8E60`/`0x8E80` invariants), and deduplicated SSE/FMA bodies. Verified bit-exact on 200 randomized states for both SSE4.1 and FMA (`scripts/test/native_eiger.py`). Top `spurs-lane` on Eiger dropped `49.9% -> 42.7%` (`5.89 -> 5.54 cores`).
+- **Cold-cache shader/pipeline stutter reduction (`../ps3recomp-tourline5/libs/video/rsx_d3d12_backend.c`, folded into `patches/ps3recomp-5244db9-local.patch`, single-shot `git apply --check` verified on fresh `5244db9`):**
+  - `rsx_bg_affinity()` now defaults `RSX_SHADER_WORKER_AFFINITY` ON (`=0` rollback), keeping `shc_worker` DXC threads and `pso-worker` off `ppu_sched_mask()` CPUs (matching its comment and `pso_demand_affinity`).
+  - `RSX_PSO_WAIT_CV` (default on, `=0` old `Sleep(1)`): condition-variable wakeup (`s_pso_wait_cv` + generation counter) in `RSX_PSO_WAIT_OFFSCREEN_MS`, signaled by `shc_worker` and `pso_job_build` when `s_frame_waiting != 0`.
+  - `RSX_SHADER_WORKERS_RACE` (default `2`, `=0` unlimited): caps concurrent `shc_worker` DXC compiles during live races (`rsx_race_scope_now() && !s_frame_waiting`) to avoid L3/HT thrashing on SPU cores while keeping full concurrency during menus, loading, and offscreen waits.
+  - 100% cold-cache HSR A/B (`RSX_SHADER_CACHE=scratch\cold-test`, zero files on disk -> menu -> carlist -> HSR race):
+    - Old (`AFFINITY=0, CV=0, RACE_CAP=0`): `>35 ms` `130`, `>50 ms` `57`, `>100 ms` **`19`**, max **`282.6 ms`**, excess(>20 ms) `15,483 ms`.
+    - New (`AFFINITY=1, CV=1, RACE_CAP=2`): `>35 ms` `127`, `>50 ms` **`39 (-32%)`**, `>100 ms` **`7 (-63%)`**, max **`171.3 ms (-39%)`**, excess(>20 ms) `14,630 ms`, cold 60 s race **59.1 FPS** (`2.6%` late, p99 `22.2 ms`), cold CarList menu bucket `191 -> 240` frames/5 s.
+- **Refreshed 4-route PGO `build/gt5.exe` (`3eb08955f45f`, 60 s `-FrameTest -Cpu`):**
+  - HSR: **59.3 FPS** (`1.8%` late, median `16.7 ms`, p99 `21.4 ms`, `4.90 cores`).
+  - Rome: **58.7 FPS** (`4.5%` late, median `16.7 ms`, p99 `23.7 ms`, `4.43 cores`, down from `5.08`).
+  - Car list: **58.8 FPS** (`2.9%` late, median `16.8 ms`, p99 `21.8 ms`).
+  - Eiger heavy rain: **57.6 FPS** (`5.7%` late, median `16.8 ms`, `5.54 cores`).
+
 ## Release 0.1.16 published (2026-11-23)
 
 Tag `v0.1.16` = `a16a092` (branch `release/v0.1.16`): CPU/SPU performance

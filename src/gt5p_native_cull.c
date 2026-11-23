@@ -36,6 +36,7 @@
  * path to be exercised, and varies batch counts and facing flags.
  */
 #include "spu_context.h"
+#include "spu_helpers.h"
 #include <immintrin.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -123,6 +124,13 @@ static inline __m256 nc_fnms(__m256 a, __m256 b, __m256 c, int fused)
     if (fused) return _mm256_fnmadd_ps(a, b, c);
     const __m256 nb = _mm256_xor_ps(b, _mm256_set1_ps(-0.0f));
     return nc_fma(a, nb, c, 0);
+}
+/* a * b - c: spu_fms(a, b, c) = fmaf(a, b, -c) */
+static inline __m256 nc_fms(__m256 a, __m256 b, __m256 c, int fused)
+{
+    if (fused) return _mm256_fmsub_ps(a, b, c);
+    const __m256 nc = _mm256_xor_ps(c, _mm256_set1_ps(-0.0f));
+    return nc_fma(a, b, nc, 0);
 }
 /* the 16-byte host-order lines (x y near far) of 8 vertices -> x[8], y[8], near[8], far[8] */
 static inline void nc_role(const uint32_t* soa, const int32_t* idx, __m256* x, __m256* y, __m256i* nn, __m256i* ff)
@@ -256,6 +264,135 @@ static int nc_decide(const uint8_t* ls, uint32_t list, uint32_t scratch, uint32_
     return kept;
 }
 
+/* Native AVX2 vertex transform for b0196FF40 0xAD30..0xAEB4.
+ * Transforms nv4 (multiple of 4) 16-byte vertices at ls[src_base] into
+ * {screen_x, screen_y, near, far} at ls[dst_base], bit-exact with 0xAD30. */
+static int nc_vtx_transform(uint8_t* ls, uint32_t src_base, uint32_t dst_base, uint32_t nv4,
+                            const spu_context* ctx, int fused)
+{
+    const __m256i bsw = _mm256_setr_epi8(
+        3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12,
+        3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
+    const __m256 wx = _mm256_set1_ps(ctx->gpr[31]._f32[0]), wy = _mm256_set1_ps(ctx->gpr[32]._f32[0]);
+    const __m256 wz = _mm256_set1_ps(ctx->gpr[34]._f32[0]), ww = _mm256_set1_ps(ctx->gpr[35]._f32[0]);
+    const __m256 yx = _mm256_set1_ps(ctx->gpr[39]._f32[0]), yy = _mm256_set1_ps(ctx->gpr[41]._f32[0]);
+    const __m256 yz = _mm256_set1_ps(ctx->gpr[43]._f32[0]), yw = _mm256_set1_ps(ctx->gpr[45]._f32[0]);
+    const __m256 xx = _mm256_set1_ps(ctx->gpr[47]._f32[0]), xy = _mm256_set1_ps(ctx->gpr[49]._f32[0]);
+    const __m256 xz = _mm256_set1_ps(ctx->gpr[50]._f32[0]), xw = _mm256_set1_ps(ctx->gpr[51]._f32[0]);
+    const __m256 zx = _mm256_set1_ps(ctx->gpr[52]._f32[0]), zy = _mm256_set1_ps(ctx->gpr[53]._f32[0]);
+    const __m256 zz = _mm256_set1_ps(ctx->gpr[54]._f32[0]), zw = _mm256_set1_ps(ctx->gpr[55]._f32[0]);
+    const __m256 offY = _mm256_set1_ps(ctx->gpr[28]._f32[0]), offX = _mm256_set1_ps(ctx->gpr[29]._f32[0]);
+    const __m256 one = _mm256_set1_ps(1.0f), c_1_64 = _mm256_set1_ps(0.015625f);
+    const __m256 sgn_m = _mm256_castsi256_ps(_mm256_set1_epi32((int)0x80000000u));
+    const __m256 abs_m = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
+    const __m256i one_bits = _mm256_set1_epi32(0x3F800000);
+    const __m256i c253 = _mm256_set1_epi32(253), c13 = _mm256_set1_epi32(13), c14 = _mm256_set1_epi32(14);
+    const __m256i mFF = _mm256_set1_epi32(0xFF), m1F = _mm256_set1_epi32(0x1F);
+    const __m256i m3FF = _mm256_set1_epi32(0x3FF), m7FFFF = _mm256_set1_epi32(0x7FFFF);
+    const __m256i mBase = _mm256_set1_epi32((int)0xFFFFFC00u);
+    const __m256 inv524k = _mm256_set1_ps(1.0f / 524288.0f);
+    const __m256i zero_i = _mm256_setzero_si256();
+
+    for (uint32_t v = 0; v < nv4; v += 8) {
+        const int tail4 = (v + 4u == nv4);
+        const uint8_t* sp = ls + src_base + 16u * v;
+        const uint8_t* sp2 = tail4 ? sp : (sp + 64);
+        /* Load 8 vertices (low 128-bit lane = v+0..v+3, high 128-bit lane = v+4..v+7). */
+        const __m256i r0 = _mm256_shuffle_epi8(_mm256_setr_m128i(
+            _mm_loadu_si128((const __m128i*)(sp + 0)), _mm_loadu_si128((const __m128i*)(sp2 + 0))), bsw);
+        const __m256i r1 = _mm256_shuffle_epi8(_mm256_setr_m128i(
+            _mm_loadu_si128((const __m128i*)(sp + 16)), _mm_loadu_si128((const __m128i*)(sp2 + 16))), bsw);
+        const __m256i r2 = _mm256_shuffle_epi8(_mm256_setr_m128i(
+            _mm_loadu_si128((const __m128i*)(sp + 32)), _mm_loadu_si128((const __m128i*)(sp2 + 32))), bsw);
+        const __m256i r3 = _mm256_shuffle_epi8(_mm256_setr_m128i(
+            _mm_loadu_si128((const __m128i*)(sp + 48)), _mm_loadu_si128((const __m128i*)(sp2 + 48))), bsw);
+
+        /* Transpose AoS -> SoA (X, Y, Z). */
+        const __m256i t0 = _mm256_unpacklo_epi32(r0, r1), t1 = _mm256_unpackhi_epi32(r0, r1);
+        const __m256i t2 = _mm256_unpacklo_epi32(r2, r3), t3 = _mm256_unpackhi_epi32(r2, r3);
+        const __m256 X = _mm256_castsi256_ps(_mm256_unpacklo_epi64(t0, t2));
+        const __m256 Y = _mm256_castsi256_ps(_mm256_unpackhi_epi64(t0, t2));
+        const __m256 Z = _mm256_castsi256_ps(_mm256_unpacklo_epi64(t1, t3));
+
+        /* 4x3 matrix multiply (exact operand order of 0xAD30). */
+        const __m256 W  = nc_fma(Z, wz, nc_fma(Y, wy, nc_fma(X, wx, ww, fused), fused), fused);
+        const __m256 Zc = nc_fma(Z, zz, nc_fma(Y, zy, nc_fma(X, zx, zw, fused), fused), fused);
+        const __m256 Xc = nc_fma(Z, xz, nc_fma(xy, Y, nc_fma(X, xx, xw, fused), fused), fused);
+        const __m256 Yc = nc_fma(Z, yz, nc_fma(Y, yy, nc_fma(X, yx, yw, fused), fused), fused);
+
+        /* abs(W), -abs(W), frest + fi + 1 Newton-Raphson refinement. */
+        const __m256 absW    = _mm256_and_ps(W, abs_m);
+        const __m256 negAbsW = _mm256_or_ps(W, sgn_m);
+        const __m256i ai     = _mm256_castps_si256(absW);
+        const __m256i exp    = _mm256_and_si256(_mm256_srli_epi32(ai, 23), mFF);
+        const __m256i fidx   = _mm256_and_si256(_mm256_srli_epi32(ai, 18), m1F);
+        const __m256i diff   = _mm256_sub_epi32(c253, exp);
+        const __m256i rexp   = _mm256_slli_epi32(_mm256_and_si256(diff, _mm256_cmpgt_epi32(diff, zero_i)), 23);
+        const __m256i frac   = _mm256_i32gather_epi32((const int*)spu_frest_fraction_lut, fidx, 4);
+        const __m256i est    = _mm256_blendv_epi8(_mm256_or_si256(rexp, frac),
+                                                  _mm256_set1_epi32(0x7FFFFFFF),
+                                                  _mm256_cmpeq_epi32(exp, zero_i));
+        const __m256i e_est  = _mm256_and_si256(_mm256_srli_epi32(est, 23), mFF);
+        __m256 fi_val;
+        if (__builtin_expect(_mm256_movemask_epi8(_mm256_cmpgt_epi32(c14, e_est)), 0)) {
+            uint32_t a8[8], b8[8]; float f8[8];
+            _mm256_storeu_si256((__m256i*)a8, ai);
+            _mm256_storeu_si256((__m256i*)b8, est);
+            for (int k = 0; k < 8; k++) {
+                uint32_t rb = b8[k], ra = a8[k];
+                uint32_t eb = (rb >> 23) & 0xFFu;
+                uint32_t bb = rb & 0xFFFFFC00u;
+                float b_f; memcpy(&b_f, &bb, 4);
+                float st = spu__ldexpf((float)(rb & 0x3FFu), (int)eb - 127 - 13);
+                if (b_f < 0.0f) st = -st;
+                float yf = spu__ldexpf((float)(ra & 0x7FFFFu), -19);
+                f8[k] = b_f - st * yf;
+            }
+            fi_val = _mm256_loadu_ps(f8);
+        } else {
+            const __m256 base    = _mm256_castsi256_ps(_mm256_and_si256(est, mBase));
+            const __m256 scale   = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_sub_epi32(e_est, c13), 23));
+            const __m256 step    = _mm256_mul_ps(_mm256_cvtepi32_ps(_mm256_and_si256(est, m3FF)), scale);
+            const __m256 y_fi    = _mm256_mul_ps(_mm256_cvtepi32_ps(_mm256_and_si256(ai, m7FFFF)), inv524k);
+            fi_val = _mm256_sub_ps(base, _mm256_mul_ps(step, y_fi));
+        }
+
+        const __m256 nr_err  = nc_fnms(absW, fi_val, one, fused);
+        const __m256 invW    = nc_fma(fi_val, nr_err, fi_val, fused);
+
+        /* Clip flags and screen X, Y. */
+        const __m256 w_neg_f = _mm256_castsi256_ps(_mm256_and_si256(
+            _mm256_srai_epi32(_mm256_castps_si256(W), 31), one_bits));
+        const __m256 far_f   = _mm256_cmp_ps(Zc, absW, _CMP_GT_OQ);
+        const __m256 near_f  = _mm256_cmp_ps(negAbsW, Zc, _CMP_GT_OQ);
+        const __m256 sy      = nc_fma(w_neg_f, offY, nc_fms(invW, Yc, c_1_64, fused), fused);
+        const __m256 sx      = nc_fma(w_neg_f, offX, nc_fms(Xc, invW, c_1_64, fused), fused);
+
+        /* Transpose SoA (sx, sy, near, far) -> AoS and store big-endian. */
+        const __m256i o0 = _mm256_unpacklo_epi32(_mm256_castps_si256(sx), _mm256_castps_si256(sy));
+        const __m256i o1 = _mm256_unpackhi_epi32(_mm256_castps_si256(sx), _mm256_castps_si256(sy));
+        const __m256i o2 = _mm256_unpacklo_epi32(_mm256_castps_si256(near_f), _mm256_castps_si256(far_f));
+        const __m256i o3 = _mm256_unpackhi_epi32(_mm256_castps_si256(near_f), _mm256_castps_si256(far_f));
+        const __m256i v0 = _mm256_shuffle_epi8(_mm256_unpacklo_epi64(o0, o2), bsw);
+        const __m256i v1 = _mm256_shuffle_epi8(_mm256_unpackhi_epi64(o0, o2), bsw);
+        const __m256i v2 = _mm256_shuffle_epi8(_mm256_unpacklo_epi64(o1, o3), bsw);
+        const __m256i v3 = _mm256_shuffle_epi8(_mm256_unpackhi_epi64(o1, o3), bsw);
+
+        uint8_t* dp = ls + dst_base + 16u * v;
+        _mm_storeu_si128((__m128i*)(dp + 0),  _mm256_castsi256_si128(v0));
+        _mm_storeu_si128((__m128i*)(dp + 16), _mm256_castsi256_si128(v1));
+        _mm_storeu_si128((__m128i*)(dp + 32), _mm256_castsi256_si128(v2));
+        _mm_storeu_si128((__m128i*)(dp + 48), _mm256_castsi256_si128(v3));
+        if (!tail4) {
+            _mm_storeu_si128((__m128i*)(dp + 64),  _mm256_extracti128_si256(v0, 1));
+            _mm_storeu_si128((__m128i*)(dp + 80),  _mm256_extracti128_si256(v1, 1));
+            _mm_storeu_si128((__m128i*)(dp + 96),  _mm256_extracti128_si256(v2, 1));
+            _mm_storeu_si128((__m128i*)(dp + 112), _mm256_extracti128_si256(v3, 1));
+        }
+    }
+    return 1;
+}
+
 #pragma clang attribute pop
 
 /* the loop's stores. 0 when its counters are not the shape this model knows (nothing written). */
@@ -376,4 +513,102 @@ int gt5p_cull_b210(spu_context* ctx, int fused)
     s_nc_table_hits += taken != 0;
 #endif
     return taken;
+}
+
+static int g_nv_on = -1;
+static __attribute__((noinline)) int nv_init(void)
+{
+    const char* e = getenv("GT5P_NATIVE_VTX");
+    int on = !(e && e[0] == '0');
+    if (on && !nc_cpu_ok()) on = 0;
+#if defined(NC_FORCE_OFF) || defined(NC_VTX_FORCE_OFF)
+    on = 0;
+#endif
+    g_nv_on = on;
+    return on;
+}
+
+int gt5p_cull_ad30(spu_context* ctx, int fused)
+{
+    int on = g_nv_on;
+    if (__builtin_expect(on < 0, 0)) on = nv_init();
+    if (!on) return 0;
+    if (__builtin_expect(ctx->int_enable && (ctx->event_status & ctx->event_mask), 0)) return 0;
+
+    const int32_t neg_bytes = (int32_t)ctx->gpr[33]._u32[0];
+    if (neg_bytes >= 0 || ((-neg_bytes) & 63) != 0) return 0;
+    const uint32_t bytes = (uint32_t)(-neg_bytes);
+    const uint32_t nv4 = bytes >> 4;
+    if (nv4 == 0 || nv4 > 4096u) return 0;
+
+    const uint32_t src_base = (ctx->gpr[10]._u32[0] + (uint32_t)neg_bytes) & SPU_LS_MASK;
+    const uint32_t dst_base = (ctx->gpr[30]._u32[0] + (uint32_t)neg_bytes) & SPU_LS_MASK;
+    if ((src_base & 15u) || (dst_base & 15u)) return 0;
+    if (src_base + bytes > SPU_LS_SIZE || dst_base + bytes > SPU_LS_SIZE) return 0;
+    /* Reject overlapping src/dst or non-standard step pointers. */
+    if (src_base < dst_base + bytes && dst_base < src_base + bytes) return 0;
+    if (ctx->gpr[36]._u32[0] != ctx->gpr[10]._u32[0] + 16u ||
+        ctx->gpr[38]._u32[0] != ctx->gpr[10]._u32[0] + 32u ||
+        ctx->gpr[40]._u32[0] != ctx->gpr[10]._u32[0] + 48u ||
+        ctx->gpr[42]._u32[0] != ctx->gpr[30]._u32[0] + 16u ||
+        ctx->gpr[44]._u32[0] != ctx->gpr[30]._u32[0] + 32u ||
+        ctx->gpr[46]._u32[0] != ctx->gpr[30]._u32[0] + 48u) return 0;
+
+    if (!nc_vtx_transform(ctx->ls, src_base, dst_base, nv4, ctx, fused)) return 0;
+
+    /* Exact epilogue of 0xAD30 before 0xAEB4. */
+    const u128 r3 = ctx->gpr[3], r5_in = ctx->gpr[5], r6_in = ctx->gpr[6], r7_in = ctx->gpr[7], r11 = ctx->gpr[11];
+    const u128 r12 = spu_ila(0x10203);
+    const u128 r50 = spu_fsmbi(0x0);
+    const u128 r15_a = spu_ila(0xAF88);
+    const u128 r35 = spu_fsmbi(0xBF80);
+    const u128 r20_a = spu_ila(0xB210);
+    const u128 r25_a = spu_ls_read128(ctx, r5_in._u32[0] + 0x0);
+    const u128 r5 = spu_ilhu(0x3D00);
+    const u128 r26_a = spu_ls_read128(ctx, 0x110F0);
+    const u128 r13 = spu_il(0);
+    const u128 r27_a = spu_ls_read128(ctx, r7_in._u32[0] + 0x0);
+    const u128 r56 = spu_selb(r15_a, r20_a, r6_in);
+    const u128 r15 = spu_fsmbi(0xBBBB);
+    const u128 r28_a = spu_cgti(r7_in, 0);
+    const u128 r7 = spu_ls_read128(ctx, 0x113A0);
+    const u128 r29_a = spu_shli(r11, 3);
+    const u128 r6 = spu_ilhu(0x3400);
+    const u128 r51 = spu_shufb(r25_a, r25_a, r50);
+    const u128 r31_a = spu_sfi(r11, 4);
+    const u128 r10_a = spu_shlqbyi(r25_a, 1);
+    const u128 r20 = spu_il(1);
+    const u128 r26_b = spu_shufb(r25_a, r25_a, r26_a);
+    const u128 r27_b = spu_and(r27_a, r28_a);
+    const u128 r37 = spu_ls_read128(ctx, r3._u32[0] + 0x0);
+    const u128 r28_b = spu_ai(r29_a, 31);
+    const u128 r25 = spu_ls_read128(ctx, 0x11070);
+    const u128 r29_b = spu_cgtbi(r10_a, 0);
+    const u128 r10_b = spu_shufb(r27_b, r27_b, r50);
+    const u128 r40 = spu_csflt(r26_b, 155);
+    const u128 r26 = spu_ls_read128(ctx, 0x11650);
+    const u128 r27 = spu_il(7);
+    const u128 r52 = spu_shlqbyi(r29_b, 1);
+    const u128 r41 = spu_andi(r28_b, -32);
+    const u128 r36 = spu_shufb(r29_b, r29_b, r50);
+    const u128 r28 = spu_ila(0x10D40);
+    const u128 r49 = spu_ls_read128(ctx, r3._u32[0] + 0x0);
+    const u128 r10_c = spu_cgtbi(r10_b, 0);
+    const u128 r29 = spu_ls_read128(ctx, 0x11060);
+    const u128 r33_a = spu_andi(r31_a, 3);
+    const u128 r31 = spu_rotqbyi(r25, 2);
+    const u128 r10 = spu_andi(r10_c, 16);
+    const u128 r32 = spu_rotqbyi(r13, 0);
+    const u128 r39 = spu_shl(r20, r33_a);
+    const u128 r33 = spu_fsmbi(0xFFFF);
+    const u128 r53 = spu_ila(0xB5D8);
+
+    ctx->gpr[5] = r5; ctx->gpr[6] = r6; ctx->gpr[7] = r7; ctx->gpr[10] = r10;
+    ctx->gpr[12] = r12; ctx->gpr[13] = r13; ctx->gpr[15] = r15; ctx->gpr[20] = r20;
+    ctx->gpr[25] = r25; ctx->gpr[26] = r26; ctx->gpr[27] = r27; ctx->gpr[28] = r28;
+    ctx->gpr[29] = r29; ctx->gpr[31] = r31; ctx->gpr[32] = r32; ctx->gpr[33] = r33;
+    ctx->gpr[35] = r35; ctx->gpr[36] = r36; ctx->gpr[37] = r37; ctx->gpr[39] = r39;
+    ctx->gpr[40] = r40; ctx->gpr[41] = r41; ctx->gpr[49] = r49; ctx->gpr[50] = r50;
+    ctx->gpr[51] = r51; ctx->gpr[52] = r52; ctx->gpr[53] = r53; ctx->gpr[56] = r56;
+    return 1;
 }

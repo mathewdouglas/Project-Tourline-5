@@ -279,6 +279,20 @@ tested and not kept (no Car list gain). Refreshed 4-route PGO `build/gt5.exe`: H
 (`2.2%` late), Car list `58.5 FPS` (`3.2%` late), Eiger `58.5 FPS` (`5.2%` late), Rome `57.7-58.4 FPS`
 (`6.0-8.1%` late). Re-run `spu_native_patch.py` after lifting. See progress-gt5.md.
 
+**Native vertex stage & cold-cache stutter reduction (`perf/v0.1.17-locked60`, 2026-11-23).**
+`src/gt5p_native_cull.c` adds `gt5p_cull_ad30` (`b0196FF40` / 2.11 `b017BD780` `0xAD30 -> 0xAEB4`,
+`GT5P_NATIVE_VTX=0` off; 8-wide AVX2 vertex transform + per-lane scalar `fi` fallback;
+`native_cull.py --expand` 854 states bit-exact: `2.12x` double, `2.81x` fused; `spu_regpromo.py`
+updated to preserve leading `/* spu_native_patch */` hooks). `gt5p_native_eiger.c` uses 1-lane
+scalar `frest`/`frsqest`/`fi` and direct cell unpack/store (`native_eiger.py` 200 states bit-exact).
+In `rsx_d3d12_backend.c`, `RSX_SHADER_WORKER_AFFINITY` now defaults ON (`=0` off), `RSX_PSO_WAIT_CV`
+(`=0` old `Sleep(1)`) wakes offscreen PSO waits immediately on completion, and `RSX_SHADER_WORKERS_RACE`
+(default `2`, `=0` unlimited) caps concurrent DXC compiles during live races: cold HSR `>100 ms`
+hitches `19 -> 7` (-63%), `>50 ms` `57 -> 39` (-32%), max `282.6 -> 171.3 ms` (-39%), cold 60 s race
+`59.1 FPS` (`2.6%` late). Refreshed 4-route PGO `build/gt5.exe`: HSR `59.3 FPS` (`1.8%` late),
+Rome `58.7 FPS` (`4.5%` late, `4.43 cores`), Car list `58.8 FPS` (`2.9%` late), Eiger `57.6 FPS`
+(`5.7%` late). See progress-gt5.md.
+
 **DXC fallback VS & `VS_PENDING` PSO fix (0.1.16, runtime).** `#70`/`#71` logged `[FP] PSO FAIL (0x80070057) vs_idx=-1`:
 when `RSX_SHADER_INTERP_VP=1` drew a `VS_PENDING` draw, `vp_get_fp_pso()` fell back to `s_d3d.vp_vs_blob` (compiled with
 FXC `vs_5_0`) and paired it with a DXC `ps_6_0` pixel shader, which D3D12 rejects with `E_INVALIDARG`. `vp_get_fp_pso()`

@@ -168,7 +168,10 @@ def patch_image(image, blocks, text):
         if err:
             report.append(f"0x{block:X}: {err}")
             continue
-        body = lines[start + 1:end]
+        body = [l for l in lines[start + 1:end] if "/* spu_native_patch */" not in l]
+        insert_after = start
+        while insert_after + 1 < end and "/* spu_native_patch */" in lines[insert_after + 1]:
+            insert_after += 1
         err = check_shape(body)
         if err:
             report.append(f"0x{block:X}: skipped, {err}")
@@ -193,20 +196,21 @@ def patch_image(image, blocks, text):
                if checkable else "")
         redirect = (f"        {{ const int _rpm = GT5P_RP_MODE(); if (_rpm == 1 || (_rpm == 3 && g_spu_exp)) {{ "
                     f"__attribute__((musttail)) return {name}_rp(ctx); }}{chk} }} {MARK}")
-        adds[start] = (redirect, new)
+        adds[start] = (insert_after, redirect, new)
         report.append(f"0x{block:X}: {len(regs)} registers ({len(written)} written)"
                       + ("" if checkable else f", no check variant (calls {', '.join(calls) or 'in exits'})")
                       + (f", spills around {', '.join(calls)}" if calls else ""))
+    after_map = {ins: red for ins, red, _ in adds.values()}
     out = []
     first = min(adds) if adds else None
     for i, line in enumerate(lines):
         if i == first:
             out.extend(PROLOGUE)
         if i in adds:
-            out.extend(adds[i][1])
+            out.extend(adds[i][2])
         out.append(line)
-        if i in adds:
-            out.append(adds[i][0])
+        if i in after_map:
+            out.append(after_map[i])
     return "\n".join(out), report
 
 
