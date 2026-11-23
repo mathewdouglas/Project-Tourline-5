@@ -5,6 +5,16 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Steering wheels with force feedback (not yet tried with a wheel).** GT5
+  has its own Logitech wheel driver; the port now shows it a Logitech G27
+  whatever wheel is plugged in (Logitech, Thrustmaster, Fanatec and others
+  through DirectInput), with the game's own force feedback. F1 > WHEEL sets
+  the rotation, force strength and direction, centring and damping, a
+  minimum force for gear and belt wheels, and pausing forces while F1 is open
+  or the game is in the background. `PS3_WHEEL=off` turns it off. Adapted
+  from gt5-recomp (MIT). See docs/wheels.md.
+
 ## [0.1.15] - 2026-11-21
 
 Fixes cars whose paint and lighting depend on which side of a surface is drawn,

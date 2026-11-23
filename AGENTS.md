@@ -310,6 +310,14 @@ now populates `vp_ps_hold` and skips PSO creation for `VS_PENDING` when `vp_inte
 genuine `vs_idx == -1` fallback matches the active compiler (`RSX_VP_FALLBACK_DXC=0` old). Test:
 `scripts/test/vp_fallback_pso.py` (WARP). See progress-gt5.md.
 
+**Steering wheels (`release/v0.2.0`).** GT5 drives Logitech wheels
+with its own `cellUsbd` driver; the runtime now shows it an emulated G27
+whatever wheel the PC has (DirectInput, force feedback), plus `cellPadLdd*`.
+Adapted from gt5-recomp (MIT, `third_party_notices/gt5-recomp-LICENSE.txt`).
+F1 WHEEL and `[wheel]`; `PS3_WHEEL=off` turns it off. No game addresses.
+Offline unit test (`scripts/test/wheel_g27.py`) passes; G29 live check and
+interactive F1 mapping/presets are next. See [docs/wheels.md](docs/wheels.md).
+
 **Game sound fixed (2026-11-14).** Menus and races were silent: the DSP
 image `j9804ABA8` produced NaN PCM from two SPU arithmetic differences (0 x
 extended-range is 0; single precision truncates). Audio images force-include

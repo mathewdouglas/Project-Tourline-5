@@ -44,6 +44,8 @@ const char* const kEnvNames[] = {
     "PAD_NO_SDL", "PAD_NO_KEYBOARD", "PS3_VERBOSE",
     "GT5P_VBLANK_HZ", "SPURS_LANE_PIN", "SPURS_JL_SPU3", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_STARTUP", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "PAD_SKIP_MOVIE", "RSX_SHADER_INTERP",
     "AUDIO_OUTPUT_CHANNELS", "PS3_USER_NAME",
+    "PS3_WHEEL", "PS3_WHEEL_RANGE", "PS3_WHEEL_FFB", "PS3_WHEEL_FFB_INVERT", "PS3_WHEEL_FFB_SPRING",
+    "PS3_WHEEL_FFB_MIN", "PS3_WHEEL_FFB_MUTE",
 };
 bool g_env_set[sizeof kEnvNames / sizeof kEnvNames[0]];
 
@@ -184,6 +186,15 @@ void read_lane_cores(toml::node_view<const toml::node> v, int& out)
     warn("performance.lane_pinning must be \"off\", \"hint\" or \"strict\"; keeping the default");
 }
 
+void read_int_range(toml::node_view<const toml::node> v, const char* key, int lo, int hi, int& out)
+{
+    if (!v) return;
+    const auto n = v.value_exact<int64_t>();
+    if (n && *n >= lo && *n <= hi) { out = (int)*n; return; }
+    warn(std::string(key) + " must be an integer from " + std::to_string(lo) + " to " + std::to_string(hi)
+         + "; keeping " + std::to_string(out));
+}
+
 void read_bool(toml::node_view<const toml::node> v, const char* key, bool& out)
 {
     if (!v) return;
@@ -223,6 +234,8 @@ bool known_key(std::string_view section, std::string_view key)
         {"input", "adaptive_triggers"},
         {"input", "trigger_rumble"},
         {"input", "sdl_rumble"},
+        {"wheel", "enabled"}, {"wheel", "rotation"}, {"wheel", "ffb_strength"}, {"wheel", "ffb_invert"},
+        {"wheel", "ffb_springs"}, {"wheel", "ffb_min_force"}, {"wheel", "ffb_pause"},
         {"game", "skip_movie"},       {"game", "smooth_colour"},    {"game", "anisotropy"}, {"game", "player_name"},
         {"audio", "output"},
         {"performance", "vblank_hz"}, {"performance", "lane_pinning"},
@@ -342,6 +355,13 @@ void parse_into(const toml::table& tbl, Gt5pSettings& s)
         if (v && gt5p_player_name_ok(*v)) s.player_name = *v;
         else warn("game.player_name must be 1 to 16 letters, digits, spaces or . - _ ' characters; keeping \"User\"");
     }
+    read_bool(tbl["wheel"]["enabled"], "wheel.enabled", s.wheel);
+    read_int_range(tbl["wheel"]["rotation"], "wheel.rotation", 90, 3600, s.wheel_range);
+    read_int_range(tbl["wheel"]["ffb_strength"], "wheel.ffb_strength", 0, 100, s.ffb_strength);
+    read_bool(tbl["wheel"]["ffb_invert"], "wheel.ffb_invert", s.ffb_invert);
+    read_int_range(tbl["wheel"]["ffb_springs"], "wheel.ffb_springs", 0, 200, s.ffb_springs);
+    read_int_range(tbl["wheel"]["ffb_min_force"], "wheel.ffb_min_force", 0, 50, s.ffb_min_force);
+    read_bool(tbl["wheel"]["ffb_pause"], "wheel.ffb_pause", s.ffb_pause);
     read_audio_output(tbl["audio"]["output"], s.audio_channels);
     read_vblank(tbl["performance"]["vblank_hz"], s.vblank_hz100);
     read_lane_cores(tbl["performance"]["lane_pinning"], s.lane_cores);
@@ -383,6 +403,14 @@ void apply_env(const Gt5pSettings& s)
     snprintf(buf, sizeof buf, "%d", (int)s.sdl_rumble); set_default_env("PAD_SDL_RUMBLE", buf);
     set_default_env("PAD_KEYMAP", gt5p_keymap_format(s.keys).c_str());
     set_default_env("GT5P_GLYPHS", kPromptNames[s.button_prompts >= 0 && s.button_prompts < 5 ? s.button_prompts : 0]);
+    /* The steering wheel (ps3recomp libs/hardware/wheel_host_win.c). */
+    set_default_env("PS3_WHEEL", s.wheel ? "auto" : "off");
+    snprintf(buf, sizeof buf, "%d", s.wheel_range); set_default_env("PS3_WHEEL_RANGE", buf);
+    snprintf(buf, sizeof buf, "%d", s.ffb_strength); set_default_env("PS3_WHEEL_FFB", buf);
+    set_default_env("PS3_WHEEL_FFB_INVERT", s.ffb_invert ? "1" : "0");
+    snprintf(buf, sizeof buf, "%d", s.ffb_springs); set_default_env("PS3_WHEEL_FFB_SPRING", buf);
+    snprintf(buf, sizeof buf, "%d", s.ffb_min_force); set_default_env("PS3_WHEEL_FFB_MIN", buf);
+    set_default_env("PS3_WHEEL_FFB_MUTE", s.ffb_pause ? "1" : "0");
     /* The screen whose first read starts the presses (cellPad.c). */
     /* GT5P_MOVIE_SCREEN: the target's opening-movie screen (src/main.cpp,
      * config/targets.json movie_screen); Prologue's script name otherwise. */
@@ -448,6 +476,22 @@ void reflect_env(Gt5pSettings& s)
         s.sdl_rumble = *e && !*end && n >= 0 && n <= 1 ? (int)n : 0;
     }
     if (const char* e = getenv("PAD_KEYMAP")) gt5p_keymap_parse(e, s.keys);
+    if (const char* e = getenv("PS3_WHEEL"))
+        s.wheel = !(!strcmp(e, "off") || !strcmp(e, "0") || !strcmp(e, "no") || !strcmp(e, "OFF"));
+    {   /* the runtime clamps these the same way */
+        auto num = [](const char* name, int lo, int hi, int& out) {
+            if (const char* e = getenv(name)) {
+                char* end; const long n = strtol(e, &end, 10);
+                if (*e && !*end) out = n < lo ? lo : n > hi ? hi : (int)n;
+            }
+        };
+        num("PS3_WHEEL_RANGE", 90, 3600, s.wheel_range);
+        num("PS3_WHEEL_FFB", 0, 100, s.ffb_strength);
+        num("PS3_WHEEL_FFB_SPRING", 0, 200, s.ffb_springs);
+        num("PS3_WHEEL_FFB_MIN", 0, 50, s.ffb_min_force);
+    }
+    if (const char* e = getenv("PS3_WHEEL_FFB_INVERT")) s.ffb_invert = e[0] == '1';
+    if (const char* e = getenv("PS3_WHEEL_FFB_MUTE")) s.ffb_pause = e[0] != '0';
     { const char* e = getenv("PAD_SKIP_MOVIE"); s.skip_movie = e && *e && strcmp(e, "0") != 0; }
     { const char* e = getenv("RSX_HIGH_PRECISION"); s.smooth_colour = !(e && e[0] == '0'); }
     if (const char* e = getenv("PS3_USER_NAME"); e && gt5p_player_name_ok(e)) s.player_name = e;
@@ -593,6 +637,27 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "# Apostrophe, Comma, Period, Minus, Equals, Semicolon, Slash, Backquote,\n"
          "# LeftBracket, Backslash, RightBracket, or None. [PAD_KEYMAP]\n"
          << keyboard_lines(s) <<
+         "\n"
+         "[wheel]\n"
+         "# A steering wheel (Logitech, Thrustmaster, Fanatec, ...) is shown to the game\n"
+         "# as a Logitech G27, with force feedback through DirectInput. Plug it in before\n"
+         "# starting. false: don't look for one. Restart to apply. [PS3_WHEEL]\n"
+         "enabled = " << (s.wheel ? "true" : "false") << "\n"
+         "# Degrees your wheel turns lock to lock, as set in its own software (G HUB:\n"
+         "# 900). The game asks for its own rotation per car. Restart to apply. [PS3_WHEEL_RANGE]\n"
+         "rotation = " << s.wheel_range << "\n"
+         "# Force feedback strength, 0 (off) to 100 percent. Applies live. [PS3_WHEEL_FFB]\n"
+         "ffb_strength = " << s.ffb_strength << "\n"
+         "# true if the wheel pulls away from the centre instead of towards it. [PS3_WHEEL_FFB_INVERT]\n"
+         "ffb_invert = " << (s.ffb_invert ? "true" : "false") << "\n"
+         "# The game's centring spring, damping and friction, 0 to 200 percent. [PS3_WHEEL_FFB_SPRING]\n"
+         "ffb_springs = " << s.ffb_springs << "\n"
+         "# Lift small steering forces to at least this percent, 0 to 50: gear and belt\n"
+         "# wheels (G29, G920, T300) hide weak forces in their own friction. [PS3_WHEEL_FFB_MIN]\n"
+         "ffb_min_force = " << s.ffb_min_force << "\n"
+         "# Stop all forces while F1 is open or the game window is in the background.\n"
+         "# Restart to apply. [PS3_WHEEL_FFB_MUTE]\n"
+         "ffb_pause = " << (s.ffb_pause ? "true" : "false") << "\n"
          "\n"
          "[game]\n"
          "# Skip the opening movie (it plays only when the TV content is installed):\n"

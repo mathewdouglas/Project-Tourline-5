@@ -58,6 +58,7 @@ extern volatile int g_pad_input_blocked;        /* cellPad.c */
 extern volatile uint32_t g_pad_menu_buttons;    /* cellPad.c: bit 16 = PS button */
 extern volatile uint32_t g_pad_inject_buttons;  /* cellPad.c: pressed for the title on port 0 */
 void pad_set_keyboard_enabled(int on);          /* cellPad.c */
+void wheel_host_set_ffb(int gain, int invert, int spring, int min_force);   /* wheel_host_win.c */
 void rsx_d3d12_set_present_sync(int interval);  /* rsx_d3d12_backend.c */
 void gt5p_shader_indicator_enable(int on);      /* gt5p_shaderbusy.cpp */
 void gt5p_preload_indicator_enable(int on);
@@ -144,6 +145,21 @@ const wchar_t* const kKeyHelp =
     L"Cross or Enter, then press the key for this button. Escape cancels. A key another "
     L"button has moves to it. Used when no controller is connected.";
 #define KEY_ITEM(n, label) { L"KEYBOARD", label, kKeyHelp, "PAD_KEYMAP", {}, key_get<n>, key_set<n>, key_apply<n>, n }
+
+/* The wheel's force-feedback rows apply live: each sends all four values, the
+ * others as last sent (from the settings in effect at first). */
+enum { kFfbGain, kFfbInvert, kFfbSpring, kFfbMin };
+void wheel_ffb_apply(int which, int v)
+{
+    static int cur[4] = { -1 };
+    if (cur[0] < 0) {
+        const Gt5pSettings& s = gt5p_settings();
+        cur[kFfbGain] = s.ffb_strength; cur[kFfbInvert] = s.ffb_invert ? 1 : 0;
+        cur[kFfbSpring] = s.ffb_springs; cur[kFfbMin] = s.ffb_min_force;
+    }
+    cur[which] = v;
+    wheel_host_set_ffb(cur[kFfbGain], cur[kFfbInvert], cur[kFfbSpring], cur[kFfbMin]);
+}
 
 const std::vector<Item>& items()
 {
@@ -283,6 +299,54 @@ const std::vector<Item>& items()
         KEY_ITEM(4, L"L1"),     KEY_ITEM(5, L"R1"),     KEY_ITEM(6, L"L2"),     KEY_ITEM(7, L"R2"),
         KEY_ITEM(8, L"L3"), KEY_ITEM(9, L"R3"), KEY_ITEM(10, L"Start"), KEY_ITEM(11, L"Select"),
         KEY_ITEM(12, L"Up"),    KEY_ITEM(13, L"Down"),  KEY_ITEM(14, L"Left"),  KEY_ITEM(15, L"Right"),
+        { L"WHEEL", L"Steering wheel",
+          L"A steering wheel (Logitech, Thrustmaster, Fanatec and others) is shown to the game as a "
+          L"Logitech G27, with force feedback. Plug it in before starting; a controller or the keyboard "
+          L"still works alongside. Restart to apply.",
+          "PS3_WHEEL", kOnOff,
+          [](const UiSettings& s) { return s.wheel ? 1 : 0; },
+          [](UiSettings& s, int v) { s.wheel = v != 0; }, nullptr },
+        { L"WHEEL", L"Wheel rotation",
+          L"Degrees your wheel turns lock to lock, as set in its own software (Logitech G HUB: 900). "
+          L"The game sets each car's own rotation from this. Restart to apply.",
+          "PS3_WHEEL_RANGE", { {270, L"270"}, {360, L"360"}, {540, L"540"}, {720, L"720"}, {900, L"900"}, {1080, L"1080"} },
+          [](const UiSettings& s) { return s.wheel_range; },
+          [](UiSettings& s, int v) { s.wheel_range = v; }, nullptr },
+        { L"WHEEL", L"Force feedback strength",
+          L"How hard the game's forces push, from Off to 100%. The game's own Options also has a "
+          L"force feedback setting; both apply. Applies live.",
+          "PS3_WHEEL_FFB", { {0, L"Off"}, {10, L"10%"}, {20, L"20%"}, {30, L"30%"}, {40, L"40%"}, {50, L"50%"},
+                             {60, L"60%"}, {70, L"70%"}, {80, L"80%"}, {90, L"90%"}, {100, L"100%"} },
+          [](const UiSettings& s) { return s.ffb_strength; },
+          [](UiSettings& s, int v) { s.ffb_strength = v; },
+          [](int v) { wheel_ffb_apply(kFfbGain, v); } },
+        { L"WHEEL", L"Force direction",
+          L"Inverted if the wheel pulls away from the centre in a corner instead of towards it. Applies live.",
+          "PS3_WHEEL_FFB_INVERT", { {0, L"Normal"}, {1, L"Inverted"} },
+          [](const UiSettings& s) { return s.ffb_invert ? 1 : 0; },
+          [](UiSettings& s, int v) { s.ffb_invert = v != 0; },
+          [](int v) { wheel_ffb_apply(kFfbInvert, v); } },
+        { L"WHEEL", L"Centring and damping",
+          L"The game's centring spring, damping and friction, as a share of what it asks for. Lower "
+          L"makes the wheel lighter at low speed and in the menus. Applies live.",
+          "PS3_WHEEL_FFB_SPRING", { {0, L"Off"}, {25, L"25%"}, {50, L"50%"}, {75, L"75%"}, {100, L"100%"},
+                                    {125, L"125%"}, {150, L"150%"}, {200, L"200%"} },
+          [](const UiSettings& s) { return s.ffb_springs; },
+          [](UiSettings& s, int v) { s.ffb_springs = v; },
+          [](int v) { wheel_ffb_apply(kFfbSpring, v); } },
+        { L"WHEEL", L"Minimum force",
+          L"Lifts small steering forces to at least this much, so gear and belt wheels (G29, G920, T300) "
+          L"don't hide them in their own friction. Off for direct-drive wheels. Applies live.",
+          "PS3_WHEEL_FFB_MIN", { {0, L"Off"}, {5, L"5%"}, {10, L"10%"}, {15, L"15%"}, {20, L"20%"}, {30, L"30%"} },
+          [](const UiSettings& s) { return s.ffb_min_force; },
+          [](UiSettings& s, int v) { s.ffb_min_force = v; },
+          [](int v) { wheel_ffb_apply(kFfbMin, v); } },
+        { L"WHEEL", L"Pause forces in background",
+          L"No forces while this page is open or the game window is not in front, so the wheel never "
+          L"pulls while you are elsewhere. Restart to apply.",
+          "PS3_WHEEL_FFB_MUTE", kOnOff,
+          [](const UiSettings& s) { return s.ffb_pause ? 1 : 0; },
+          [](UiSettings& s, int v) { s.ffb_pause = v != 0; }, nullptr },
         { L"GAME", L"Game version",
           L"Restart into an installed version. Each keeps separate game data, saves and shaders. 2.11 is experimental. Set it up through the launcher before switching.",
           "GT5P_GAME_VERSION", {{104,L"GT5 01.04"},{211,L"GT5 2.11 (experimental)"}},

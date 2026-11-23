@@ -53,6 +53,16 @@ struct Gt5pSettings {
     int keys[16] = { 'Z', 'X', 'A', 'S', 'Q', 'W', '1', '2', 0, 0,
                      0x0D /* Enter */, 0x09 /* Tab */, 0x26, 0x28, 0x25, 0x27 /* arrows */ };
 
+    /* [wheel]: a steering wheel shown to the game as a Logitech G27
+     * (ps3recomp libs/hardware/wheel_*.c, docs/wheels.md). */
+    bool wheel = true;          /* look for a wheel (PS3_WHEEL=off: never) */
+    int wheel_range = 900;      /* degrees the PC wheel turns, lock to lock (PS3_WHEEL_RANGE) */
+    int ffb_strength = 80;      /* force feedback strength, 0..100 % (PS3_WHEEL_FFB) */
+    bool ffb_invert = false;    /* the game's steering force the other way (PS3_WHEEL_FFB_INVERT) */
+    int ffb_springs = 100;      /* spring, damper and friction effects, 0..200 % (PS3_WHEEL_FFB_SPRING) */
+    int ffb_min_force = 0;      /* minimum steering force, 0..50 % (PS3_WHEEL_FFB_MIN) */
+    bool ffb_pause = true;      /* no forces while F1 is open or the game is in the background (PS3_WHEEL_FFB_MUTE) */
+
     /* [game] */
     bool skip_movie = false;    /* press through the opening movie (PAD_SKIP_MOVIE) */
     bool smooth_colour = true;  /* 16-bit targets, no dither noise (RSX_HIGH_PRECISION) */
