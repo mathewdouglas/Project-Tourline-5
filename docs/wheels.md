@@ -1,11 +1,12 @@
 # Steering wheels
 
-Status (2026-11-23, branch `release/v0.2.0`): built into `gt5.exe` and verified
-in-game on 01.04 with `PS3_WHEEL=virtual` (High Speed Ring race: G27 attached,
-`cellPadLddRegisterController -> port 4`, wheel reports polled at ~112 Hz, FFB
-`dl+play`/`stop` and shift-LED commands decoded). **Not yet tried on real wheel
-hardware** — the first live check is a Logitech G29 (the user's). Treat hardware
-feel and force direction below as hypotheses until that run is recorded here.
+Status (2026-11-23, branch `release/v0.2.0`): built into `gt5.exe` and **verified
+on real hardware (Logitech G29, `046D:C24F`)** on GT5 01.04 — USB attach,
+steering, pedals (clutch on `S0`), buttons, live force feedback, `F1 > WHEEL`
+presets/FFB tuning, and `F1 > WHEEL MAP` interactive binding all work. Note: on
+Windows, Logitech G29/G923 require **Logitech G HUB** (not Logitech Gaming
+Software) to switch out of PS4 mode (`046D:C260`) and serve DirectInput FFB;
+`F1 > WHEEL` now detects both conditions and shows an explicit hint.
 
 ## How GT5 uses a wheel
 
@@ -94,12 +95,10 @@ other wheels may need `PS3_WHEEL_PEDALS`/`_BUTTONS`.
   `[cellUsbd] Logitech G27 (emulated) attached to the game's driver`,
   `[cellPad] LddRegisterController -> port 4`, ~112 reports/s, live FFB
   `dl+play`/`stop` and shift-LED commands received cleanly at 60 FPS.
-- Still owed — the G29 hardware check:
-  - the attach line `[cellUsbd] Logitech G27 (emulated) attached`;
-  - steering and pedals in a race;
-  - the direction of the steering force (invert if it pulls away from centre);
-  - strength and minimum force on a belt/gear wheel;
-  - the pause when F1 opens or the window loses focus.
+- **Live hardware check passed (Logitech G29, `046D:C24F`, GT5 01.04):**
+  - Attached cleanly as `[cellUsbd] Logitech G27 (emulated) attached to the game's driver` (`046D:C24F`, 900°, 25 buttons, POV d-pad, axes `X Y RZ S0`).
+  - Steering, pedals, buttons, and full force feedback (with Logitech G HUB running) verified in-game.
+  - Caught & fixed: G29 clutch axis is `S0` (not `Z`); added automatic detection + F1 UI hints for G29/G923 stuck in PS4 mode (`046D:C260`/`C266`) and DirectInput FFB `E_NOTIMPL` when G HUB is not running.
 
 ## Open
 

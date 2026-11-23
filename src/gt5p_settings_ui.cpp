@@ -66,6 +66,7 @@ struct WheelRawUi {
     float axis[8];
     uint32_t buttons;
     int pov;
+    char hint[128];
 };
 int  wheel_host_raw(WheelRawUi* out);           /* wheel_host_win.c */
 void wheel_host_set_ffb(int gain, int invert, int spring, int min_force);   /* wheel_host_win.c */
@@ -210,7 +211,7 @@ void wheel_apply_preset_values(UiSettings& s, int p)
     case kPresetG29:
         s.wheel_preset = "g29";
         s.wheel_steer = "X";
-        s.wheel_pedals = "throttle=Y,brake=RZ,clutch=Z";
+        s.wheel_pedals = "throttle=Y,brake=RZ,clutch=S0";
         s.wheel_buttons = "cross=1,square=2,circle=3,triangle=4,r1=5,l1=6,r2=7,l2=8,select=9,start=10,r3=11,l3=12";
         break;
     case kPresetG920:
@@ -953,7 +954,7 @@ void wheel_invert_pedal_slot(int id)
     std::string cur = wheel_kv_get(s_edit.wheel_pedals, pk);
     if (cur.empty() || _stricmp(cur.c_str(), "NONE") == 0) {
         /* Start from default G29 axis if unset, then invert. */
-        static const char* const def_ax[3] = { "Y", "RZ", "Z" };
+        static const char* const def_ax[3] = { "Y", "RZ", "S0" };
         cur = def_ax[slot - 1];
     }
     std::string up = cur;
@@ -1397,20 +1398,24 @@ void paint(HDC dc)
     if (wheel_page() || wheel_map_page()) {
         WheelRawUi raw = {};
         if (wheel_host_raw(&raw) && raw.connected) {
-            char buf[256];
+            char buf[320];
             int held_btn = 0;
             for (int b = 0; b < 32; b++) if (raw.buttons & (1u << b)) { held_btn = b + 1; break; }
-            if (held_btn)
-                snprintf(buf, sizeof buf, "Wheel: %s (%04X:%04X%s)  X:%.2f Y:%.2f Z:%.2f RZ:%.2f  Btn %d",
+            if (raw.hint[0])
+                snprintf(buf, sizeof buf, "Wheel: %s (%04X:%04X) -- %s", raw.name, raw.vid, raw.pid, raw.hint);
+            else if (held_btn)
+                snprintf(buf, sizeof buf, "Wheel: %s (%04X:%04X%s)  X:%.2f Y:%.2f RZ:%.2f S0:%.2f  Btn %d",
                          raw.name, raw.vid, raw.pid, raw.ffb ? " FFB" : "",
-                         raw.axis[0], raw.axis[1], raw.axis[2], raw.axis[5], held_btn);
+                         raw.axis[0], raw.axis[1], raw.axis[5], raw.axis[6], held_btn);
             else
-                snprintf(buf, sizeof buf, "Wheel: %s (%04X:%04X%s)  X:%.2f Y:%.2f Z:%.2f RZ:%.2f",
+                snprintf(buf, sizeof buf, "Wheel: %s (%04X:%04X%s)  X:%.2f Y:%.2f RZ:%.2f S0:%.2f",
                          raw.name, raw.vid, raw.pid, raw.ffb ? " FFB" : "",
-                         raw.axis[0], raw.axis[1], raw.axis[2], raw.axis[5]);
+                         raw.axis[0], raw.axis[1], raw.axis[5], raw.axis[6]);
             wheel_line = widen(buf);
+        } else if (raw.hint[0]) {
+            wheel_line = L"Wheel: " + widen(raw.hint);
         } else {
-            wheel_line = L"Wheel: none detected (plug in before starting, or pick a preset)";
+            wheel_line = L"Wheel: none detected -- plug in your wheel and ensure its PC software (e.g. Logitech G HUB) is running.";
         }
     }
     if (s_sel >= 0 && s_sel < (int)r.size() && r[s_sel] >= 0) {
@@ -2498,7 +2503,8 @@ DWORD WINAPI ui_thread(LPVOID)
                     w_next = now + 66;   /* ~15 Hz telemetry refresh */
                     WheelRawUi wr = {};
                     wheel_host_raw(&wr);
-                    bool diff = wr.connected != w_last.connected || wr.buttons != w_last.buttons;
+                    bool diff = wr.connected != w_last.connected || wr.buttons != w_last.buttons
+                             || strcmp(wr.hint, w_last.hint) != 0;
                     if (!diff && wr.connected)
                         for (int a = 0; a < 8; a++)
                             if (fabsf(wr.axis[a] - w_last.axis[a]) >= 0.02f) { diff = true; break; }

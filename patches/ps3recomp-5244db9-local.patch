@@ -7414,10 +7414,10 @@ index 6d8dd233..f2f478fc 100644
  }
 diff --git a/libs/hardware/wheel.h b/libs/hardware/wheel.h
 new file mode 100644
-index 00000000..582fc3a9
+index 00000000..5229983e
 --- /dev/null
 +++ b/libs/hardware/wheel.h
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,138 @@
 +/*
 + * ps3recomp - steering wheel emulation (Logitech G27 on cellUsbd)
 + *
@@ -7537,6 +7537,7 @@ index 00000000..582fc3a9
 +    float axis[8];      /* X Y Z RX RY RZ S0 S1, 0..1 */
 +    u32   buttons;      /* first 32 buttons, bit i = button i + 1 */
 +    int   pov;          /* hundredths of a degree, -1 centred */
++    char  hint[128];    /* actionable driver/setup hint when disconnected or FFB refused */
 +} WheelRaw;
 +int  wheel_host_raw(WheelRaw* out);       /* returns out->connected */
 +
@@ -7977,10 +7978,10 @@ index 00000000..71b8264a
 +}
 diff --git a/libs/hardware/wheel_host_win.c b/libs/hardware/wheel_host_win.c
 new file mode 100644
-index 00000000..a8df1c95
+index 00000000..42cc0706
 --- /dev/null
 +++ b/libs/hardware/wheel_host_win.c
-@@ -0,0 +1,1229 @@
+@@ -0,0 +1,1296 @@
 +/*
 + * ps3recomp - the PC steering wheel behind the emulated G27 (see wheel.h)
 + *
@@ -8165,7 +8166,9 @@ index 00000000..a8df1c95
 +        m->pedal[0] = AX_RZ; m->pedal[1] = AX_Y; m->pedal[2] = AX_S0;
 +    }
 +    if (vid == 0x046D) {
-+        if (pid == 0xC262 || pid == 0xC26D || pid == 0xC26E) {   /* G920, G923 Xbox */
++        if (pid == 0xC24F || pid == 0xC266 || pid == 0xC267) {   /* G29, G923 PlayStation: clutch on Slider 0 */
++            m->pedal[2] = AX_S0;
++        } else if (pid == 0xC262 || pid == 0xC26D || pid == 0xC26E) {   /* G920, G923 Xbox */
 +            static const int xb[] = {
 +                WHEEL_BTN_CROSS, WHEEL_BTN_CIRCLE, WHEEL_BTN_SQUARE, WHEEL_BTN_TRIANGLE,
 +                WHEEL_BTN_R1, WHEEL_BTN_L1, WHEEL_BTN_START, WHEEL_BTN_SELECT,
@@ -8306,6 +8309,7 @@ index 00000000..a8df1c95
 +static LPDIRECTINPUTDEVICE8W s_dev;
 +static HWND                  s_hwnd;
 +static int                   s_has_ffb;
++static char                  s_ffb_hint[128];
 +static u16                   s_vid, s_pid;
 +static char                  s_name[260];
 +static WheelMap              s_map;
@@ -8407,6 +8411,56 @@ index 00000000..a8df1c95
 +    ReleaseSRWLockExclusive(&s_pub_lock);
 +}
 +
++/* Detect Logitech G29/G923 sitting in pre-init PS4 USB mode (046D:C260 / C266)
++ * when DirectInput sees no wheel, so F1 > WHEEL can tell the player to open G HUB. */
++static void check_ps4_mode_hint(void)
++{
++    typedef DWORD (WINAPI *GetSizeFn)(PULONG, PCSTR, ULONG);
++    typedef DWORD (WINAPI *GetListFn)(PCSTR, PSTR, ULONG, ULONG);
++    static HMODULE cfg;
++    static GetSizeFn pSize;
++    static GetListFn pList;
++    static int init;
++    if (!init) {
++        init = 1;
++        cfg = LoadLibraryA("cfgmgr32.dll");
++        if (cfg) {
++            pSize = (GetSizeFn)GetProcAddress(cfg, "CM_Get_Device_ID_List_SizeA");
++            pList = (GetListFn)GetProcAddress(cfg, "CM_Get_Device_ID_ListA");
++        }
++    }
++    char hint[128] = "";
++    if (pSize && pList) {
++        ULONG len = 0;
++        if (pSize(&len, "USB", 0x00000100 /* CM_GETIDLIST_FILTER_PRESENT */ | 0x00000001 /* ENUMERATOR */) == 0 && len > 2 && len < 1024 * 1024) {
++            char* buf = (char*)malloc(len);
++            if (buf) {
++                if (pList("USB", buf, len, 0x00000101) == 0) {
++                    for (const char* p = buf; *p; p += strlen(p) + 1) {
++                        if (contains_ci(p, "vid_046d&pid_c260")) {
++                            snprintf(hint, sizeof hint, "Logitech G29 in PS4 mode -- open Logitech G HUB to switch to PC mode");
++                            break;
++                        }
++                        if (contains_ci(p, "vid_046d&pid_c266")) {
++                            snprintf(hint, sizeof hint, "Logitech G923 in PS4 mode -- open Logitech G HUB to switch to PC mode");
++                            break;
++                        }
++                    }
++                }
++                free(buf);
++            }
++        }
++    }
++    static int logged;
++    if (hint[0] && !logged) {
++        logged = 1;
++        fprintf(stderr, "[wheel] %s\n", hint);
++    }
++    AcquireSRWLockExclusive(&s_pub_lock);
++    snprintf(s_raw.hint, sizeof s_raw.hint, "%s", hint);
++    ReleaseSRWLockExclusive(&s_pub_lock);
++}
++
 +static int dev_open(void)
 +{
 +    Cand best; memset(&best, 0, sizeof best);
@@ -8416,7 +8470,8 @@ index 00000000..a8df1c95
 +        return 0;
 +    if (s_list && !s_enum_count) fprintf(stderr, "[wheel] DirectInput sees no game controllers\n");
 +    s_list = 0;   /* list once */
-+    if (!best.score) return 0;
++    if (!best.score) { check_ps4_mode_hint(); return 0; }
++    s_ffb_hint[0] = 0;
 +    if (FAILED(IDirectInput8_CreateDevice(s_di, &best.inst, &s_dev, NULL))) { s_dev = NULL; return 0; }
 +    snprintf(s_name, sizeof s_name, "%s", best.name);
 +    s_vid = best.vid; s_pid = best.pid;
@@ -8448,7 +8503,19 @@ index 00000000..a8df1c95
 +        set_prop_dword(DIPROP_FFGAIN, DIPH_DEVICE, 0, (DWORD)s_gain * 100);
 +    }
 +    IDirectInputDevice8_Acquire(s_dev);
-+    if (s_has_ffb) IDirectInputDevice8_SendForceFeedbackCommand(s_dev, DISFFC_RESET);
++    if (s_has_ffb) {
++        HRESULT hr_reset = IDirectInputDevice8_SendForceFeedbackCommand(s_dev, DISFFC_RESET);
++        if (hr_reset == E_NOTIMPL) {
++            s_has_ffb = 0;
++            if (s_vid == 0x046D)
++                snprintf(s_ffb_hint, sizeof s_ffb_hint,
++                         "FFB unavailable (E_NOTIMPL) -- open Logitech G HUB (not Logitech Gaming Software)");
++            else
++                snprintf(s_ffb_hint, sizeof s_ffb_hint,
++                         "FFB unavailable (E_NOTIMPL) -- check your wheel's PC software");
++            fprintf(stderr, "[wheel] %s\n", s_ffb_hint);
++        }
++    }
 +
 +    /* An axis the wheel doesn't have reads 0, which for a pedal that rests at
 +     * the top would be "floored": a two-pedal wheel's missing clutch would hold
@@ -8692,6 +8759,7 @@ index 00000000..a8df1c95
 +        for (int a = 0; a < AX_COUNT && a < 8; a++) raw.axis[a] = (float)axis_val(&js, a) / 65535.f;
 +        for (int i = 0; i < 32; i++) if (js.rgbButtons[i] & 0x80) raw.buttons |= 1u << i;
 +        raw.pov = (LOWORD(js.rgdwPOV[0]) == 0xFFFF) ? -1 : (int)js.rgdwPOV[0];
++        snprintf(raw.hint, sizeof raw.hint, "%s", s_ffb_hint);
 +        AcquireSRWLockExclusive(&s_pub_lock);
 +        s_raw = raw;
 +        ReleaseSRWLockExclusive(&s_pub_lock);
@@ -8810,7 +8878,7 @@ index 00000000..a8df1c95
 +    memset(eff, 0, sizeof *eff);
 +    memset(prm, 0, sizeof *prm);
 +    axes[0] = DIJOFS_X;
-+    dir[0] = 0;   /* one axis: the sign of the force is the direction */
++    dir[0] = 1;   /* one axis: unit direction vector; sign of lMagnitude gives direction */
 +    eff->dwSize = sizeof(DIEFFECT);
 +    eff->dwFlags = DIEFF_CARTESIAN | DIEFF_OBJECTOFFSETS;
 +    eff->dwDuration = INFINITE;

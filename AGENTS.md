@@ -314,9 +314,11 @@ genuine `vs_idx == -1` fallback matches the active compiler (`RSX_VP_FALLBACK_DX
 with its own `cellUsbd` driver; the runtime now shows it an emulated G27
 whatever wheel the PC has (DirectInput, force feedback), plus `cellPadLdd*`.
 Adapted from gt5-recomp (MIT, `third_party_notices/gt5-recomp-LICENSE.txt`).
-F1 WHEEL and `[wheel]`; `PS3_WHEEL=off` turns it off. No game addresses.
-Offline unit test (`scripts/test/wheel_g27.py`) passes; G29 live check and
-interactive F1 mapping/presets are next. See [docs/wheels.md](docs/wheels.md).
+F1 `WHEEL` (presets + live FFB + G HUB/PS4-mode hints), `WHEEL MAP`
+(interactive live axis/button binding + telemetry), and `[wheel]` TOML;
+`PS3_WHEEL=off` turns it off. No game addresses. Offline unit test
+(`scripts/test/wheel_g27.py`), virtual-wheel race, and live Logitech G29
+(`046D:C24F`) hardware check all pass. See [docs/wheels.md](docs/wheels.md).
 
 **Game sound fixed (2026-11-14).** Menus and races were silent: the DSP
 image `j9804ABA8` produced NaN PCM from two SPU arithmetic differences (0 x
