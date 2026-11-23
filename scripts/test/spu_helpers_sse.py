@@ -33,6 +33,8 @@ u128 FN(fsm)(u128 a)     { return spu_fsm(a); }
 u128 FN(csflt)(u128 a, int i8) { return spu_csflt(a, i8); }
 u128 FN(cuflt)(u128 a, int i8) { return spu_cuflt(a, i8); }
 u128 FN(cflts)(u128 a, int i8) { return spu_cflts(a, i8); }
+u128 FN(shlqbii)(u128 a, int sh) { return spu_shlqbii(a, sh); }
+u128 FN(rotqbii)(u128 a, int sh) { return spu_rotqbii(a, sh); }
 '''
 
 DRIVER = r'''
@@ -49,6 +51,8 @@ extern u128 ref_fsm(u128), sse_fsm(u128);
 extern u128 ref_csflt(u128, int), sse_csflt(u128, int);
 extern u128 ref_cuflt(u128, int), sse_cuflt(u128, int);
 extern u128 ref_cflts(u128, int), sse_cflts(u128, int);
+extern u128 ref_shlqbii(u128, int), sse_shlqbii(u128, int);
+extern u128 ref_rotqbii(u128, int), sse_rotqbii(u128, int);
 
 static uint32_t rng = 0x12345678u;
 static uint32_t nxt(void) { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng; }
@@ -66,6 +70,7 @@ int main(void) {
         for (int i = 0; i < 4; i++)
             a._u32[i] = (t < 4096) ? edges[(t >> (i * 2)) % ne] : nxt();
         int i8 = (t < 256) ? t : (int)(nxt() & 255);
+        int sh = t & 15;
         u128 r1, r2;
         r1 = ref_frest(a);   r2 = sse_frest(a);   if (memcmp(&r1, &r2, 16)) { fprintf(stderr, "FAIL frest\n"); return 1; }
         r1 = ref_frsqest(a); r2 = sse_frsqest(a); if (memcmp(&r1, &r2, 16)) { fprintf(stderr, "FAIL frsqest\n"); return 1; }
@@ -74,8 +79,10 @@ int main(void) {
         r1 = ref_csflt(a, i8); r2 = sse_csflt(a, i8); if (memcmp(&r1, &r2, 16)) { fprintf(stderr, "FAIL csflt\n"); return 1; }
         r1 = ref_cuflt(a, i8); r2 = sse_cuflt(a, i8); if (memcmp(&r1, &r2, 16)) { fprintf(stderr, "FAIL cuflt\n"); return 1; }
         r1 = ref_cflts(a, i8); r2 = sse_cflts(a, i8); if (memcmp(&r1, &r2, 16)) { fprintf(stderr, "FAIL cflts\n"); return 1; }
+        r1 = ref_shlqbii(a, sh); r2 = sse_shlqbii(a, sh); if (memcmp(&r1, &r2, 16)) { fprintf(stderr, "FAIL shlqbii sh=%d\n", sh); return 1; }
+        r1 = ref_rotqbii(a, sh); r2 = sse_rotqbii(a, sh); if (memcmp(&r1, &r2, 16)) { fprintf(stderr, "FAIL rotqbii sh=%d\n", sh); return 1; }
     }
-    printf("spu_helpers_sse: 7000000 bit-exact comparisons passed (frest/frsqest/gb/fsm/csflt/cuflt/cflts)\n");
+    printf("spu_helpers_sse: 9000000 bit-exact comparisons passed (frest/frsqest/gb/fsm/csflt/cuflt/cflts/shlqbii/rotqbii)\n");
     return 0;
 }
 '''
@@ -86,7 +93,7 @@ def main() -> int:
         td = Path(td)
         (td / "ops.c").write_text(HARNESS)
         (td / "main.c").write_text(DRIVER)
-        subprocess.check_call([str(CLANG), "/O2", "/c", "-DSPU_FLOAT_SCALAR", "-DREF_SCALAR", *inc,
+        subprocess.check_call([str(CLANG), "/O2", "/c", "-DSPU_FLOAT_SCALAR", "-DSPU_QBI_SCALAR", "-DREF_SCALAR", *inc,
                                str(td / "ops.c"), f"/Fo{td / 'ref.obj'}"],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.check_call([str(CLANG), "/O2", "/c", "-msse4.1", *inc,
