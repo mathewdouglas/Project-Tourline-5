@@ -3,11 +3,27 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.2.1] - 2026-11-24
+
+Bug-fix, wheel-compatibility, game-patch, and RSX/SPU performance release.
+
+### Added
+- **RPCS3 game-patch support & live Looser Chase Camera (#77):**
+  - Added `ppu_lifter.py --insn-patches` runtime-guarded instruction patching (zero overhead when off; default vanilla) and `scripts/rpcs3_patches.py` `patch.yml` converter.
+  - Added live **Looser chase camera**, **Chase cam damper** (`30..300`, default `90`), and **Chase cam max angle** (`15..80`, default `35`) controls in **F1 > GAME** (and `[game]` in `gt5p_settings.toml` / `GT5_PATCH_LOOSER_CHASE_CAMERA`) for both **01.04** and **02.11**.
+- **Live Unlock FPS toggle for GT5 2.11 (#53):** Exposed the `BCUS98114-v211` RPCS3 `Unlock FPS` patch in **F1 > GAME** (`unlock_fps` / `GT5_PATCH_UNLOCK_FPS`, off by default).
 
 ### Fixed
 - **Cockpit / close-camera near-plane clipping (#76):** Enabled D3D12 `DepthClipEnable` for guest pipelines (honoring RSX `NV4097_SET_ZMIN_MAX_CONTROL` `0x1D78`, default near/far clipping ON; `RSX_DEPTH_CLIP=0` restores the old clamped behaviour). Previously `DepthClipEnable` was zero-initialized to `FALSE`, causing geometry behind the cockpit camera to depth-clamp to `z = 0.0` and draw over the interior.
+- **Long-session PPU TLS exhaustion (#74):** Recycled exited threads' TLS blocks via a free list (`ppu_tls_free_block`, rollback `PS3_TLS_REUSE=0`) so long sessions with thread churn no longer fill the 248-slot TLS window and fall back to sharing the main thread's TLS block.
 - **Long-session pipeline cache overflow (#70):** Raised the resident guest pipeline cache from `8192` to `32768` entries (`FPI_N` `65536`, orphan buffer `2048`) so long dealership/garage sessions no longer flush the entire pipeline cache mid-session.
+- **Moza R3 wheel & USB sequential shifter support (#80):** Expanded wheel capture/mapping from 32 to **256 buttons** (`1..128` primary wheel, `129..256` up to 4 auxiliary USB DirectInput shifters/handbrakes/button boxes), gated POV hat decoding on `s_has_hat` so button-based wheel D-pads work, and added **D-Pad Up / Down / Left / Right** rows to **F1 > WHEEL MAP**.
+- **GT5 2.11 "PC Settings" hint stuck after leaving Options (#79):** Added `options_word` (`GT5P_OPTIONS_WORD=0x017E0D1C=1`) so the Options hint clears when returning to GT Mode as well as the Top Menu (without affecting F1 race pause).
+
+### Changed / Performance
+- **Windows `GetWriteWatch` 256 KB sub-block texture tracking (`RSX_TEX_WRITE_WATCH=0` rollback):** Skips per-frame checksums on static textures — Rome texture checksums `-90%`, `present-replay` CPU `50.3% -> 44.0%` core (`-12.6%`); Car List checksums `-78%`, p99 `23.5 -> 22.5 ms`.
+- **FIFO multi-header state burst (`GCM_FIFO_BURST=0` rollback) & 4-lane `tex_dense_sum`:** Cuts Rome `present` FIFO walker CPU `55.3% -> 52.0%` core (`-0.50 ms/frame`).
+- **Additional runtime fast paths:** SSE2 `spu_shlqbii`/`spu_rotqbii` (`-DSPU_QBI_SCALAR` rollback), O(1) SPU stack-reset hint, row-gathered NV3089 blit (`GCM_FAST_BLIT=0` rollback), and `PSO_WARM_MAX` `8192 -> 16384` with `RSX_PSO_RESERVE=4096` for live draws.
 
 ## [0.2.0] - 2026-11-24
 
