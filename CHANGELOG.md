@@ -5,6 +5,10 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-24
+
+Two headline additions: **steering wheel support with force feedback** and a major **near-locked 60 FPS & cold-cache performance overhaul**.
+
 ### Added
 - **Steering wheels with force feedback (verified on Logitech G29).** GT5
   has its own Logitech wheel driver; the port now shows it a Logitech G27
@@ -17,6 +21,14 @@ versions follow [SemVer](https://semver.org/).
   and wheel buttons interactively with live telemetry and G HUB / PS4-mode
   diagnostics. `PS3_WHEEL=off` turns it off. Adapted from gt5-recomp (MIT).
   See docs/wheels.md.
+
+### Changed / Performance
+- **Native SPU geometry & weather stages (`b0196FF40` / 2.11 `b017BD780`, `b016B5B00`, `b01697100`):**
+  - 8-wide AVX2 vertex transforms (`0xAD30`, `GT5P_NATIVE_VTX=0`; `0xF970`, `GT5P_NATIVE_F970=0`), SSSE3 big-endian triangle-strip index decompressor (`0xA3C0` / `0xA408`, `GT5P_NATIVE_A3C0=0`), and single-pass SSE4.1/FMA RSX `CMP` normal/tangent packer (`0xC440` / `0xC5E0`, `GT5P_NATIVE_C440=0`) — all active on both 01.04 and 2.11 across every track, Car List, Garage, and Replay.
+  - Native weather volume culling (`b016B5B00` `0xA220`, `GT5P_NATIVE_RAIN_VOL=0`) and tightened scalar-LUT Eiger rain grid pass (`b01697100` `0x8298`).
+- **RSX replay fast paths & D3D12 state-diffing:** 4-way O(1) texture cache hit (`RSX_TEX_FAST_HIT=0`), D3D12 draw-loop state-diffing (`RSX_D3D_STATE_DIFF=0`), range-guarded offscreen RT lookup, and unset-unit `s_srvc` fast path cut `present-replay` CPU by ~16% on dense city tracks like Rome.
+- **Cold-cache shader/pipeline stutter reduction:** `RSX_SHADER_WORKER_AFFINITY` now defaults on (`=0` off), `RSX_PSO_WAIT_CV` (`=0` old `Sleep(1)`) wakes offscreen PSO waits immediately, and `RSX_SHADER_WORKERS_RACE=2` (`=0` unlimited) caps concurrent DXC compiles during live races. Cold HSR `>100 ms` hitches dropped `19 -> 7` (-63%) and max hitch dropped `282.6 -> 171.3 ms` (-39%).
+- **Measured results (01.04, 4-route PGO):** High Speed Ring **59.8 FPS** (`0.5%` late), Car List **59.4 FPS** (`1.8%` late), Eiger heavy rain **58.8 FPS** (`4.3%` late), Rome **58.4 FPS** (`5.1%` late).
 
 ## [0.1.15] - 2026-11-21
 
