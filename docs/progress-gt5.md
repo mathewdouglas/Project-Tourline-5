@@ -12,7 +12,7 @@ Built cleanly under `C:\pt5-release\0.2.1` (refreshed 4-route PGO `5b21057b164e`
 Packaged 01.04 engine (`gt5.exe`), High Speed Ring 60 s frame test (`RSX_CMD_CHECK=1`):
 - **59.6 FPS** (`1.4%` late, median `16.6 ms`, p99 `20.6 ms`, max `48.5 ms`, `walk 6.21 ms/frame`).
 
-Antivirus: local Defender `MpCmdRun -Scan -ScanType 3` found `0` threats on the ZIP and extracted folder. VirusTotal scan pending user API key (`scripts/release/vt.py scan C:\pt5-release\0.2.1\final\out\project-tourline-5-v0.2.1-windows-x64.zip`).
+Antivirus: local Defender `MpCmdRun -Scan -ScanType 3` found `0` threats on the ZIP and extracted folder. VirusTotal (`C:\pt5-release\0.2.1\vt.log`): ZIP `0/62`, `gt5.exe` `0/63`, `gt5_211.exe` `0/67`, all 9 DLLs `0/68–72`, `tourline5.exe` `2/70` (`APEX=Malicious` + allowed `Trapmine`; Microsoft Defender `0`, same unsigned launcher ML false positive as v0.2.0).
 
 ## v0.2.1 bug fixes (`fix/v0.2.1`, 2026-11-24)
 
