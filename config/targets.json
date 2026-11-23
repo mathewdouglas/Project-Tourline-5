@@ -153,6 +153,7 @@
     "screen_roles": "RaceStart:race,RaceGrid:screen,RaceLoad:screen,Arcade:screen,TrackList:screen,CarList:screen,Options:options",
     "movie_screen": "OpeningMovie",
     "top_menu_word": "0x017E3C88=16",
+    "options_word": "0x017E0D1C=1",
     "menu_listbox_vtable": "0x016F4198",
     "menu_listbox_range": "0x40000000-0x50000000",
     "spu_audio_round_zero_calls": [["j9804ABA8", "0x4E8", 5]],

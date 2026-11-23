@@ -870,6 +870,7 @@ static void apply_env_defaults()
         {"RSX_SCOPE_LABELS",     GT5P_SCOPE_LABELS,  race_scope},
         {"GT5P_SCREEN_ROLES",    GT5P_SCREEN_ROLES,  race_scope},
         {"GT5P_TOP_MENU_WORD",   GT5P_TOP_MENU_WORD, race_scope},
+        {"GT5P_OPTIONS_WORD",    GT5P_OPTIONS_WORD,  race_scope},
         {"GT5P_LISTBOX_VTABLE",  GT5P_LISTBOX_VT,    true},
         {"GT5P_LISTBOX_RANGE",   GT5P_LISTBOX_RANGE, true},
         {"PAD_AUTO_INSTALL",     GT5P_INSTALL_PROMPT_FILE, auto_install},

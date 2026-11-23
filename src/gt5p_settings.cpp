@@ -44,7 +44,7 @@ const char* const kEnvNames[] = {
     "PAD_NO_SDL", "PAD_NO_KEYBOARD", "PS3_VERBOSE",
     "GT5P_VBLANK_HZ", "SPURS_LANE_PIN", "SPURS_JL_SPU3", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_STARTUP", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "PAD_SKIP_MOVIE", "RSX_SHADER_INTERP",
     "AUDIO_OUTPUT_CHANNELS", "PS3_USER_NAME",
-    "GT5_PATCH_LOOSER_CHASE_CAMERA", "GT5_CHASE_CAM_DAMPER", "GT5_CHASE_CAM_MAX_ANGLE",
+    "GT5_PATCH_LOOSER_CHASE_CAMERA", "GT5_CHASE_CAM_DAMPER", "GT5_CHASE_CAM_MAX_ANGLE", "GT5_PATCH_UNLOCK_FPS",
     "PS3_WHEEL", "PS3_WHEEL_RANGE", "PS3_WHEEL_FFB", "PS3_WHEEL_FFB_INVERT", "PS3_WHEEL_FFB_SPRING",
     "PS3_WHEEL_FFB_MIN", "PS3_WHEEL_FFB_MUTE",
     "PS3_WHEEL_STEER", "PS3_WHEEL_PEDALS", "PS3_WHEEL_BUTTONS",
@@ -241,6 +241,7 @@ bool known_key(std::string_view section, std::string_view key)
         {"wheel", "preset"}, {"wheel", "steer"}, {"wheel", "pedals"}, {"wheel", "buttons"},
         {"game", "skip_movie"},       {"game", "smooth_colour"},    {"game", "anisotropy"},
         {"game", "looser_chase_camera"}, {"game", "chase_cam_damper"}, {"game", "chase_cam_max_angle"},
+        {"game", "unlock_fps"},
         {"game", "player_name"},
         {"audio", "output"},
         {"performance", "vblank_hz"}, {"performance", "lane_pinning"},
@@ -358,6 +359,7 @@ void parse_into(const toml::table& tbl, Gt5pSettings& s)
     read_bool(tbl["game"]["looser_chase_camera"], "game.looser_chase_camera", s.looser_chase_camera);
     read_int_range(tbl["game"]["chase_cam_damper"], "game.chase_cam_damper", 0, 300, s.chase_cam_damper);
     read_int_range(tbl["game"]["chase_cam_max_angle"], "game.chase_cam_max_angle", 0, 100, s.chase_cam_max_angle);
+    read_bool(tbl["game"]["unlock_fps"], "game.unlock_fps", s.unlock_fps);
     if (auto n = tbl["game"]["player_name"]) {
         const auto v = n.value<std::string>();
         if (v && gt5p_player_name_ok(*v)) s.player_name = *v;
@@ -449,6 +451,7 @@ void apply_env(const Gt5pSettings& s)
     set_default_env("GT5_CHASE_CAM_DAMPER", buf);
     snprintf(buf, sizeof buf, "%d", s.chase_cam_max_angle);
     set_default_env("GT5_CHASE_CAM_MAX_ANGLE", buf);
+    if (s.unlock_fps) set_default_env("GT5_PATCH_UNLOCK_FPS", "1");
     if (!s.player_name.empty()) set_default_env("PS3_USER_NAME", s.player_name.c_str());
     if (s.verbose_log >= 0) set_default_env("PS3_VERBOSE", s.verbose_log ? "1" : "0");
     set_default_env("AUDIO_OUTPUT_CHANNELS", s.audio_channels == 6 ? "6" : s.audio_channels == 8 ? "8" : s.audio_channels == 0 ? "auto" : "2");
@@ -536,6 +539,7 @@ void reflect_env(Gt5pSettings& s)
         char* end; const long n = strtol(e, &end, 10);
         if (*e && !*end) s.chase_cam_max_angle = n < 0 ? 0 : n > 100 ? 100 : (int)n;
     }
+    { const char* e = getenv("GT5_PATCH_UNLOCK_FPS"); s.unlock_fps = e && e[0] && e[0] != '0'; }
     if (const char* e = getenv("PS3_VERBOSE")) s.verbose_log = (e[0] && e[0] != '0') ? 1 : 0;
     if (const char* e = getenv("AUDIO_OUTPUT_CHANNELS"))
         s.audio_channels = (e[0] == 'a' || e[0] == 'A') ? 0 : atoi(e) == 6 ? 6 : atoi(e) == 8 ? 8 : 2;
@@ -728,6 +732,9 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "# Looser chase camera max rotation angle, 0 to 100 (35 default, 30 vanilla).\n"
          "# Applies live. [GT5_CHASE_CAM_MAX_ANGLE]\n"
          "chase_cam_max_angle = " << s.chase_cam_max_angle << "\n"
+         "# Unlock FPS (RPCS3 patch, GT5 2.11): removes the 30/60 Hz flip-interval\n"
+         "# cap in menus and races. Off by default. Applies live. [GT5_PATCH_UNLOCK_FPS]\n"
+         "unlock_fps = " << (s.unlock_fps ? "true" : "false") << "\n"
          "# Your name in the game (profile, race results), up to 16 letters, digits,\n"
          "# spaces or . - _ '. Empty: \"User\". Restart to apply. [PS3_USER_NAME]\n"
          "player_name = \"" << s.player_name << "\"\n"

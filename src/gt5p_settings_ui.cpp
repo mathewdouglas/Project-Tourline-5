@@ -68,6 +68,9 @@ struct WheelRawUi {
     uint32_t buttons;
     int pov;
     char hint[128];
+    uint32_t buttons_ext[7];
+    int aux_count;
+    char aux_name[64];
 };
 int  wheel_host_raw(WheelRawUi* out);           /* wheel_host_win.c */
 void wheel_host_set_ffb(int gain, int invert, int spring, int min_force);   /* wheel_host_win.c */
@@ -179,9 +182,10 @@ void wheel_ffb_apply(int which, int v)
 enum { kPresetAuto = 0, kPresetG29, kPresetG920, kPresetG27, kPresetThrustmaster, kPresetCustom };
 static const char* const kWheelAxisNames[8] = { "X", "Y", "Z", "RX", "RY", "RZ", "S0", "S1" };
 static const char* const kWheelPedalKeys[3] = { "throttle", "brake", "clutch" };
-/* 12 primary G27 buttons exposed on the 2-column WHEEL MAP page (slots 4..15). */
+/* 16 G27 buttons (including button-based D-pad for wheels without a POV hat)
+ * exposed on the 2-column WHEEL MAP page (slots 4..19). */
 struct WheelBtnSlot { const char* key; const wchar_t* label; };
-static const WheelBtnSlot kWheelBtnSlots[12] = {
+static const WheelBtnSlot kWheelBtnSlots[16] = {
     { "r1",       L"Shift Up (R1)" },
     { "l1",       L"Shift Down (L1)" },
     { "cross",    L"Cross" },
@@ -194,6 +198,10 @@ static const WheelBtnSlot kWheelBtnSlots[12] = {
     { "r3",       L"R3" },
     { "start",    L"Start" },
     { "select",   L"Select" },
+    { "up",       L"D-Pad Up" },
+    { "down",     L"D-Pad Down" },
+    { "left",     L"D-Pad Left" },
+    { "right",    L"D-Pad Right" },
 };
 
 int wheel_preset_id(const std::string& p)
@@ -498,6 +506,7 @@ const std::vector<Item>& items()
         WMAP_BTN(4, L"Shift Up (R1)"), WMAP_BTN(5, L"Shift Down (L1)"), WMAP_BTN(6, L"Cross"), WMAP_BTN(7, L"Circle"),
         WMAP_BTN(8, L"Square"), WMAP_BTN(9, L"Triangle"), WMAP_BTN(10, L"L2"), WMAP_BTN(11, L"R2"),
         WMAP_BTN(12, L"L3"), WMAP_BTN(13, L"R3"), WMAP_BTN(14, L"Start"), WMAP_BTN(15, L"Select"),
+        WMAP_BTN(16, L"D-Pad Up"), WMAP_BTN(17, L"D-Pad Down"), WMAP_BTN(18, L"D-Pad Left"), WMAP_BTN(19, L"D-Pad Right"),
         { L"GAME", L"Game version",
           L"Restart into an installed version. Each keeps separate game data, saves and shaders. 2.11 is experimental. Set it up through the launcher before switching.",
           "GT5P_GAME_VERSION", {{104,L"GT5 01.04"},{211,L"GT5 2.11 (experimental)"}},
@@ -554,6 +563,13 @@ const std::vector<Item>& items()
           [](const UiSettings& s) { return s.chase_cam_max_angle; },
           [](UiSettings& s, int v) { s.chase_cam_max_angle = v; },
           [](int) { /* pushed in set_value via gt5p_patches_apply_chase_cam */ } },
+        { L"GAME", L"Unlock FPS",
+          L"RPCS3 Unlock FPS patch (GT5 2.11): removes the 30/60 Hz flip-interval cap in "
+          L"menus and races. Off by default. Applies live.",
+          "GT5_PATCH_UNLOCK_FPS", kOnOff,
+          [](const UiSettings& s) { return s.unlock_fps ? 1 : 0; },
+          [](UiSettings& s, int v) { s.unlock_fps = v != 0; },
+          [](int v) { gt5p_patches_apply_unlock_fps(v != 0); } },
         { L"AUDIO", L"Sound output",
           L"GT5 mixes 5.1 surround. Stereo folds it down. 5.1 or 7.1 sends it to surround "
           L"speakers (7.1's side pair stays silent); Auto follows the Windows speaker setup. Restart to apply.",
@@ -693,7 +709,8 @@ std::vector<int> rows()
     for (int i = 0; i < (int)items().size(); i++) if (!wcscmp(items()[i].section, sec) && (!launcher_item(items()[i]) || pt5_restart::managed()) &&
             (!env_is(items()[i], "GT5P_MOD") || mods_available()) &&
             (gt5p_patches_has_chase_cam() || !(env_is(items()[i], "GT5_PATCH_LOOSER_CHASE_CAMERA") ||
-                env_is(items()[i], "GT5_CHASE_CAM_DAMPER") || env_is(items()[i], "GT5_CHASE_CAM_MAX_ANGLE")))) r.push_back(i);
+                env_is(items()[i], "GT5_CHASE_CAM_DAMPER") || env_is(items()[i], "GT5_CHASE_CAM_MAX_ANGLE"))) &&
+            (gt5p_patches_has_unlock_fps() || !env_is(items()[i], "GT5_PATCH_UNLOCK_FPS"))) r.push_back(i);
     const char* ready211=getenv("GT5P_VERSION_211_READY");
     const char* supported211=getenv("GT5P_VERSION_211_SUPPORTED");
     if (pt5_restart::managed() && !wcscmp(sec,L"GAME") && supported211 && !strcmp(supported211,"1") && (!ready211 || strcmp(ready211,"1"))) r.push_back(kRowSetup211);
@@ -725,10 +742,15 @@ std::vector<Slot> layout(const std::vector<int>& r)
     int bx = kW / 2 - (nbtn * kBtnW + (nbtn - 1) * kBtnGap) / 2;
     for (int id : r) {
         if (id == kRowHead) out.push_back({ kPx0 + 40, kPx1 - 40, kBarY });
-        else if (id >= 0 && (items()[id].key >= 0 || items()[id].wmap >= 0)) {
-            const int k = items()[id].key >= 0 ? items()[id].key : items()[id].wmap, col = k / 8;
+        else if (id >= 0 && items()[id].key >= 0) {
+            const int k = items()[id].key, col = k / 8;
             const int x0 = col ? kW / 2 + 10 : kPx0 + 30;
             out.push_back({ x0, x0 + (kPx1 - kPx0) / 2 - 40, kKeyY + (k % 8) * kKeyH });
+        }
+        else if (id >= 0 && items()[id].wmap >= 0) {
+            const int k = items()[id].wmap, col = k / 10;
+            const int x0 = col ? kW / 2 + 10 : kPx0 + 30;
+            out.push_back({ x0, x0 + (kPx1 - kPx0) / 2 - 40, 180 + (k % 10) * 28 });
         }
         else if (id >= 0) { out.push_back({ kPx0 + 40, kPx1 - 40, y }); y += pitch; }
         else { out.push_back({ bx, bx + kBtnW, kBtnY }); bx += kBtnW + kBtnGap; }
@@ -933,11 +955,16 @@ std::wstring wheel_slot_display(const UiSettings& s, int slot)
         if (inv != std::string::npos) return widen(up.substr(0, inv)) + L" (inv)";
         return widen(up);
     }
-    if (slot >= 4 && slot < 16) {
+    if (slot >= 4 && slot < 20) {
         std::string v = wheel_kv_get(s.wheel_buttons, kWheelBtnSlots[slot - 4].key);
         if (v.empty()) return L"Auto";
         int b = atoi(v.c_str());
         if (b <= 0) return L"None";
+        if (b > 128) {
+            const int aux_i = (b - 129) / 32 + 1;
+            const int aux_b = (b - 129) % 32 + 1;
+            return L"Aux" + std::to_wstring(aux_i) + L" Btn " + std::to_wstring(aux_b);
+        }
         return L"Btn " + std::to_wstring(b);
     }
     return L"?";
@@ -970,7 +997,7 @@ void wheel_clear_slot(int id)
         std::string next = (_stricmp(cur.c_str(), "NONE") == 0) ? "" : "NONE";
         s_edit.wheel_pedals = wheel_kv_set(s_edit.wheel_pedals, pk, next);
         wheel_map_save_and_apply(std::wstring(items()[id].label) + (next.empty() ? L" set to Auto." : L" cleared."));
-    } else if (slot >= 4 && slot < 16) {
+    } else if (slot >= 4 && slot < 20) {
         s_edit.wheel_buttons = wheel_kv_set(s_edit.wheel_buttons, kWheelBtnSlots[slot - 4].key, "0");
         wheel_map_save_and_apply(std::wstring(items()[id].label) + L" cleared.");
     }
@@ -1026,27 +1053,32 @@ bool poll_wheel_capture()
             wheel_map_save_and_apply(std::wstring(items()[id].label) + L" -> " + widen(kWheelAxisNames[best]) + L".");
             return true;
         }
-    } else if (slot >= 4 && slot < 16) {
-        const uint32_t newly = now.buttons & ~s_wcap_base.buttons;
-        if (newly) {
-            int btn1 = 0;
-            for (int b = 0; b < 32; b++) if (newly & (1u << b)) { btn1 = b + 1; break; }
-            if (btn1 > 0) {
-                const int id = s_wcap;
-                s_wcap = -1;
-                s_edit.wheel_preset = "custom";
-                const std::string num = std::to_string(btn1);
-                /* Clear any other slot in WHEEL MAP that already used this button. */
-                for (int j = 0; j < 12; j++) {
-                    if (j + 4 == slot) continue;
-                    std::string ex = wheel_kv_get(s_edit.wheel_buttons, kWheelBtnSlots[j].key);
-                    if (!ex.empty() && atoi(ex.c_str()) == btn1)
-                        s_edit.wheel_buttons = wheel_kv_set(s_edit.wheel_buttons, kWheelBtnSlots[j].key, "0");
-                }
-                s_edit.wheel_buttons = wheel_kv_set(s_edit.wheel_buttons, kWheelBtnSlots[slot - 4].key, num);
-                wheel_map_save_and_apply(std::wstring(items()[id].label) + L" -> Btn " + std::to_wstring(btn1) + L".");
-                return true;
+    } else if (slot >= 4 && slot < 20) {
+        int btn1 = 0;
+        const uint32_t newly0 = now.buttons & ~s_wcap_base.buttons;
+        if (newly0) {
+            for (int b = 0; b < 32; b++) if (newly0 & (1u << b)) { btn1 = b + 1; break; }
+        }
+        for (int w = 0; !btn1 && w < 7; w++) {
+            const uint32_t newly = now.buttons_ext[w] & ~s_wcap_base.buttons_ext[w];
+            if (!newly) continue;
+            for (int b = 0; b < 32; b++) if (newly & (1u << b)) { btn1 = 32 * (w + 1) + b + 1; break; }
+        }
+        if (btn1 > 0) {
+            const int id = s_wcap;
+            s_wcap = -1;
+            s_edit.wheel_preset = "custom";
+            const std::string num = std::to_string(btn1);
+            /* Clear any other slot in WHEEL MAP that already used this button. */
+            for (int j = 0; j < 16; j++) {
+                if (j + 4 == slot) continue;
+                std::string ex = wheel_kv_get(s_edit.wheel_buttons, kWheelBtnSlots[j].key);
+                if (!ex.empty() && atoi(ex.c_str()) == btn1)
+                    s_edit.wheel_buttons = wheel_kv_set(s_edit.wheel_buttons, kWheelBtnSlots[j].key, "0");
             }
+            s_edit.wheel_buttons = wheel_kv_set(s_edit.wheel_buttons, kWheelBtnSlots[slot - 4].key, num);
+            wheel_map_save_and_apply(std::wstring(items()[id].label) + L" -> " + wheel_slot_display(s_edit, slot) + L".");
+            return true;
         }
     }
     return false;
@@ -1384,10 +1416,11 @@ void paint(HDC dc)
         if (it.key >= 0 || it.wmap >= 0) {
             /* A binding: the button's name, then its key or wheel axis/button in a box. */
             const int x0 = sl[i].x0, fx = x0 + 160;
+            const int rh = it.wmap >= 0 ? 28 : kKeyH;
             const bool cap = (it.key >= 0 && s_capture == id) || (it.wmap >= 0 && s_wcap == id);
-            text_in(dc, fRow, x0, y, fx - 16, y + kKeyH - 6, over ? grey(100) : grey(190), it.label, DT_RIGHT);
-            fill(dc, fx - 1, y - 1, fx + kKeyFieldW + 1, y + kKeyH - 5, sel ? RGB(168, 0, 0) : grey(5));
-            fill(dc, fx, y, fx + kKeyFieldW, y + kKeyH - 6, RGB(0, 4, 0));
+            text_in(dc, fRow, x0, y, fx - 16, y + rh - 4, over ? grey(100) : grey(190), it.label, DT_RIGHT);
+            fill(dc, fx - 1, y - 1, fx + kKeyFieldW + 1, y + rh - 3, sel ? RGB(168, 0, 0) : grey(5));
+            fill(dc, fx, y, fx + kKeyFieldW, y + rh - 4, RGB(0, 4, 0));
             std::wstring v;
             if (it.key >= 0) {
                 const char* kn = gt5p_key_name(it.get(s_edit));
@@ -1396,9 +1429,9 @@ void paint(HDC dc)
                 v = cap ? (it.wmap == 0 ? L"Turn wheel" : it.wmap <= 3 ? L"Press pedal" : L"Press button")
                         : wheel_slot_display(s_edit, it.wmap);
             }
-            text_in(dc, fRow, fx + 12, y, fx + kKeyFieldW - 6, y + kKeyH - 7,
+            text_in(dc, fRow, fx + 12, y, fx + kKeyFieldW - 6, y + rh - 5,
                     cap ? RGB(237, 60, 60) : over ? grey(100) : grey(204), v.c_str(), DT_LEFT | DT_END_ELLIPSIS);
-            if (sel && !cap) cursor(dc, fx + kKeyFieldW - 18, y + 8);
+            if (sel && !cap) cursor(dc, fx + kKeyFieldW - 18, y + (rh > 30 ? 8 : 5));
             continue;
         }
         const bool later = !it.apply && !over && it.get(s_edit) != it.get(s_boot);
@@ -1537,7 +1570,8 @@ void click(int mx, int my)
         } else if (id < 0) {
             if (my >= y && my < y + kBtnH && mx >= sl[i].x0 && mx < sl[i].x1) { s_sel = (int)i; press(); return; }
         } else if (items()[id].key >= 0 || items()[id].wmap >= 0) {
-            if (my >= y && my < y + kKeyH - 4 && mx >= sl[i].x0 && mx < sl[i].x1) { s_sel = (int)i; press(); return; }
+            const int rh = items()[id].wmap >= 0 ? 28 : kKeyH;
+            if (my >= y && my < y + rh - 3 && mx >= sl[i].x0 && mx < sl[i].x1) { s_sel = (int)i; press(); return; }
         } else if (my >= y && my < y + kFieldH && mx >= kPx0 && mx < kFieldX + kFieldW + 12 + kDropW) {
             s_sel = (int)i;
             if (mx >= kFieldX) press();
@@ -1686,6 +1720,7 @@ bool s_hint_shown;
 /* Which screen the title is on, from the screen scripts (.gpb) it reads.
  * GT5P_SETTINGS_UI_DBG=1 prints each one. */
 volatile int s_dbg_screens = -1;
+int s_opt_word_seen = 0;
 /* A title without screen scripts (Gran Turismo 5) names its screens by
  * measured files instead: cellPad passes their labels (PAD_MILESTONE_FILES
  * "<label>=<path tail>") here too. GT5P_SCREEN_ROLES gives each label a role:
@@ -1706,6 +1741,7 @@ int screen_role_seen(const char* b)
             const int race = rl == 4 && !strncmp(role, "race", 4);
             const int options = rl == 7 && !strncmp(role, "options", 7);
             s_in_race = race; s_in_options = options;
+            if (options) s_opt_word_seen = 0;
             if (s_dbg_screens > 0) fprintf(stderr, "[settings-ui] %llu ms screen label %s (%.*s)%c",
                                            GetTickCount64(), b, (int)rl, role, 10);
             return 1;
@@ -1730,11 +1766,33 @@ void top_menu_poll()
         on = e && vm_base && sscanf(e, "%x=%x", &a, &v) == 2 && a;
         addr = a; value = v;
     }
-    if (!on) return;
-    uint32_t w; memcpy(&w, vm_base + addr, 4);
-    if (_byteswap_ulong(w) != value || (!s_in_options && !s_in_race)) return;
-    if (s_dbg_screens > 0) fprintf(stderr, "[settings-ui] %llu ms top menu (word %08X)%c", GetTickCount64(), addr, 10);
-    s_in_options = 0; s_in_race = 0;
+    if (on && (s_in_options || s_in_race)) {
+        uint32_t w; memcpy(&w, vm_base + addr, 4);
+        if (_byteswap_ulong(w) == value) {
+            if (s_dbg_screens > 0) fprintf(stderr, "[settings-ui] %llu ms top menu (word %08X)%c", GetTickCount64(), addr, 10);
+            s_in_options = 0; s_in_race = 0; s_opt_word_seen = 0;
+        }
+    }
+    /* GT5P_OPTIONS_WORD=<addr>=<value> (hex): a guest word that holds <value>
+     * while Options is open and changes away on leaving Options to ANY menu
+     * (including GT Mode, where GT5P_TOP_MENU_WORD does not fire; issue #79).
+     * Never clears s_in_race. */
+    static int opt_on = -1; static uint32_t opt_addr, opt_val;
+    if (opt_on < 0) {
+        const char* e = getenv("GT5P_OPTIONS_WORD");
+        unsigned a = 0, v = 0;
+        opt_on = e && vm_base && sscanf(e, "%x=%x", &a, &v) == 2 && a;
+        opt_addr = a; opt_val = v;
+    }
+    if (opt_on && s_in_options) {
+        uint32_t w; memcpy(&w, vm_base + opt_addr, 4);
+        if (_byteswap_ulong(w) == opt_val) {
+            s_opt_word_seen = 1;
+        } else if (s_opt_word_seen) {
+            if (s_dbg_screens > 0) fprintf(stderr, "[settings-ui] %llu ms left options (word %08X=%X)%c", GetTickCount64(), opt_addr, _byteswap_ulong(w), 10);
+            s_in_options = 0; s_opt_word_seen = 0;
+        }
+    }
 }
 void screen_seen(const char* b)
 {
@@ -2182,7 +2240,7 @@ void activate(int dir)
         return;
     }
     if (r[s_sel] >= 0 && items()[r[s_sel]].wmap >= 0) {  /* the other column, same line */
-        const int other = wmap_item((items()[r[s_sel]].wmap + 8) % 16);
+        const int other = wmap_item((items()[r[s_sel]].wmap + 10) % 20);
         for (int i = 0; i < (int)r.size(); i++) if (r[i] == other) s_sel = i;
         return;
     }

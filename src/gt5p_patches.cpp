@@ -55,6 +55,20 @@ extern "C" bool gt5p_patches_has_chase_cam(void)
     return GT5P_CHASE_CAM_BSS != 0u;
 }
 
+extern "C" bool gt5p_patches_has_unlock_fps(void)
+{
+    return GT5P_CHASE_CAM_V211 != 0;
+}
+
+extern "C" void gt5p_patches_apply_unlock_fps(bool enabled)
+{
+    if (!gt5p_patches_has_unlock_fps()) {
+        g_gt5_patch_unlock_fps = 0;
+        return;
+    }
+    g_gt5_patch_unlock_fps = enabled ? 1 : 0;
+}
+
 extern "C" void gt5p_patches_apply_chase_cam(bool enabled, int damper, int max_angle)
 {
     if (!GT5P_CHASE_CAM_BSS || !vm_base) {
@@ -110,6 +124,14 @@ extern "C" void gt5p_patches_apply_boot(void)
         }
     }
 
+    if (gt5p_patches_has_unlock_fps()) {
+        const bool on = env_flag("GT5_PATCH_UNLOCK_FPS", s.unlock_fps ? 1 : 0) != 0;
+        if (on) {
+            gt5p_patches_apply_unlock_fps(true);
+            printf("[GT5P] patch: Unlock FPS enabled\n");
+        }
+    }
+
     struct EnvPatch { int* guard; const char* env; const char* title; };
     const EnvPatch extra[] = {
         { &g_gt5_patch_disable_dithering, "GT5_PATCH_DISABLE_DITHERING", "Disable Dithering" },
@@ -117,7 +139,6 @@ extern "C" void gt5p_patches_apply_boot(void)
         { &g_gt5_patch_chase_camera_car5_fov_and_pitch, "GT5_PATCH_CHASE_CAMERA_CAR5_FOV_AND_PITCH", "Chase Camera - CAR5 FOV and Pitch" },
         { &g_gt5_patch_analogue_dials_in_all_cameras, "GT5_PATCH_ANALOGUE_DIALS_IN_ALL_CAMERAS", "Analogue Dials in All Cameras" },
         { &g_gt5_patch_use_2x_msaa_in_720p_mode, "GT5_PATCH_USE_2X_MSAA_IN_720P_MODE", "Use 2x MSAA in 720p Mode" },
-        { &g_gt5_patch_unlock_fps, "GT5_PATCH_UNLOCK_FPS", "Unlock FPS" },
     };
     for (const auto& p : extra) {
         if (env_flag(p.env, 0)) {

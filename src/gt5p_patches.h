@@ -28,6 +28,10 @@ void gt5p_patches_apply_chase_cam(bool enabled, int damper, int max_angle);
 /* True when the compiled target has a measured chase-camera BSS address. */
 bool gt5p_patches_has_chase_cam(void);
 
+/* Live toggle for Unlock FPS (issue #53, 02.11 RPCS3 patch). */
+void gt5p_patches_apply_unlock_fps(bool enabled);
+bool gt5p_patches_has_unlock_fps(void);
+
 #ifdef __cplusplus
 }
 #endif
