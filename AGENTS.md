@@ -317,6 +317,14 @@ now populates `vp_ps_hold` and skips PSO creation for `VS_PENDING` when `vp_inte
 genuine `vs_idx == -1` fallback matches the active compiler (`RSX_VP_FALLBACK_DXC=0` old). Test:
 `scripts/test/vp_fallback_pso.py` (WARP). See progress-gt5.md.
 
+**v0.2.1 renderer fixes (`fix/v0.2.1`, 2026-11-24, runtime).** `#76` (cockpit/rear-of-car
+overdraw): `vp_get_fp_pso` and `interp_get_pso` left `DepthClipEnable = FALSE` (`pd = {0}`),
+clamping behind-camera geometry to `z = 0.0`. `rsx_commands` now decodes `NV4097_SET_ZMIN_MAX_CONTROL`
+(`0x1D78`, reset default `1`), `rsx_cull_key` bit 3 encodes depth-clip-disable (`0 = TRUE`,
+matching `rsx_interp_classes`; `RSX_DEPTH_CLIP=0` rollback), and both PSO builders set
+`DepthClipEnable`. `#70` (8192 pipeline cache flush in long dealership sessions): raised
+`VP_FP_CACHE` `8192 -> 32768`, `FPI_N` `16384 -> 65536`, `s_fp_orphan` `512 -> 2048`. See progress-gt5.md.
+
 **Steering wheels (`release/v0.2.0`).** GT5 drives Logitech wheels
 with its own `cellUsbd` driver; the runtime now shows it an emulated G27
 whatever wheel the PC has (DirectInput, force feedback), plus `cellPadLdd*`.

@@ -5,6 +5,10 @@ versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Cockpit / close-camera near-plane clipping (#76):** Enabled D3D12 `DepthClipEnable` for guest pipelines (honoring RSX `NV4097_SET_ZMIN_MAX_CONTROL` `0x1D78`, default near/far clipping ON; `RSX_DEPTH_CLIP=0` restores the old clamped behaviour). Previously `DepthClipEnable` was zero-initialized to `FALSE`, causing geometry behind the cockpit camera to depth-clamp to `z = 0.0` and draw over the interior.
+- **Long-session pipeline cache overflow (#70):** Raised the resident guest pipeline cache from `8192` to `32768` entries (`FPI_N` `65536`, orphan buffer `2048`) so long dealership/garage sessions no longer flush the entire pipeline cache mid-session.
+
 ## [0.2.0] - 2026-11-24
 
 Two headline additions: **steering wheel support with force feedback** and a major **near-locked 60 FPS & cold-cache performance overhaul**.

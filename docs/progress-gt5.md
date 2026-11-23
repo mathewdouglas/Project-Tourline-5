@@ -4,6 +4,15 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## v0.2.1 bug fixes (`fix/v0.2.1`, 2026-11-24)
+
+- **Fixed: Cockpit / rear-of-car near-plane clipping & overdraw (#76; also affects #61/#33)** (`../ps3recomp-tourline5/libs/video/{rsx_commands.h,rsx_commands.c,rsx_d3d12_backend.c,rsx_fp_interp_backend.inc}`, folded into `patches/ps3recomp-5244db9-local.patch`, single-shot `git apply --check` verified on fresh `5244db9`):
+  - **Root cause:** In #76's debug screenshot (`game-window.bmp`, VW Kübelwagen cockpit view; reporter also saw it on the Lexus LFA interior/rear), rear-of-car geometry behind the cockpit camera drew *in front of* the dashboard/windshield. Both guest PSO builders (`vp_get_fp_pso` and `interp_get_pso`) zero-initialized `D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {0}` and left `DepthClipEnable = FALSE` (`0`), disabling near/far Z-clipping on every guest draw and clamping behind-near-plane geometry to `z = 0.0`. `NV4097_SET_ZMIN_MAX_CONTROL` (`0x1D78`) was also unimplemented.
+  - **Fix:** Added `NV4097_SET_ZMIN_MAX_CONTROL` (`0x1D78`, reset default `1` = `cull_near_far_enable=1, zclamp_enable=0`) to `rsx_state` and `rsx_commands.c`, packed depth-clip-disable into `rsx_cull_key` bit 3 (`0 = DepthClipEnable TRUE` so all existing `rsx_interp_classes` match cleanly; rollback `RSX_DEPTH_CLIP=0`), and wired `pd.RasterizerState.DepthClipEnable = (cull & 8u) ? FALSE : TRUE;` in both `vp_get_fp_pso` and `interp_get_pso`.
+  - **Verification:** HSR cockpit-camera race (`RSX_CMD_CHECK=1`, 30 s): `59.6 FPS` (`1.5%` late, `16.6 ms` median, `20.9 ms` p99, `0` `RSX_CMD_CHECK` reports, `0` `PSO FAIL`, `0` underruns); `setup_runtime.py --check` and `vp_fallback_pso.py` pass.
+- **Fixed: Pipeline cache overflow in long dealership/garage sessions (#70)** (`../ps3recomp-tourline5/libs/video/rsx_d3d12_backend.c`):
+  - Confirmed in #70's `stderr.log` (`9,883` recorded pipelines hitting `[FP] pipeline cache full (8192): emptied at the next frame`, alongside the `VS_PENDING` `PSO FAIL` bug already fixed in 0.1.16). Raised `VP_FP_CACHE` `8192 -> 32768`, `FPI_N` `16384 -> 65536`, and `s_fp_orphan` `512 -> 2048` (4x headroom, ~3 MB RAM).
+
 ## Release 0.2.0 published (2026-11-24)
 
 Tag `v0.2.0` = `aeed7fa` (branch `release/v0.2.0`): two headline features — **steering wheel support with force feedback** (emulated Logitech G27 via DirectInput, `F1 > WHEEL` presets + `F1 > WHEEL MAP` interactive live binding, verified on Logitech G29) and the **near-locked 60 FPS & cold-cache performance overhaul** (native AVX2 vertex transforms `0xAD30`/`0xF970`, SSSE3 strip decompressor `0xA3C0`, SSE4.1/FMA RSX `CMP` normal packer `0xC440`, native weather volume culling `b016B5B00` `0xA220`, tightened Eiger `0x8298`, RSX O(1) texture cache hit + D3D12 state-diffing, and cold-cache worker affinity/CV wakeup/race cap).
