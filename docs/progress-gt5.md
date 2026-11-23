@@ -4,6 +4,16 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.2.1 built & verified (2026-11-24)
+
+Tag `v0.2.1` = `06bc587` (branch `fix/v0.2.1`): bug fixes (`#76` cockpit near-plane clipping, `#74` long-session PPU TLS recycling, `#70` 32K pipeline cache, `#80` Moza R3 256-button / aux USB shifter / button D-pad, `#79` 2.11 Options hint), RPCS3 game-patch support (`#77` live Looser Chase Camera on 01.04 & 02.11, `#53` live Unlock FPS on 02.11), and RSX/SPU fast paths (`GetWriteWatch`, `GCM_FIFO_BURST`, SSE2 `shlqbii`/`rotqbii`, `GCM_FAST_BLIT`, PSO reserve).
+Built cleanly under `C:\pt5-release\0.2.1` (refreshed 4-route PGO `5b21057b164e`: `1` stale hash mismatch on `func_00546AF4`, `888` without a record). ZIP `129` files, SHA-256 `6dc060c266b1e6e0344c5ff9f1a17664185c06e824f8f9190817e0c4aae4f7f3`.
+
+Packaged 01.04 engine (`gt5.exe`), High Speed Ring 60 s frame test (`RSX_CMD_CHECK=1`):
+- **59.6 FPS** (`1.4%` late, median `16.6 ms`, p99 `20.6 ms`, max `48.5 ms`, `walk 6.21 ms/frame`).
+
+Antivirus: local Defender `MpCmdRun -Scan -ScanType 3` found `0` threats on the ZIP and extracted folder. VirusTotal scan pending user API key (`scripts/release/vt.py scan C:\pt5-release\0.2.1\final\out\project-tourline-5-v0.2.1-windows-x64.zip`).
+
 ## v0.2.1 bug fixes (`fix/v0.2.1`, 2026-11-24)
 
 - **Fixed: Cockpit / rear-of-car near-plane clipping & overdraw (#76; also affects #61/#33)** (`../ps3recomp-tourline5/libs/video/{rsx_commands.h,rsx_commands.c,rsx_d3d12_backend.c,rsx_fp_interp_backend.inc}`, folded into `patches/ps3recomp-5244db9-local.patch`, single-shot `git apply --check` verified on fresh `5244db9`):
