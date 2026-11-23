@@ -329,8 +329,9 @@ PGTA-inspired additions: SSE2 `spu_shlqbii`/`spu_rotqbii` (`-DSPU_QBI_SCALAR` ro
 `PSO_WARM_MAX` `8192 -> 16384` + `RSX_PSO_RESERVE=4096` (`=0` off), Windows `GetWriteWatch`
 256 KB sub-block texture tracking (`RSX_TEX_WRITE_WATCH=0` off, `RSX_TEX_WW_CHECK=1` verify;
 Rome checksums `-90%`, `present-replay` `50.3% -> 44.0%` core, Car List checksums `-78%`,
-p99 `23.5 -> 22.5 ms`, `0` misses), and `scripts/rpcs3_patches.py` (`scripts/test/rpcs3_patches.py`).
-See progress-gt5.md.
+p99 `23.5 -> 22.5 ms`, `0` misses), `GCM_FIFO_BURST` (`=0` off; Rome `present` `55.3% -> 52.0%`
+core, walk `-0.50 ms/frame`) + 4-lane `tex_dense_sum`, and `scripts/rpcs3_patches.py`
+(`scripts/test/rpcs3_patches.py`). See progress-gt5.md.
 
 **Steering wheels (`release/v0.2.0`).** GT5 drives Logitech wheels
 with its own `cellUsbd` driver; the runtime now shows it an emulated G27
