@@ -4,6 +4,31 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.1.16 published (2026-11-23)
+
+Tag `v0.1.16` = `a16a092` (branch `release/v0.1.16`): CPU/SPU performance
+overhaul (PPU AltiVec shuffles, native sound mixer/EQ, SPU runtime fast paths,
+branchless SSE4.1 SPU helpers, `func_00C350C0` spin-yield, `SPURS_SPU_KICK_WAKE`,
+native Eiger `0x8298` grid pass, default-on coverage-table cull, 4-route mixed
+PGO) plus the `#70`/`#71` DXC fallback VS & `VS_PENDING` PSO fix (`ec0c93d`).
+Built cleanly under `C:\pt5-release\0.1.16` (`0` compiled functions lost PGO
+counts, `785` without a record). ZIP `129` files, SHA-256
+`f6f1319a4398937b0e46cd10e248f6e6fabb81cd47cc4bf6ba5d91f45ea527c0`.
+
+Packaged engines, High Speed Ring frame test (`RSX_CMD_CHECK=1`):
+- 01.04: **59.8 FPS** (median `16.6 ms`, p99 `19.5 ms`, max `24.9 ms`, `0.7%`
+  late, `0` underruns, `0` `RSX_CMD_CHECK` reports across 9,000 closes).
+- 2.11: reached race cleanly (up to 60 FPS between cold car-shader compiles,
+  `0` `PSO FAIL`, `0` underruns, `0` `RSX_CMD_CHECK` reports across 7,200
+  closes).
+
+Antivirus: local Defender `MpCmdRun -Scan -ScanType 3` found `0` threats on
+the ZIP and `tourline5.exe`. VirusTotal (`C:\pt5-release\0.1.16\vt.log`): ZIP
+`0/64`, `gt5.exe` `0/69`, `gt5_211.exe` `0/0` (known), all 9 DLLs `0/68-72`,
+`tourline5.exe` `2/71` (`APEX=Malicious` + allowed `Trapmine`; Microsoft
+Defender `0`). Published as built at the user's choice, with the ML false
+positive noted in the release notes.
+
 ## 0.1.16 bug triage & DXC fallback VS / VS_PENDING PSO fix (#70, #71, #74, #73/#64, #69; 2026-11-23)
 
 - **Fixed: `[FP] PSO FAIL (..., 0x80070057) ... vs_idx=-1` in #71 (13 failures) and #70 (11 failures)** (`../ps3recomp-tourline5/libs/video/rsx_d3d12_backend.c`, folded into `patches/ps3recomp-5244db9-local.patch`):
