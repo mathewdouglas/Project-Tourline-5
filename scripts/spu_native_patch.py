@@ -65,8 +65,8 @@ def main():
     for hook in hooks:
         image, block, fn = hook[:3]
         by_image.setdefault(image, []).append((int(block, 16), fn))
-        if len(hook) > 3:   # a jump hook: fn(ctx, fused) returns nonzero to go on at that block
-            jumps[(image, int(block, 16))] = int(hook[3], 16)
+        if len(hook) > 3:   # a jump hook: fn(ctx, fused) returns nonzero to go on at that block (or "RET")
+            jumps[(image, int(block, 16))] = "RET" if hook[3] == "RET" else int(hook[3], 16)
     round_calls = {}
     for image, block, count in target.TARGET.get("spu_audio_round_zero_calls", []):
         round_calls.setdefault(image, []).append((int(block, 16), count))
@@ -112,6 +112,8 @@ def main():
                     to = jumps.get((image, block))
                     if to is None:
                         out.append(f"        {fn}(ctx); {MARK}")
+                    elif to == "RET":
+                        out.append(f"        if ({fn}(ctx, GT5P_HOOK_FUSED)) {{ SPU_RET(ctx); }} {MARK}")
                     else:
                         tgt = f"gt5p_{image}_spu_func_{to:08X}"
                         out.append(f"        if ({fn}(ctx, GT5P_HOOK_FUSED)) {{ ctx->pc = 0x{to:X}u; "

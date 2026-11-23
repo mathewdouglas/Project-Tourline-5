@@ -538,3 +538,75 @@ int gt5p_eiger_8298(spu_context* ctx, int fused)
     }
     return ok;
 }
+
+/* Native replacement for b016B5B00 0xA220 (bounding-sphere + 12-plane convex volume test,
+ * 8.6% of Workload 0 in rain/weather scenes). Bit-exact with lifted 0xA220/0xA128/0xA180.
+ * Rollback: GT5P_NATIVE_RAIN_VOL=0. */
+static int g_rain_vol_on = -1;
+static __attribute__((noinline)) int rain_vol_init(void)
+{
+    const char* e = getenv("GT5P_NATIVE_RAIN_VOL");
+    int on = !(e && e[0] == '0');
+#ifdef RAIN_VOL_FORCE_OFF
+    on = 0;
+#endif
+    g_rain_vol_on = on;
+    return on;
+}
+
+int gt5p_rain_a220(spu_context* ctx, int fused)
+{
+    (void)fused;
+    int on = g_rain_vol_on;
+    if (__builtin_expect(on < 0, 0)) on = rain_vol_init();
+    if (!on) return 0;
+    if (__builtin_expect(ctx->int_enable && (ctx->event_status & ctx->event_mask), 0)) return 0;
+
+    const uint32_t r1 = ctx->gpr[1]._u32[0];
+    if (__builtin_expect((r1 & 15u) != 0, 0)) return 0;
+    const uint32_t hdr = ctx->gpr[3]._u32[0];
+    const uint32_t pt  = ctx->gpr[4]._u32[0];
+    uint8_t* const ls = ctx->ls;
+
+    const u128 r9 = spu_ls_read128(ctx, hdr);
+    const int16_t cnt_m1 = (int16_t)(r9._s16[0] - 1);
+    if (cnt_m1 < 0) {
+        ctx->gpr[3] = spu_il(0);
+        return 1;
+    }
+
+    const uint32_t pt_a = pt & (SPU_LS_MASK & ~15u);
+    const float px = eg_be_f32(ls + pt_a + 0);
+    const float py = eg_be_f32(ls + pt_a + 4);
+    const float pz = eg_be_f32(ls + pt_a + 8);
+
+    uint32_t vol = hdr + 528u + (uint32_t)((int32_t)cnt_m1 * 208);
+    for (int32_t k = (int32_t)cnt_m1; k >= 0; k--, vol -= 208u) {
+        const uint32_t va = (vol + 0xC0u) & (SPU_LS_MASK & ~15u);
+        const float cx = eg_be_f32(ls + va + 0);
+        const float cy = eg_be_f32(ls + va + 4);
+        const float cz = eg_be_f32(ls + va + 8);
+        const float r2 = eg_be_f32(ls + va + 12);
+        const float dx = px - cx, dy = py - cy, dz = pz - cz;
+        const float dist2 = (dx * dx + dy * dy) + dz * dz;
+        if (dist2 > r2) continue;
+
+        /* Inside bounding sphere: test 12 planes (3 groups of 4 at vol + 0..0xB0). */
+        int outside = 0;
+        for (uint32_t p = 0; p < 192u; p += 16u) {
+            const uint32_t pa = (vol + p) & (SPU_LS_MASK & ~15u);
+            const float m0 = dx * eg_be_f32(ls + pa + 0);
+            const float m1 = dy * eg_be_f32(ls + pa + 4);
+            const float m2 = dz * eg_be_f32(ls + pa + 8);
+            const float m3 = 1.0f * eg_be_f32(ls + pa + 12);
+            const float dot = (m0 + m2) + (m1 + m3);
+            if (dot > 0.0f) { outside = 1; break; }
+        }
+        if (!outside) {
+            ctx->gpr[3] = spu_il(1);
+            return 1;
+        }
+    }
+    ctx->gpr[3] = spu_il(0);
+    return 1;
+}

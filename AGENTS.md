@@ -292,7 +292,13 @@ hitches `19 -> 7` (-63%), `>50 ms` `57 -> 39` (-32%), max `282.6 -> 171.3 ms` (-
 `59.1 FPS` (`2.6%` late). `rsx_d3d12_backend.c` also adds 4-way O(1) `vp_upload_tex_slot` fast-hit
 (`RSX_TEX_FAST_HIT=0` off), D3D12 draw-loop state-diffing (`RSX_D3D_STATE_DIFF=0` off), range-guarded
 `off_rt_find_in`, and unset-unit `s_srvc` fast path: Rome `present-replay` `50.6% -> 42.5%` (-16%),
-opening 40 s `57.7 -> 58.2 FPS` (`8.1% -> 5.6%` late, `0` `RSX_CMD_CHECK` reports). Refreshed 4-route PGO `build/gt5.exe`: HSR `59.3 FPS` (`1.8%` late),
+opening 40 s `57.7 -> 58.2 FPS` (`8.1% -> 5.6%` late, `0` `RSX_CMD_CHECK` reports). `gt5p_cull_f970`
+(`b0196FF40` / 2.11 `b017BD780` `0xF970 -> 0xFA78`, `GT5P_NATIVE_F970=0` off; 8-wide AVX2 signed
+transform) and `gt5p_rain_a220` (`b016B5B00` `0xA220 -> RET`, `GT5P_NATIVE_RAIN_VOL=0` off; sphere +
+12-plane weather volume test; `"RET"` target added to `spu_native_patch.py`) are verified bit-exact
+(`scripts/test/native_spu_extra.py`, SSE4.1/FMA/AVX2+FMA): Car list `57.9 -> 58.7 FPS` (`6.6% -> 3.2%`
+late), Rome max `32.3 -> 27.5 ms`, Eiger rain `56.8 -> 58.5-59.3 FPS` (`8.1% -> 2.1-3.8%` late, p99
+`35.6 -> 21.1 ms`). Refreshed 4-route PGO `build/gt5.exe`: HSR `59.3 FPS` (`1.8%` late),
 Rome `58.7 FPS` (`4.5%` late, `4.43 cores`), Car list `58.8 FPS` (`2.9%` late), Eiger `57.6 FPS`
 (`5.7%` late). See progress-gt5.md.
 
