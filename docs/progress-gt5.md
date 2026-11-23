@@ -4,6 +4,16 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.2.0 published (2026-11-24)
+
+Tag `v0.2.0` = `aeed7fa` (branch `release/v0.2.0`): two headline features — **steering wheel support with force feedback** (emulated Logitech G27 via DirectInput, `F1 > WHEEL` presets + `F1 > WHEEL MAP` interactive live binding, verified on Logitech G29) and the **near-locked 60 FPS & cold-cache performance overhaul** (native AVX2 vertex transforms `0xAD30`/`0xF970`, SSSE3 strip decompressor `0xA3C0`, SSE4.1/FMA RSX `CMP` normal packer `0xC440`, native weather volume culling `b016B5B00` `0xA220`, tightened Eiger `0x8298`, RSX O(1) texture cache hit + D3D12 state-diffing, and cold-cache worker affinity/CV wakeup/race cap).
+Built cleanly under `C:\pt5-release\0.2.0` (`0` compiled functions lost PGO counts, `864` without a record). ZIP `129` files, SHA-256 `c98db89a3225524aaeebd77994ae9c8d101c0df7329362f6f18b01b50bda9794`.
+
+Packaged 01.04 engine (`gt5.exe`), High Speed Ring 60 s frame test (`RSX_CMD_CHECK=1`):
+- **59.6 FPS** (`1.2%` late, median `16.6 ms`, p99 `20.6 ms`, max `36.7 ms`, `0` `RSX_CMD_CHECK` reports, `0` `PSO FAIL`, `0` underruns).
+
+Antivirus: local Defender `MpCmdRun -Scan -ScanType 3` found `0` threats on the ZIP and extracted folder. VirusTotal (`C:\pt5-release\0.2.0\vt.log`): ZIP `0/63`, `gt5.exe` `0/68`, `gt5_211.exe` `0/68`, all 9 DLLs `0/68–72`, `tourline5.exe` `2/67` (`APEX=Malicious` + allowed `Trapmine`; Microsoft Defender `0`, same unsigned launcher ML false positive as v0.1.16).
+
 ## Locked-60 SPU vertex stage, tightened Eiger & cold-cache stutter reduction (2026-11-23, `perf/v0.1.17-locked60`)
 
 - **Native AVX2 vertex transform (`src/gt5p_native_cull.c`, `gt5p_cull_ad30`):**
