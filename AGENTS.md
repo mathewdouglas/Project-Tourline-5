@@ -323,7 +323,14 @@ clamping behind-camera geometry to `z = 0.0`. `rsx_commands` now decodes `NV4097
 (`0x1D78`, reset default `1`), `rsx_cull_key` bit 3 encodes depth-clip-disable (`0 = TRUE`,
 matching `rsx_interp_classes`; `RSX_DEPTH_CLIP=0` rollback), and both PSO builders set
 `DepthClipEnable`. `#70` (8192 pipeline cache flush in long dealership sessions): raised
-`VP_FP_CACHE` `8192 -> 32768`, `FPI_N` `16384 -> 65536`, `s_fp_orphan` `512 -> 2048`. See progress-gt5.md.
+`VP_FP_CACHE` `8192 -> 32768`, `FPI_N` `16384 -> 65536`, `s_fp_orphan` `512 -> 2048`.
+PGTA-inspired additions: SSE2 `spu_shlqbii`/`spu_rotqbii` (`-DSPU_QBI_SCALAR` rollback;
+`spu_helpers_sse.py`, 9M bit-exact), `s_stack_reset_hint[1024]`, `GCM_FAST_BLIT` (`=0` off),
+`PSO_WARM_MAX` `8192 -> 16384` + `RSX_PSO_RESERVE=4096` (`=0` off), Windows `GetWriteWatch`
+256 KB sub-block texture tracking (`RSX_TEX_WRITE_WATCH=0` off, `RSX_TEX_WW_CHECK=1` verify;
+Rome checksums `-90%`, `present-replay` `50.3% -> 44.0%` core, Car List checksums `-78%`,
+p99 `23.5 -> 22.5 ms`, `0` misses), and `scripts/rpcs3_patches.py` (`scripts/test/rpcs3_patches.py`).
+See progress-gt5.md.
 
 **Steering wheels (`release/v0.2.0`).** GT5 drives Logitech wheels
 with its own `cellUsbd` driver; the runtime now shows it an emulated G27
