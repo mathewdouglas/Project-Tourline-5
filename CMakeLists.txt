@@ -128,6 +128,16 @@ string(JSON GT5P_LISTBOX_RANGE ERROR_VARIABLE GT5P_LISTBOX_RANGE_ERR GET "${GT5P
 if(GT5P_LISTBOX_RANGE_ERR)
     set(GT5P_LISTBOX_RANGE "")
 endif()
+string(JSON GT5P_CHASE_CAM_BSS ERROR_VARIABLE GT5P_CHASE_CAM_BSS_ERR GET "${GT5P_T}" chase_cam_bss)
+if(GT5P_CHASE_CAM_BSS_ERR)
+    set(GT5P_CHASE_CAM_BSS "0")
+endif()
+string(JSON GT5P_CHASE_CAM_V211 ERROR_VARIABLE GT5P_CHASE_CAM_V211_ERR GET "${GT5P_T}" chase_cam_v211)
+if(GT5P_CHASE_CAM_V211_ERR OR NOT GT5P_CHASE_CAM_V211)
+    set(GT5P_CHASE_CAM_V211 0)
+else()
+    set(GT5P_CHASE_CAM_V211 1)
+endif()
 message(STATUS "game build: ${GT5P_TARGET} (code end ${GT5P_CODE_END}, boot_from=${GT5P_BOOT_FROM})")
 
 # =============================================================================
@@ -265,6 +275,7 @@ add_executable(gt5p
     src/gt5p_native_cull.c
     src/gt5p_native_eiger.c
     src/gt5p_settings.cpp
+    src/gt5p_patches.cpp
     src/gt5p_controls.cpp
     src/gt5p_profview.cpp
     src/gt5p_debug_export.cpp
@@ -365,6 +376,8 @@ foreach(key IN ITEMS core vtable get set load save)
     list(APPEND GT5P_CONTROLS_DEFS "GT5P_CONTROLS_${upper}=${value}u")
 endforeach()
 set_source_files_properties(src/gt5p_controls.cpp PROPERTIES COMPILE_DEFINITIONS "${GT5P_CONTROLS_DEFS}")
+set_source_files_properties(src/gt5p_patches.cpp PROPERTIES COMPILE_DEFINITIONS
+    "GT5P_CHASE_CAM_BSS=${GT5P_CHASE_CAM_BSS}u;GT5P_CHASE_CAM_V211=${GT5P_CHASE_CAM_V211}")
 
 if(GT5P_TITLE STREQUAL "BCUS98114")
     set_source_files_properties(src/gt5p_present.cpp PROPERTIES

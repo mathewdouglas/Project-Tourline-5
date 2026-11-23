@@ -71,6 +71,9 @@ struct Gt5pSettings {
     bool skip_movie = false;    /* press through the opening movie (PAD_SKIP_MOVIE) */
     bool smooth_colour = true;  /* 16-bit targets, no dither noise (RSX_HIGH_PRECISION) */
     int anisotropy = 16;        /* 1 (trilinear), 4, 8 or 16: forced anisotropic filtering (RSX_ANISO) */
+    bool looser_chase_camera = false; /* RPCS3 Looser Chase Camera patch (GT5_PATCH_LOOSER_CHASE_CAMERA) */
+    int chase_cam_damper = 90;        /* chase camera spring damper, 0..300 (vanilla 300) */
+    int chase_cam_max_angle = 35;     /* chase camera max rotation angle, 0..100 (vanilla 30) */
     std::string player_name;    /* the PS3 user name the game shows; "" = "User" (PS3_USER_NAME) */
 
     /* [audio] */

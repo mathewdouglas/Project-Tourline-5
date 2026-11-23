@@ -35,6 +35,7 @@
 
 #include "elf_loader.h"
 #include "gt5p_settings.h"
+#include "gt5p_patches.h"
 #include "gt5p_debug_export.h"
 #include "gt5p_glyphs.h"
 #include "gt5p_keymap.h"
@@ -1174,6 +1175,7 @@ int main(int argc, char* argv[])
            * menus' centred layout. */
           if (ui && ui[0] == '0' && !getenv("RSX_ULTRAWIDE_EDGES")) _putenv_s("RSX_ULTRAWIDE_EDGES", "0");
       } }
+    gt5p_patches_apply_boot();
 
     ppu_hle_register_all();
     ppu_sysprx_register();

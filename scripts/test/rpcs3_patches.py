@@ -83,6 +83,17 @@ PPU-deadbeef:
     Patch:
       - [ calloc, 0x100 ]
       - [ be32, 0x0, 0x60000000 ]
+  "Configurable With Default":
+    Games:
+      "Gran Turismo 5":
+        BCUS98114: [ 01.04 ]
+    Author: "Tester"
+    Configurable Values:
+      "Spring Damper":
+        Type: double_range
+        Value: 90.0
+    Patch:
+      - [ bef32, 0x01200030, "Spring Damper" ]
   "Configurable FOV":
     Games:
       "Gran Turismo 5":
@@ -118,10 +129,11 @@ def main() -> int:
             capture_output=True, text=True, check=True,
         )
         stdout = res.stdout
-        assert "5 matching patches" in stdout, stdout
+        assert "6 matching patches" in stdout, stdout
         assert "Other Version Only" not in stdout, stdout
         assert "insn        2 insn" in stdout and "Disable Bloom" in stdout, stdout
         assert "data        0 insn     5 data bytes  Tune Camera Float" in stdout, stdout
+        assert "data        0 insn     4 data bytes  Configurable With Default" in stdout, stdout
         assert "insn+data   1 insn     8 data bytes  Hybrid Patch" in stdout, stdout
         assert "cave" in stdout and "Needs Code Cave" in stdout, stdout
         assert "config" in stdout and "Configurable FOV" in stdout, stdout
@@ -152,6 +164,28 @@ def main() -> int:
         assert "2 matching patches" in res2.stdout, res2.stdout
         assert "Tune Camera Float" in res2.stdout
         assert "Other Version Only" in res2.stdout
+
+        # 3. End-to-end ppu_lifter.py --insn-patches on the synthetic ELF
+        import os
+        runtime = Path(os.environ.get("PS3RECOMP_DIR") or (ROOT.parent / "ps3recomp-tourline5"))
+        lifter = runtime / "tools" / "ppu_lifter.py"
+        if lifter.exists():
+            funcs_json = td_p / "funcs.json"
+            funcs_json.write_text(json.dumps([{"start": "0x00010000", "end": "0x00010010"}]), encoding="utf-8")
+            lift_out = td_p / "lifted"
+            subprocess.run(
+                [sys.executable, str(lifter), str(elf), "--functions", str(funcs_json),
+                 "--insn-patches", str(out / "BCUS98114-v104.insn_patches.json"),
+                 "--single-file", "-o", str(lift_out)],
+                capture_output=True, text=True, check=True,
+            )
+            hdr = (lift_out / "ppu_recomp.h").read_text(encoding="utf-8")
+            src = (lift_out / "ppu_recomp.c").read_text(encoding="utf-8")
+            assert "extern int g_gt5_patch_disable_bloom;" in hdr, hdr
+            assert "extern int g_gt5_patch_hybrid_patch;" in hdr, hdr
+            assert "if (__builtin_expect(!g_gt5_patch_disable_bloom, 1))" in src, src
+            assert "if (__builtin_expect(g_gt5_patch_disable_bloom, 0))" in src, src
+            assert "if (__builtin_expect(g_gt5_patch_hybrid_patch, 0)) { return; }" in src, src
 
     print("rpcs3_patches: all assertions passed")
     return 0

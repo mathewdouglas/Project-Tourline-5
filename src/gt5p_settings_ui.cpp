@@ -45,6 +45,7 @@
 #include <vector>
 
 #include "gt5p_settings.h"
+#include "gt5p_patches.h"
 #include "gt5p_controls.h"
 #include "gt5p_debug_export.h"
 #include "gt5p_glyphs.h"
@@ -530,6 +531,29 @@ const std::vector<Item>& items()
           "RSX_ANISO", { {1, L"Trilinear"}, {4, L"4x anisotropic"}, {8, L"8x anisotropic"}, {16, L"16x anisotropic"} },
           [](const UiSettings& s) { return s.anisotropy; },
           [](UiSettings& s, int v) { s.anisotropy = v; }, nullptr },
+        { L"GAME", L"Looser chase camera",
+          L"RPCS3 Looser Chase Camera patch: lets the chase camera sway freely with steering "
+          L"and drift instead of locking rigidly behind the car. Applies live.",
+          "GT5_PATCH_LOOSER_CHASE_CAMERA", kOnOff,
+          [](const UiSettings& s) { return s.looser_chase_camera ? 1 : 0; },
+          [](UiSettings& s, int v) { s.looser_chase_camera = v != 0; },
+          [](int) { /* pushed in set_value via gt5p_patches_apply_chase_cam */ } },
+        { L"GAME", L"Chase cam damper",
+          L"Spring damper for Looser chase camera. Lower values let the camera swing further "
+          L"(90 default, 300 vanilla). Applies live when Looser chase camera is On.",
+          "GT5_CHASE_CAM_DAMPER", { {30, L"30 (Very loose)"}, {60, L"60 (Loose)"}, {90, L"90 (Default)"},
+                                    {120, L"120"}, {150, L"150 (Medium)"}, {200, L"200 (Firm)"}, {300, L"300 (Vanilla)"} },
+          [](const UiSettings& s) { return s.chase_cam_damper; },
+          [](UiSettings& s, int v) { s.chase_cam_damper = v; },
+          [](int) { /* pushed in set_value via gt5p_patches_apply_chase_cam */ } },
+        { L"GAME", L"Chase cam max angle",
+          L"Maximum rotation angle for Looser chase camera (35 default, 30 vanilla). "
+          L"Applies live when Looser chase camera is On.",
+          "GT5_CHASE_CAM_MAX_ANGLE", { {15, L"15"}, {25, L"25"}, {30, L"30 (Vanilla)"},
+                                       {35, L"35 (Default)"}, {45, L"45"}, {60, L"60"}, {80, L"80"} },
+          [](const UiSettings& s) { return s.chase_cam_max_angle; },
+          [](UiSettings& s, int v) { s.chase_cam_max_angle = v; },
+          [](int) { /* pushed in set_value via gt5p_patches_apply_chase_cam */ } },
         { L"AUDIO", L"Sound output",
           L"GT5 mixes 5.1 surround. Stereo folds it down. 5.1 or 7.1 sends it to surround "
           L"speakers (7.1's side pair stays silent); Auto follows the Windows speaker setup. Restart to apply.",
@@ -667,7 +691,9 @@ std::vector<int> rows()
     std::vector<int> r = { kRowHead };
     const wchar_t* sec = sections()[s_section];
     for (int i = 0; i < (int)items().size(); i++) if (!wcscmp(items()[i].section, sec) && (!launcher_item(items()[i]) || pt5_restart::managed()) &&
-            (!env_is(items()[i], "GT5P_MOD") || mods_available())) r.push_back(i);
+            (!env_is(items()[i], "GT5P_MOD") || mods_available()) &&
+            (gt5p_patches_has_chase_cam() || !(env_is(items()[i], "GT5_PATCH_LOOSER_CHASE_CAMERA") ||
+                env_is(items()[i], "GT5_CHASE_CAM_DAMPER") || env_is(items()[i], "GT5_CHASE_CAM_MAX_ANGLE")))) r.push_back(i);
     const char* ready211=getenv("GT5P_VERSION_211_READY");
     const char* supported211=getenv("GT5P_VERSION_211_SUPPORTED");
     if (pt5_restart::managed() && !wcscmp(sec,L"GAME") && supported211 && !strcmp(supported211,"1") && (!ready211 || strcmp(ready211,"1"))) r.push_back(kRowSetup211);
@@ -806,6 +832,10 @@ void set_value(int id, int v)
     if (over) s_status += L"  " + widen(it.env) + L" is set in the environment and wins over this.";
     else if (it.apply) {
         if (!wcscmp(it.label, L"Wheel preset")) wheel_map_push();
+        else if (it.env && (!strcmp(it.env, "GT5_PATCH_LOOSER_CHASE_CAMERA") ||
+                            !strcmp(it.env, "GT5_CHASE_CAM_DAMPER") ||
+                            !strcmp(it.env, "GT5_CHASE_CAM_MAX_ANGLE")))
+            gt5p_patches_apply_chase_cam(s_edit.looser_chase_camera, s_edit.chase_cam_damper, s_edit.chase_cam_max_angle);
         else it.apply(v);
         s_status += it.env && !strcmp(it.env,"PAD_MODERN_CONTROLS") ?
             L"  Mapping requested. Use the game's normal Save to keep it." : L"  Applied.";

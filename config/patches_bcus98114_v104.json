@@ -1,0 +1,61 @@
+{
+  "target": "BCUS98114-v104",
+  "patches": [
+    {
+      "addr": "0x0054659C",
+      "orig": "0x38000001",
+      "new": "0x38000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x005465B4",
+      "orig": "0x98040321",
+      "new": "0x60000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x00546B3C",
+      "orig": "0xD1BC0004",
+      "new": "0x60000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x00546B54",
+      "orig": "0xD1AB0004",
+      "new": "0x60000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x00547260",
+      "orig": "0x7C0B01CE",
+      "new": "0x60000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x00547270",
+      "orig": "0x7D8059CE",
+      "new": "0x60000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x00549C14",
+      "orig": "0x38000001",
+      "new": "0x38000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x00549C1C",
+      "orig": "0x98040320",
+      "new": "0x60000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    }
+  ]
+}

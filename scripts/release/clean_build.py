@@ -182,9 +182,12 @@ def main():
     end = int(code_end, 16)
     (src / 'analysis/functions_code.json').write_text(json.dumps([f for f in functions if int(f['start'], 16) < end]))
     run(py, 'scripts/gen_hle_stubs.py', 'input/EMAIN.ELF', 'analysis/hle_stubs.json', cwd=src, env=env)
-    run(py, tools / 'ppu_lifter.py', 'input/EMAIN.ELF', '--functions', 'analysis/functions_code.json',
-        '--output', 'generated', '--code-end', code_end, '--header-name', 'ppu_recomp.h',
-        '--source-name', 'ppu_recomp.c', '--hle-stubs', 'analysis/hle_stubs.json', cwd=src, env=env)
+    lift_args = ['input/EMAIN.ELF', '--functions', 'analysis/functions_code.json',
+                 '--output', 'generated', '--code-end', code_end, '--header-name', 'ppu_recomp.h',
+                 '--source-name', 'ppu_recomp.c', '--hle-stubs', 'analysis/hle_stubs.json']
+    if target_config.get('insn_patches'):
+        lift_args += ['--insn-patches', target_config['insn_patches']]
+    run(py, tools / 'ppu_lifter.py', *lift_args, cwd=src, env=env)
     run(py, 'scripts/setjmp_patch.py', cwd=src, env=env)
     run(py, 'scripts/lift_spu_jobs.py', cwd=src, env=env)
     for script in ('spin_patch.py', 'ui_mask_patch.py', 'script_error_patch.py', 'guest_eh_patch.py', 'spu_native_patch.py', 'spu_regpromo.py', 'spu_region.py'):

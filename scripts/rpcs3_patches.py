@@ -97,12 +97,28 @@ def read_patches(path: str | Path, serial: str, version: str):
         if serial_re.search(text):
             a = re.search(r'Author:\s*"?([^"\n]*)"?', text)
             author = a.group(1).strip() if a else "?"
+            cfg_vals: dict[str, str] = {}
+            if "Configurable Values:" in text:
+                cfg_part = text.split("Configurable Values:", 1)[1]
+                if "Patch:" in cfg_part:
+                    cfg_part = cfg_part.split("Patch:", 1)[0]
+                cur_key = None
+                for cln in cfg_part.splitlines():
+                    km = re.match(r'^\s{6}"?([^":\n]+?)"?:\s*$', cln)
+                    if km:
+                        cur_key = km.group(1).strip()
+                        continue
+                    if cur_key:
+                        vm = re.match(r'^\s+Value:\s*"?([^"\n#]+?)"?\s*(?:#.*)?$', cln)
+                        if vm:
+                            cfg_vals[cur_key] = vm.group(1).strip()
             body = text.split("Patch:", 1)[1].splitlines() if "Patch:" in text else []
             out.append({
                 "title": title,
                 "author": author,
                 "lines": body,
                 "configurable": "Configurable Values:" in text,
+                "cfg_defaults": cfg_vals,
             })
         i = j
     return out, anchors
@@ -178,19 +194,25 @@ def classify_patch(
 
     insn: dict[int, int] = {}
     data: list[tuple[int, bytes]] = []
+    cfg_defaults = patch.get("cfg_defaults", {})
     for kind, a, b, _note in items:
         try:
             addr = int(a, 0)
         except ValueError:
             return "cave", {}, [], "address is not a number: " + a
+        b_val = b
+        if isinstance(b_val, str):
+            stripped = b_val.strip().strip('"').lstrip("$")
+            if stripped in cfg_defaults:
+                b_val = cfg_defaults[stripped]
         if kind == "bef32":
             try:
-                raw = struct.pack(">f", float(b))
+                raw = struct.pack(">f", float(b_val))
             except (TypeError, ValueError):
                 return "config", {}, [], "configurable value: " + str(b)
         elif kind in ("be32", "be16", "byte", "be64"):
             try:
-                v = int(b, 0)
+                v = int(b_val, 0)
             except (TypeError, ValueError):
                 return "config", {}, [], "configurable value: " + str(b)
             raw = {

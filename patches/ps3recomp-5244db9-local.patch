@@ -71127,7 +71127,7 @@ index 794abe77..8caf8e34 100644
      # SPURS event flag
      ("cellSpurs", "cellSpursEventFlagInitializeIWL"),
 diff --git a/tools/ppu_lifter.py b/tools/ppu_lifter.py
-index b19e2408..ca502250 100644
+index b19e2408..a959ef11 100644
 --- a/tools/ppu_lifter.py
 +++ b/tools/ppu_lifter.py
 @@ -17,6 +17,11 @@ import os
@@ -71158,7 +71158,91 @@ index b19e2408..ca502250 100644
  
  /* Firmware-import HLE dispatch: a lifted import stub (a .lib.stub trampoline)
   * is replaced with a direct call to the registered HLE handler for its NID
-@@ -862,17 +869,47 @@ class PPULifter:
+@@ -576,6 +583,9 @@ class PPULifter:
+         # `.lib.stub` trampoline (which derefs an import pointer table the recomp
+         # never populates -> bctrl to garbage). Populated from --hle-stubs.
+         self.hle_stub_nids: dict[int, int] = {}
++        # Optional runtime-guarded instruction patches from --insn-patches:
++        # addr -> (orig_word, new_word, guard_symbol, note).
++        self.insn_patches: dict[int, tuple[int, int, str, str]] = {}
+         # Module primary TOC (r2). Set by main() only when the ELF yields exactly
+         # one TOC candidate; enables the `ld r2, N(r1)` restore lowering below.
+         self.toc_base: int = 0
+@@ -651,20 +661,38 @@ class PPULifter:
+         # this is O(log N + span) rather than a full O(N) scan per call.
+         range_insns = self._range_insns(instructions, start, end)
+ 
+-        # Collect branch targets within the function for labels
++        # Collect branch targets within the function for labels (including any
++        # runtime-guarded patched instructions that branch inside the function).
+         internal_targets: set[int] = set()
++        patched_decoded: dict[int, tuple[Instruction, str, str]] = {}
+         for insn in range_insns:
+-            if insn.mnemonic.startswith("b") and insn.mnemonic not in (
+-                    "blr", "bctr", "bctrl", "bl", "blrl"):
+-                ops = _parse_operands(insn.operands)
+-                for op in ops:
+-                    if op.startswith("0x"):
+-                        try:
+-                            target = int(op, 16)
+-                            if start <= target < end:
+-                                internal_targets.add(target)
+-                        except ValueError:
+-                            pass
++            pinfo = self.insn_patches.get(insn.addr)
++            if pinfo is not None:
++                orig_w, new_w, guard, note = pinfo
++                if insn.raw != orig_w:
++                    raise ValueError(
++                        f"insn-patch mismatch at 0x{insn.addr:08X}: ELF has 0x{insn.raw:08X}, "
++                        f"patch expects 0x{orig_w:08X} ({note})"
++                    )
++                p_list = disassemble_bytes(new_w.to_bytes(4, "big"), insn.addr, True)
++                if not p_list:
++                    raise ValueError(f"insn-patch at 0x{insn.addr:08X}: cannot decode 0x{new_w:08X}")
++                patched_decoded[insn.addr] = (p_list[0], guard, note)
++            check_insns = [insn]
++            if insn.addr in patched_decoded:
++                check_insns.append(patched_decoded[insn.addr][0])
++            for ci in check_insns:
++                if ci.mnemonic.startswith("b") and ci.mnemonic not in (
++                        "blr", "bctr", "bctrl", "bl", "blrl"):
++                    ops = _parse_operands(ci.operands)
++                    for op in ops:
++                        if op.startswith("0x"):
++                            try:
++                                target = int(op, 16)
++                                if start <= target < end:
++                                    internal_targets.add(target)
++                            except ValueError:
++                                pass
+ 
+         # Jump-table cases reached by a `bctr` inside this function are computed
+         # targets (invisible to the b/bc scan above) but ARE in-range blocks --
+@@ -684,7 +712,21 @@ class PPULifter:
+                 emitted_labels.add(insn.addr)
+ 
+             c_line = self._translate(insn, func)
+-            if c_line:
++            if insn.addr in patched_decoded:
++                p_insn, guard, note = patched_decoded[insn.addr]
++                p_line = self._translate(p_insn, func) if p_insn.raw != 0x60000000 else ""
++                note_c = f" /* patch: {note} */" if note else ""
++                if not p_line or p_line.strip().startswith("/* nop"):
++                    if c_line:
++                        func.body_lines.append(
++                            f"    if (__builtin_expect(!{guard}, 1)) {{ {c_line} }}{note_c}"
++                        )
++                else:
++                    orig_blk = c_line if c_line else "/* nop */"
++                    func.body_lines.append(
++                        f"    if (__builtin_expect({guard}, 0)) {{ {p_line} }} else {{ {orig_blk} }}{note_c}"
++                    )
++            elif c_line:
+                 func.body_lines.append(f"    {c_line}")
+ 
+         # An in-range branch target with no decoded instruction at its address
+@@ -862,17 +904,47 @@ class PPULifter:
          # ECDSA signature the firmware checked failed on that one word.
          _reg_snap = set()        # regs to snapshot from the register at entry
          _mem_snap = {}           # reg -> offset, snapshot from memory at entry
@@ -71208,7 +71292,7 @@ index b19e2408..ca502250 100644
                      # pure tail-entry: the save lives in the original function, so
                      # this body never writes the slot; snapshot from memory at entry.
                      # (Skip slots whose address escaped to a callee -- see above.)
-@@ -1588,8 +1625,9 @@ class PPULifter:
+@@ -1588,8 +1660,9 @@ class PPULifter:
                              f"(void(*)(void*)){self.prefix}func_{c:08X}; return; }}")
                  if arms:
                      return ("switch ((uint32_t)ctx->ctr) { " + "".join(arms) +
@@ -71220,7 +71304,7 @@ index b19e2408..ca502250 100644
  
          if mn == "bctrl":
              # Indirect call through CTR register. The CTR value is a GUEST
-@@ -2110,6 +2148,15 @@ class PPULifter:
+@@ -2110,6 +2183,15 @@ class PPULifter:
                      f"uint64_t raw; memcpy(&raw, vm_base + (uint32_t)ea, 8); "
                      f"ctx->gpr[{rd}] = raw; }}")
  
@@ -71236,7 +71320,7 @@ index b19e2408..ca502250 100644
          if mn == "sthbrx":
              rs, ra, rb = _reg_idx(ops[0]), _reg_idx(ops[1]), _reg_idx(ops[2])
              return (f"{{ uint64_t ea = {_xea(ra,rb)}; "
-@@ -2263,8 +2310,9 @@ class PPULifter:
+@@ -2263,8 +2345,9 @@ class PPULifter:
              return (f"{{ uint64_t ea = {_xea(ra,rb)}; "
                      f"uint32_t sh = (uint32_t)(ea & 0xF); "
                      f"uint8_t* m = vm_base + (uint32_t)(ea & ~0xFULL); "
@@ -71247,7 +71331,7 @@ index b19e2408..ca502250 100644
  
          if mn == "lvrx" or mn == "lvrxl":
              vd = int(ops[0][1:]) if ops[0].startswith("v") else _reg_idx(ops[0])
-@@ -2273,8 +2321,62 @@ class PPULifter:
+@@ -2273,8 +2356,62 @@ class PPULifter:
              return (f"{{ uint64_t ea = {_xea(ra,rb)}; "
                      f"uint32_t sh = (uint32_t)(ea & 0xF); "
                      f"uint8_t* m = vm_base + (uint32_t)(ea & ~0xFULL); "
@@ -71311,7 +71395,7 @@ index b19e2408..ca502250 100644
  
          if mn == "lvebx" or mn == "lvehx" or mn == "lvewx":
              vd = int(ops[0][1:]) if ops[0].startswith("v") else _reg_idx(ops[0])
-@@ -2307,6 +2409,9 @@ class PPULifter:
+@@ -2307,6 +2444,9 @@ class PPULifter:
              # lvsl/lvsr generate permutation vectors for unaligned loads.
              # lvsl: for byte offset b, generates {b, b+1, b+2, ..., b+15}
              # lvsr: generates {16-b, 17-b, ..., 31-b}
@@ -71321,7 +71405,7 @@ index b19e2408..ca502250 100644
              if mn == "lvsl":
                  return (f"{{ uint8_t b = (uint8_t)(({_xea(ra,rb)}) & 0xF); "
                          f"for (int i = 0; i < 16; i++) ((uint8_t*)&ctx->vr[{vd}])[i] = b + i; }}")
-@@ -2320,6 +2425,8 @@ class PPULifter:
+@@ -2320,6 +2460,8 @@ class PPULifter:
              va = int(ops[1][1:])
              vb = int(ops[2][1:])
              vc = int(ops[3][1:])
@@ -71330,7 +71414,7 @@ index b19e2408..ca502250 100644
              return (f"{{ uint8_t* a = (uint8_t*)&ctx->vr[{va}]; "
                      f"uint8_t* b = (uint8_t*)&ctx->vr[{vb}]; "
                      f"uint8_t* c = (uint8_t*)&ctx->vr[{vc}]; "
-@@ -2692,6 +2799,18 @@ class PPULifter:
+@@ -2692,6 +2834,18 @@ class PPULifter:
              return (f"{{ float b[4],d[4]; ppu_vldf4(&ctx->vr[{vb}],b); "
                      f"for(int i=0;i<4;i++) d[i]=1.0f/sqrtf(b[i]); ppu_vstf4(&ctx->vr[{vd}],d); }}")
  
@@ -71349,7 +71433,7 @@ index b19e2408..ca502250 100644
          if mn == "vrfim":  # round to FP integer toward -inf (floor); vrfim is vD,vB
              vd, vb = int(ops[0][1:]), int(ops[-1][1:])
              return (f"{{ float b[4],d[4]; ppu_vldf4(&ctx->vr[{vb}],b); "
-@@ -2946,6 +3065,23 @@ class PPULifter:
+@@ -2946,6 +3100,23 @@ class PPULifter:
                      f"for(int k=0;k<4;k++) o[j*4+k]=(uint8_t)(r>>(8*(3-k))); }} "
                      f"memcpy(&ctx->vr[{vd}], o, 16); }}")
  
@@ -71373,7 +71457,7 @@ index b19e2408..ca502250 100644
          # vsumsws vD,vA,vB: sum the four signed words of vA plus word 3 of vB,
          # saturate to signed 32, place in word 3 of vD; words 0..2 are zero.
          if mn == "vsumsws":
-@@ -3047,6 +3183,17 @@ class PPULifter:
+@@ -3047,6 +3218,17 @@ class PPULifter:
                      f"for(int i=0;i<4;i++) d[i]=(uint16_t)(a[i]&0xFFFFu); "
                      f"for(int i=0;i<4;i++) d[4+i]=(uint16_t)(b[i]&0xFFFFu); }}")
  
@@ -71391,7 +71475,20 @@ index b19e2408..ca502250 100644
          # vmsummbm (VA-form, 4 operands)
          if mn == "vmsummbm":
              vd = int(ops[0][1:]); va = int(ops[1][1:]); vb = int(ops[2][1:]); vc = int(ops[3][1:])
-@@ -3633,6 +3780,27 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+@@ -3246,6 +3428,12 @@ class PPULifter:
+                                             self.prefix + "function_table")
+                     if self.prefix else HEADER_PREAMBLE)
+         lines = [preamble]
++        if self.insn_patches:
++            guards = sorted({g for _, _, g, _ in self.insn_patches.values()})
++            lines.append("#ifdef __cplusplus\nextern \"C\" {\n#endif")
++            for g in guards:
++                lines.append(f"extern int {g};")
++            lines.append("#ifdef __cplusplus\n}\n#endif")
+         # Forward declarations
+         for func in self.functions:
+             lines.append(f"void {func.name}(ppu_context* ctx);")
+@@ -3633,6 +3821,27 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
              if all_insns[_k].mnemonic == 'blr':
                  return _k + 1
          return 0
@@ -71419,7 +71516,7 @@ index b19e2408..ca502250 100644
      def _live(lo, i):
          """all_insns[lo:i] minus blocks that end in `blr` -- they return, so
          they cannot flow into the dispatch at i. Scanning backward straight
-@@ -3820,7 +3988,7 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+@@ -3820,7 +4029,7 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
                      # preceding blr, so the scan cannot drift into the previous
                      # function and latch a stale base.
                      _scan, _resolved = _live(max(0, i - 30), i), False
@@ -71428,7 +71525,7 @@ index b19e2408..ca502250 100644
                          for w2 in reversed(_scan):
                              b = [x.strip() for x in w2.operands.split(',')]
                              if not b or b[0] != _mid or w2.mnemonic.startswith(('st', 'lf')):
-@@ -3831,9 +3999,12 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
+@@ -3831,9 +4040,12 @@ def discover_jump_tables(all_insns, read_u32, toc, text_lo, text_hi, func_starts
                                  disp2 = _d2; disp2_is_ld = _d2_is_ld
                              _resolved = True    # nearest def wins, TOC load or not
                              break
@@ -71443,6 +71540,77 @@ index b19e2408..ca502250 100644
                  break                           # first definition of cand wins/loses
              if disp is not None:
                  _bases.append((r_base, disp, base_is_ld, disp2, disp2_is_ld))
+@@ -3992,13 +4204,14 @@ _WORKER_STATE: dict = {}
+ 
+ def _worker_init(segs, big_endian, name_map, prefix, hle_stub_nids=None,
+                  function_entries=None, code_lo=0, code_hi=None, jump_tables=None,
+-                 toc_base=0):
++                 toc_base=0, insn_patches=None):
+     _WORKER_STATE["segs"] = segs
+     _WORKER_STATE["be"] = big_endian
+     _WORKER_STATE["names"] = name_map
+     _WORKER_STATE["prefix"] = prefix
+     _WORKER_STATE["toc_base"] = toc_base
+     _WORKER_STATE["hle_stub_nids"] = hle_stub_nids or {}
++    _WORKER_STATE["insn_patches"] = insn_patches or {}
+     # Branch-routing context the body lift needs -- previously omitted, so the
+     # parallel path lost the code-window filter (out-of-range branches became
+     # bogus func_XXXX trampolines that fail to link) and the function-entry
+@@ -4017,6 +4230,7 @@ def _worker_lift(task):
+     # .lib.stub trampoline (which derefs an unpopulated import table) is lifted as
+     # real code and bctrl's to garbage. (Single-threaded lift set this directly.)
+     lifter.hle_stub_nids = _WORKER_STATE.get("hle_stub_nids", {})
++    lifter.insn_patches = _WORKER_STATE.get("insn_patches", {})
+     lifter.function_entries = _WORKER_STATE.get("function_entries", set())
+     lifter.code_lo = _WORKER_STATE.get("code_lo", 0)
+     lifter.code_hi = _WORKER_STATE.get("code_hi", None)
+@@ -4056,7 +4270,8 @@ def _parallel_lift(lifter, func_bounds, segs, big_endian, jobs):
+                    initargs=(segs, big_endian, lifter.name_map, lifter.prefix,
+                              lifter.hle_stub_nids, lifter.function_entries,
+                              lifter.code_lo, lifter.code_hi, lifter.jump_tables,
+-                             getattr(lifter, "toc_base", 0)))
++                             getattr(lifter, "toc_base", 0),
++                             getattr(lifter, "insn_patches", {})))
+     try:
+         for idx0, results, ct, bt in pool.imap_unordered(_worker_lift, tasks):
+             results_by_idx[idx0] = results
+@@ -4126,6 +4341,9 @@ def main() -> None:
+                              "instead of its literal .lib.stub trampoline, and "
+                              "split out as its own 0x20-byte function so direct "
+                              "calls to it dispatch to the HLE handler.")
++    parser.add_argument("--insn-patches", metavar="FILE", default=None,
++                        help="JSON file ({patches:[{addr,orig,new,guard,note}]}) "
++                             "of runtime-guarded instruction replacements.")
+     args = parser.parse_args()
+ 
+     # Load firmware-import stubs (addr -> NID) up front; applied to func_bounds
+@@ -4136,6 +4354,16 @@ def main() -> None:
+             for _e in json.load(_hf):
+                 hle_stubs[int(str(_e["stub"]), 0)] = int(str(_e["nid"]), 0) & 0xFFFFFFFF
+ 
++    insn_patches: dict[int, tuple[int, int, str, str]] = {}
++    if args.insn_patches:
++        with open(args.insn_patches, encoding="utf-8") as _pf:
++            _pdata = json.load(_pf)
++            for _e in _pdata.get("patches", _pdata if isinstance(_pdata, list) else []):
++                _a = int(str(_e["addr"]), 0)
++                _o = int(str(_e["orig"]), 0) & 0xFFFFFFFF
++                _n = int(str(_e["new"]), 0) & 0xFFFFFFFF
++                insn_patches[_a] = (_o, _n, str(_e["guard"]), str(_e.get("note", "")))
++
+     with open(args.input, "rb") as f:
+         file_data = f.read()
+ 
+@@ -4570,6 +4798,9 @@ def main() -> None:
+         lifter.code_lo = min(s for s, _ in func_bounds)
+         lifter.code_hi = max(e for _, e in func_bounds)
+     lifter.hle_stub_nids = hle_stubs
++    lifter.insn_patches = insn_patches
++    if insn_patches:
++        print(f"  insn-patches: {len(insn_patches)} runtime-guarded instruction replacements")
+     lifter.function_entries = _func_entries
+     lifter.jump_tables = jt_dispatchers
+ 
 diff --git a/tools/spu_disasm.py b/tools/spu_disasm.py
 index 26303525..d29c28a8 100644
 --- a/tools/spu_disasm.py

@@ -104,6 +104,9 @@
     "aspect_16_9_float": "0x019133B0",
     "ui_aspect_16_9_float": "0x01914A48",
     "scene_camera_aspect_16_9_float": "0x018EB70C",
+    "insn_patches": "config/patches_bcus98114_v104.json",
+    "chase_cam_bss": "0x019AFE70",
+    "chase_cam_v211": false,
     "ui_mask_sites": [{"func": "0x00A5D384", "x": [12, 11, 13], "one": 30, "w": 31, "h": 29},
                       {"func": "0x00A5D394", "x": [12, 11, 13], "one": 30, "w": 31, "h": 29}]
   },
@@ -157,6 +160,9 @@
     "aspect_16_9_float": "0x0148EF40",
     "ui_aspect_16_9_float": "0x014941CC,0x014941D0",
     "scene_camera_aspect_16_9_float": "0x014196C8,0x014196F4",
+    "insn_patches": "config/patches_bcus98114_v211.json",
+    "chase_cam_bss": "0x017FDF40",
+    "chase_cam_v211": true,
     "gt5p_allocwatch": false
   }
 }

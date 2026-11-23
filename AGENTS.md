@@ -330,8 +330,7 @@ PGTA-inspired additions: SSE2 `spu_shlqbii`/`spu_rotqbii` (`-DSPU_QBI_SCALAR` ro
 256 KB sub-block texture tracking (`RSX_TEX_WRITE_WATCH=0` off, `RSX_TEX_WW_CHECK=1` verify;
 Rome checksums `-90%`, `present-replay` `50.3% -> 44.0%` core, Car List checksums `-78%`,
 p99 `23.5 -> 22.5 ms`, `0` misses), `GCM_FIFO_BURST` (`=0` off; Rome `present` `55.3% -> 52.0%`
-core, walk `-0.50 ms/frame`) + 4-lane `tex_dense_sum`, and `scripts/rpcs3_patches.py`
-(`scripts/test/rpcs3_patches.py`). See progress-gt5.md.
+core, walk `-0.50 ms/frame`) + 4-lane `tex_dense_sum`, and RPCS3 patch support (`ppu_lifter.py --insn-patches`, `scripts/rpcs3_patches.py`, `config/patches_bcus98114_{v104,v211}.json`, `src/gt5p_patches.{h,cpp}`) with live F1 `GAME` menu **Looser Chase Camera** (#77) on both 01.04 (`0x019AFE70`) and 02.11 (`0x017FDF40`) (`GT5_PATCH_LOOSER_CHASE_CAMERA`, `GT5_CHASE_CAM_DAMPER`, `GT5_CHASE_CAM_MAX_ANGLE`; default off; `scripts/test/rpcs3_patches.py`). See progress-gt5.md.
 
 **Steering wheels (`release/v0.2.0`).** GT5 drives Logitech wheels
 with its own `cellUsbd` driver; the runtime now shows it an emulated G27
