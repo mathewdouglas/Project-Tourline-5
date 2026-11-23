@@ -24,6 +24,22 @@ try:
     ja2 = s_cull.index("\nstatic void gt5p_b0196FF40_spu_func_0000A408_rpc(", ia2)
     (folder / "a3c0_oc.inc").write_text("static void gt5p_b0196FF40_spu_func_0000A408_oc(spu_context* ctx);\n" + a3c0_src + "\n" + s_cull[ia2:ja2] + "\n", encoding="utf-8")
 
+    # Extract lifted b0196FF40 0xC440 + 0xC4C0 + 0xC5A0 + 0xC5E0_oc
+    hc1 = "void gt5p_b0196FF40_spu_func_0000C440(spu_context* ctx) {"
+    ic1 = s_cull.index(hc1)
+    jc1 = s_cull.index("\n/* spu_regpromo begin */\nstatic void gt5p_b0196FF40_spu_func_0000C5E0_rp(", ic1)
+    c440_src = "\n".join(l for l in s_cull[ic1:jc1].splitlines() if "/* spu_native_patch */" not in l)
+    c440_src = c440_src.replace("gt5p_b0196FF40_spu_func_0000C5E0(ctx)", "gt5p_b0196FF40_spu_func_0000C5E0_oc(ctx)")
+    hc2 = "static void gt5p_b0196FF40_spu_func_0000C5E0_oc(spu_context* ctx) {"
+    ic2 = s_cull.index(hc2)
+    jc2 = s_cull.index("\nstatic void gt5p_b0196FF40_spu_func_0000C5E0_rpc(", ic2)
+    c440_decls = (
+        "void gt5p_b0196FF40_spu_func_0000C4C0(spu_context* ctx);\n"
+        "void gt5p_b0196FF40_spu_func_0000C5A0(spu_context* ctx);\n"
+        "static void gt5p_b0196FF40_spu_func_0000C5E0_oc(spu_context* ctx);\n"
+    )
+    (folder / "c440_oc.inc").write_text(c440_decls + c440_src + "\n" + s_cull[ic2:jc2] + "\n", encoding="utf-8")
+
     # 2. Extract lifted b016B5B00 0xA128..0xA2AC
     s_rain = (root / "generated/spu_lifted/b016B5B00/spu_recomp.c").read_text(encoding="utf-8")
     h2 = "void gt5p_b016B5B00_spu_func_0000A128(spu_context* ctx) {"
@@ -60,6 +76,7 @@ static void gt5p_b016B5B00_spu_func_0000A2AC(spu_context* ctx);
 
 #include "f970_oc.inc"
 #include "a3c0_oc.inc"
+#include "c440_oc.inc"
 #include "rain_a220.inc"
 #include "gt5p_native_cull.c"
 #include "gt5p_native_eiger.c"
@@ -243,12 +260,84 @@ static int test_a3c0(int fused) {
     return 0;
 }
 
+static void run_c440_lifted(spu_context* ctx) {
+    ctx->pc = 0xC440u;
+    int guard = 0;
+    while (ctx->pc != 0x7074u && guard++ < 1000000) {
+        switch (ctx->pc) {
+            case 0xC440u: gt5p_b0196FF40_spu_func_0000C440(ctx); break;
+            case 0xC4C0u: gt5p_b0196FF40_spu_func_0000C4C0(ctx); break;
+            case 0xC5A0u: gt5p_b0196FF40_spu_func_0000C5A0(ctx); break;
+            case 0xC5E0u: gt5p_b0196FF40_spu_func_0000C5E0_oc(ctx); break;
+            default: fprintf(stderr, "FAIL c440 unexpected pc 0x%X\n", ctx->pc); exit(1);
+        }
+    }
+}
+
+static int test_c440(int fused) {
+    static spu_context a, b;
+    static uint8_t lsa[SPU_LS_SIZE], lsb[SPU_LS_SIZE];
+    static const uint8_t c_10b50[16] = {0x04,0x03,0x04,0x01,0x04,0x03,0x04,0x02,0x04,0x03,0x04,0x01,0x04,0x03,0x04,0x02};
+    static const uint8_t c_10b60[16] = {0x00,0x01,0x10,0x11,0x00,0x01,0x04,0x05,0x00,0x01,0x08,0x09,0x00,0x01,0x10,0x11};
+    static const uint8_t c_10bb0[16] = {0xFF,0xFF,0xFF,0xFB,0xFF,0xFF,0xFF,0xFE,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00};
+    static const uint8_t c_10bc0[16] = {0x3F,0x7F,0xE0,0x00,0x3F,0x7F,0xE0,0x00,0x3F,0x7F,0xC0,0x00,0x00,0x00,0x00,0x00};
+    static const uint8_t c_10bd0[16] = {0xBA,0x00,0x00,0x00,0xBA,0x00,0x00,0x00,0xBA,0x80,0x00,0x00,0x00,0x00,0x00,0x00};
+    static const uint8_t c_11620[16] = {0x08,0x09,0x00,0x01,0x18,0x19,0x10,0x11,0x08,0x09,0x00,0x01,0x18,0x19,0x10,0x11};
+    static const uint32_t strides[] = {4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 48, 64};
+    uint32_t seed = 0x9E3779B9u;
+    for (int tc = 0; tc < 300; tc++) {
+        memset(&a, 0, sizeof a); memset(lsa, 0x5A, sizeof lsa); a.ls = lsa;
+        memcpy(lsa + 0x10B50, c_10b50, 16);
+        memcpy(lsa + 0x10B60, c_10b60, 16);
+        memcpy(lsa + 0x10BB0, c_10bb0, 16);
+        memcpy(lsa + 0x10BC0, c_10bc0, 16);
+        memcpy(lsa + 0x10BD0, c_10bd0, 16);
+        memcpy(lsa + 0x11620, c_11620, 16);
+        const uint32_t src = 0x14000u;
+        const uint32_t idx_ptr = 0x1C000u;
+        const uint32_t stride = strides[tc % (sizeof(strides)/sizeof(*strides))];
+        const uint32_t dst = 0x20000u + ((tc & 3u) * 4u); /* all 4-byte-aligned offsets 0,4,8,12 */
+        const uint32_t count = (tc == 0) ? 0u : (1u + (xrnd(&seed) % 128u));
+        for (uint32_t i = 0; i < 256u; i++) {
+            st_be_f32(lsa + src + 16u*i + 0, rf(&seed, 1.5f));
+            st_be_f32(lsa + src + 16u*i + 4, rf(&seed, 1.5f));
+            st_be_f32(lsa + src + 16u*i + 8, rf(&seed, 1.5f));
+            st_be_f32(lsa + src + 16u*i + 12, rf(&seed, 1.5f));
+        }
+        for (uint32_t i = 0; i < count + 16u; i++) {
+            uint16_t off = (uint16_t)((xrnd(&seed) % 256u) * 16u);
+            lsa[idx_ptr + 2u*i + 0] = (uint8_t)(off >> 8);
+            lsa[idx_ptr + 2u*i + 1] = (uint8_t)(off & 0xFFu);
+        }
+        a.gpr[3] = spu_splat_u32(src);
+        a.gpr[4] = spu_splat_u32(dst);
+        a.gpr[5] = spu_splat_u32(stride);
+        a.gpr[7] = spu_splat_u32(idx_ptr);
+        a.gpr[8] = spu_splat_u32(count);
+        a.gpr[9] = splat_f(rf(&seed, 1.0f));
+        a.gpr[10] = splat_f(rf(&seed, 0.25f));
+        a.gpr[0] = spu_splat_u32(0x7074u);
+        b = a; memcpy(lsb, lsa, sizeof lsa); b.ls = lsb;
+        run_c440_lifted(&a);
+        if (!gt5p_cull_c440(&b, fused)) { fprintf(stderr, "FAIL c440 bailed tc=%d\n", tc); return 1; }
+        if (memcmp(lsa, lsb, SPU_LS_SIZE) != 0) {
+            fprintf(stderr, "FAIL c440 LS mismatch tc=%d count=%u stride=%u dst=%X idx=%X\n", tc, count, stride, dst, idx_ptr);
+            for (uint32_t i = 0; i < SPU_LS_SIZE; i++) {
+                if (lsa[i] != lsb[i]) { fprintf(stderr, "  first diff at 0x%X (dst+%d): lifted=%02X native=%02X\n", i, (int)i - (int)dst, lsa[i], lsb[i]); break; }
+            }
+            return 1;
+        }
+    }
+    printf("PASS: 300 randomized b0196FF40 0xC440 states bit-exact (fused=%d)\n", fused);
+    return 0;
+}
+
 int main(void) {
     int fused = 0;
 #if defined(__FMA__)
     fused = 1;
 #endif
-    return test_f970(fused) | test_rain_a220(fused) | test_a3c0(fused);
+    return test_f970(fused) | test_rain_a220(fused) | test_a3c0(fused) | test_c440(fused);
 }
 ''', encoding="utf-8")
 

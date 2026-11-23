@@ -39,6 +39,15 @@ Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
   - **Same-exe A/B (`-Settle 40`, pre-PGO-refresh):**
     - Car list (`GT5P_NATIVE_A3C0=0 -> 1`): `58.2 -> 59.1 FPS`, late `4.0% -> 2.4%` (-40%), median `16.8 ms`, p99 `22.9 -> 22.0 ms`, 5 s buckets `300 295 300 296 298 299 299`.
     - Rome (`GT5P_NATIVE_A3C0=0 -> 1`): `58.4 -> 58.4 FPS`, late `6.3% -> 5.4%`, max `30.2 -> 27.6 ms`, process `4.95 -> 4.81 cores`, final five 5 s buckets `301 301 301 301 301`.
+- **Native `b0196FF40` `0xC440` (`0xC5E0`) RSX `CMP` normal/tangent vertex packer (`src/gt5p_native_cull.c`, `gt5p_cull_c440`):**
+  - Jump hook `b0196FF40` / 2.11 `b017BD780` `0xC440 -> RET` (rollback `GT5P_NATIVE_C440=0`), bypassing `0xC440 -> 0xC4C0 -> 0xC5A0 -> 0xC5E0` (23.4B PGO block counts; benefits all tracks, Car List, Garage, and replays on 01.04 and 2.11). Replaces the 60-register multi-pass unaligned read-modify-write loop with a single SSE4.1/FMA pass per vertex (`pshufb` load -> `fma` -> `spu_cflts(..., 142)` -> 10_11_11 `CMP` pack -> 4-byte store).
+  - **Exactness:** `scripts/test/native_spu_extra.py` verifies 300 randomized states (all 4-byte-aligned `dst` offsets `0,4,8,12`, strides `4..64`, counts `0..128`) bit-exact across all 256 KB of LS for SSE4.1, FMA, and AVX2+FMA.
+  - **Same-exe A/B (`-Settle 40`, on refreshed 4-route PGO `c1ff88396753`):**
+    - Car list (`GT5P_NATIVE_C440=0 -> 1`): `59.1 -> 59.4 FPS`, late `2.4% -> 1.8%` (-25%), median `16.7 ms`, p99 `21.9 -> 21.0 ms`, top 4 `spurs-lane` threads `80.0/78.8/75.9/74.3% -> 75.8/74.1/72.4/68.7%`, process `5.38 -> 5.23 cores`, 5 s buckets `301 299 301 300 302 299 302`.
+    - Rome (`GT5P_NATIVE_C440=0 -> 1`): `57.9 -> 58.4 FPS`, late `6.8% -> 5.1%` (-25%), p99 `25.4 -> 23.6 ms`, max `46.6 -> 29.3 ms`, top `spurs-lane` `61.5% -> 60.5%`, process `4.77 -> 4.74 cores`, final five 5 s buckets `301 301 301 301 301`.
+  - **60 s verification on `release/v0.2.0` (refreshed PGO `c1ff88396753` + `gt5p_cull_c440`):**
+    - HSR: **`59.8 FPS`** (`0.5%` late, median `16.6 ms`, p99 `19.2 ms`, max `26.1 ms`, `4.71 cores`, 9 consecutive 5 s windows at `301`).
+    - Eiger heavy rain: **`58.8 FPS`** (`4.3%` late, median `16.8 ms`, p99 `23.0 ms`, max `33.9 ms`, `5.20 cores`, final 6 consecutive 5 s windows at `301`).
 
 - **Refreshed 4-route PGO `build/gt5.exe` (`3eb08955f45f`, 60 s `-FrameTest -Cpu`):**
   - HSR: **59.3 FPS** (`1.8%` late, median `16.7 ms`, p99 `21.4 ms`, `4.90 cores`).

@@ -901,3 +901,127 @@ int gt5p_cull_a3c0(spu_context* ctx, int fused)
     nc_a3c0_run(ctx->ls, src, ctrl, dst, nblocks);
     return 1;
 }
+
+/* Native RSX CMP (10_11_11) normal/tangent vertex packer for b0196FF40 /
+ * 2.11 b017BD780 0xC440 -> 0xC4C0 -> 0xC5A0 -> 0xC5E0 (RET hook).
+ * Replaces the 60-register multi-pass unaligned read-modify-write loop with a
+ * single pass per vertex. Rollback: GT5P_NATIVE_C440=0. */
+static __attribute__((target("sse4.1"))) void nc_c440_sse(
+    uint8_t* ls, uint32_t src, uint32_t dst, uint32_t stride,
+    uint32_t idx_ptr, uint32_t count, u128 scale, u128 bias)
+{
+    const __m128i bswap = _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12);
+    const uint8_t* ip = ls + idx_ptr;
+    uint8_t* dp = ls + dst;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t off = ((uint32_t)ip[0] << 8) | ip[1];
+        ip += 2;
+        u128 v;
+        _mm_storeu_si128((__m128i*)v._u32,
+            _mm_shuffle_epi8(_mm_load_si128((const __m128i*)(ls + ((src + off) & 0x3FFF0u))), bswap));
+        u128 f = spu_fma(v, scale, bias);
+        u128 s = spu_cflts(f, 142);
+        uint32_t packed = (s._u32[2] & 0xFFC00000u)
+                        | ((s._u32[1] >> 10) & 0x003FF800u)
+                        | (s._u32[0] >> 21);
+        uint32_t be = __builtin_bswap32(packed);
+        memcpy(dp, &be, 4);
+        dp += stride;
+    }
+}
+
+static __attribute__((target("sse4.1,fma"))) void nc_c440_fma(
+    uint8_t* ls, uint32_t src, uint32_t dst, uint32_t stride,
+    uint32_t idx_ptr, uint32_t count, u128 scale, u128 bias)
+{
+    const __m128i bswap = _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12);
+    const __m128 vscale = _mm_loadu_ps(scale._f32);
+    const __m128 vbias  = _mm_loadu_ps(bias._f32);
+    const uint8_t* ip = ls + idx_ptr;
+    uint8_t* dp = ls + dst;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t off = ((uint32_t)ip[0] << 8) | ip[1];
+        ip += 2;
+        __m128 v = _mm_castsi128_ps(_mm_shuffle_epi8(
+            _mm_load_si128((const __m128i*)(ls + ((src + off) & 0x3FFF0u))), bswap));
+        u128 f;
+        _mm_storeu_ps(f._f32, _mm_fmadd_ps(v, vscale, vbias));
+        u128 s = spu_cflts(f, 142);
+        uint32_t packed = (s._u32[2] & 0xFFC00000u)
+                        | ((s._u32[1] >> 10) & 0x003FF800u)
+                        | (s._u32[0] >> 21);
+        uint32_t be = __builtin_bswap32(packed);
+        memcpy(dp, &be, 4);
+        dp += stride;
+    }
+}
+
+static __attribute__((target("sse4.1,fma"))) u128 nc_fma_one(u128 a, u128 b, u128 c)
+{
+    u128 r;
+    _mm_storeu_ps(r._f32, _mm_fmadd_ps(_mm_loadu_ps(a._f32), _mm_loadu_ps(b._f32), _mm_loadu_ps(c._f32)));
+    return r;
+}
+
+static int g_nc440_on = -1;
+static __attribute__((noinline)) int nc440_init(void)
+{
+    const char* e = getenv("GT5P_NATIVE_C440");
+    int on = !(e && e[0] == '0');
+#if defined(NC_FORCE_OFF) || defined(NC_C440_FORCE_OFF)
+    on = 0;
+#endif
+    g_nc440_on = on;
+    return on;
+}
+
+int gt5p_cull_c440(spu_context* ctx, int fused)
+{
+    int on = g_nc440_on;
+    if (__builtin_expect(on < 0, 0)) on = nc440_init();
+    if (!on) return 0;
+    if (__builtin_expect(ctx->int_enable && (ctx->event_status & ctx->event_mask), 0)) return 0;
+
+    const uint32_t count = ctx->gpr[8]._u32[0];
+    if (count == 0u) return 1;
+    if (count > 16384u) return 0;
+
+    const uint32_t src = ctx->gpr[3]._u32[0] & SPU_LS_MASK;
+    const uint32_t dst = ctx->gpr[4]._u32[0] & SPU_LS_MASK;
+    const uint32_t stride = ctx->gpr[5]._u32[0];
+    const uint32_t idx_ptr = ctx->gpr[7]._u32[0] & SPU_LS_MASK;
+    if (stride == 0u || stride > 256u || (stride & 3u) != 0u || (dst & 3u) != 0u || (idx_ptr & 15u) != 0u) return 0;
+
+    const uint64_t dst_end = (uint64_t)dst + (uint64_t)(count - 1u) * stride + 4u;
+    const uint64_t idx_end = (uint64_t)idx_ptr + (uint64_t)count * 2u;
+    if (dst_end > SPU_LS_SIZE || idx_end > SPU_LS_SIZE) return 0;
+    if (dst < idx_end && idx_ptr < dst_end) return 0;
+
+    uint32_t or_bits = 0u, max_off = 0u;
+    const uint8_t* ip = ctx->ls + idx_ptr;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t off = ((uint32_t)ip[2*i] << 8) | ip[2*i + 1];
+        or_bits |= off;
+        if (off > max_off) max_off = off;
+    }
+    if ((or_bits & 0x8003u) != 0u) return 0;
+    const uint64_t src_end = (uint64_t)(src & 0x3FFF0u) + max_off + 16u;
+    if (src_end > SPU_LS_SIZE) return 0;
+    if (dst < src_end && (src & 0x3FFF0u) < dst_end) return 0;
+
+    u128 c_bc0, c_bd0;
+    c_bc0._u32[0] = 0x3F7FE000u; c_bc0._u32[1] = 0x3F7FE000u;
+    c_bc0._u32[2] = 0x3F7FC000u; c_bc0._u32[3] = 0u;
+    c_bd0._u32[0] = 0xBA000000u; c_bd0._u32[1] = 0xBA000000u;
+    c_bd0._u32[2] = 0xBA800000u; c_bd0._u32[3] = 0u;
+
+    const u128 scale = spu_fm(c_bc0, ctx->gpr[9]);
+    const u128 bias  = fused ? nc_fma_one(ctx->gpr[10], c_bc0, c_bd0)
+                             : spu_fma(ctx->gpr[10], c_bc0, c_bd0);
+
+    if (fused)
+        nc_c440_fma(ctx->ls, src, dst, stride, idx_ptr, count, scale, bias);
+    else
+        nc_c440_sse(ctx->ls, src, dst, stride, idx_ptr, count, scale, bias);
+    return 1;
+}
