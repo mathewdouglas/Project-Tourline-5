@@ -20369,7 +20369,7 @@ index 4a791bb1..4ee587b7 100644
      /* Texture */
      void (*bind_texture)(void* userdata, u32 unit, const rsx_texture_state* tex);
 diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
-index 68929ed2..752c5788 100644
+index 68929ed2..5c253316 100644
 --- a/libs/video/rsx_d3d12_backend.c
 +++ b/libs/video/rsx_d3d12_backend.c
 @@ -16,8 +16,11 @@
@@ -36329,7 +36329,7 @@ index 68929ed2..752c5788 100644
 +    static float jit_sign = 0.0f;
 +    if (jit_sign == 0.0f) {
 +        const char* e = getenv("RSX_DLSS_JITTER_SIGN");
-+        jit_sign = (e && atoi(e) < 0) ? -1.0f : 1.0f;
++        jit_sign = (e && atoi(e) > 0) ? 1.0f : -1.0f;
 +    }
 +
 +    double now = perf_now();
