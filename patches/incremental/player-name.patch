@@ -1,0 +1,37 @@
+diff --git a/libs/system/cellSysutil.c b/libs/system/cellSysutil.c
+index 44761ae..0f9833a 100644
+--- a/libs/system/cellSysutil.c
++++ b/libs/system/cellSysutil.c
+@@ -325,7 +325,9 @@ s32 cellSysutilGetSystemParamString(s32 id, u32 buf_ea, u32 bufsize)
+         break;
+     }
+     case CELL_SYSUTIL_SYSTEMPARAM_ID_CURRENT_USERNAME: {
+-        const char* s = "User";
++        /* PS3_USER_NAME: the player's own (the port's game.player_name). */
++        const char* s = getenv("PS3_USER_NAME");
++        if (!s || !*s) s = "User";
+         u32 i;
+         for (i = 0; s[i] && i < bufsize - 1; i++) vm_write8(buf_ea + i, (uint8_t)s[i]);
+         vm_write8(buf_ea + i, 0);
+diff --git a/libs/system/cellUserInfo.c b/libs/system/cellUserInfo.c
+index c5ac35e..4597ddd 100644
+--- a/libs/system/cellUserInfo.c
++++ b/libs/system/cellUserInfo.c
+@@ -6,6 +6,7 @@
+ 
+ #include "cellUserInfo.h"
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ #include <stdint.h>
+ #include "../../runtime/ppu/ppu_memory.h"   /* vm_base (guest mem) */
+@@ -45,7 +46,8 @@ s32 cellUserInfoGetStat(u32 id, CellUserInfoUserStat* stat)
+      * overflows the guest's stack buffer (see header comment). */
+     memset(stat, 0, sizeof(CellUserInfoUserStat));
+     stat->id = BE32(EMU_USER_ID);
+-    strncpy(stat->name, EMU_USER_NAME, CELL_USERINFO_USERNAME_SIZE - 1);
++    { const char* n = getenv("PS3_USER_NAME");   /* the player's own name, else "User" */
++      strncpy(stat->name, n && *n ? n : EMU_USER_NAME, CELL_USERINFO_USERNAME_SIZE - 1); }
+ 
+     return CELL_OK;
+ }

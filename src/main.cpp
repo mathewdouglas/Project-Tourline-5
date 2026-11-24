@@ -35,6 +35,7 @@
 
 #include "elf_loader.h"
 #include "gt5p_settings.h"
+#include "gt5p_patches.h"
 #include "gt5p_debug_export.h"
 #include "gt5p_glyphs.h"
 #include "gt5p_keymap.h"
@@ -869,6 +870,7 @@ static void apply_env_defaults()
         {"RSX_SCOPE_LABELS",     GT5P_SCOPE_LABELS,  race_scope},
         {"GT5P_SCREEN_ROLES",    GT5P_SCREEN_ROLES,  race_scope},
         {"GT5P_TOP_MENU_WORD",   GT5P_TOP_MENU_WORD, race_scope},
+        {"GT5P_OPTIONS_WORD",    GT5P_OPTIONS_WORD,  race_scope},
         {"GT5P_LISTBOX_VTABLE",  GT5P_LISTBOX_VT,    true},
         {"GT5P_LISTBOX_RANGE",   GT5P_LISTBOX_RANGE, true},
         {"PAD_AUTO_INSTALL",     GT5P_INSTALL_PROMPT_FILE, auto_install},
@@ -884,6 +886,7 @@ static void apply_env_defaults()
         {"SPURS_LANE_STAGGER_MS", "0",               stagger},
         {"SPURS_LANE_PIN_SCOPE", "1",                gt5 && race_scope},
         {"SPURS_LANE_RETRY",     "0",                gt5},
+        {"SPURS_SPU_KICK_WAKE",  "1",                gt5},
         {"SPURS_KEVLOG",         "4",                gt5},
         {"RSX_SHADER_ASYNC",     "1",                true},
         {"RSX_SHADER_INTERP",    "1",                gt5},
@@ -1173,6 +1176,7 @@ int main(int argc, char* argv[])
            * menus' centred layout. */
           if (ui && ui[0] == '0' && !getenv("RSX_ULTRAWIDE_EDGES")) _putenv_s("RSX_ULTRAWIDE_EDGES", "0");
       } }
+    gt5p_patches_apply_boot();
 
     ppu_hle_register_all();
     ppu_sysprx_register();

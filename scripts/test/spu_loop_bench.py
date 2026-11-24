@@ -28,6 +28,7 @@ ap.add_argument("--reps", type=int, default=9)
 ap.add_argument("--runtime", default=os.environ.get("PS3RECOMP_DIR", str(root.parent / "ps3recomp-tourline5")))
 ap.add_argument("--ranges", default="", help="entry:lo:hi,... (hex): an indirect branch out of the range ends that routine's run")
 ap.add_argument("--count", action="store_true", help="count entries of every lifted function (first variant only)")
+ap.add_argument("--chain-ab", action="store_true", help="also require identical captured-state results with indirect chaining off/on (SPU_CHAIN_IB=1 lift)")
 ap.add_argument("--strip-native", action="store_true", help="replay lifted fallbacks instead of external native hooks")
 ap.add_argument("--block", action="store_true", help="stop at the captured block's first external transfer")
 ap.add_argument("--variant", action="append", default=[], help="NAME=-Dflag,... ; runtime=<dir>, rp=a:b, region=a:b+c:d (regions of functions, hex)")
@@ -99,12 +100,26 @@ for v in variants:
     b = subprocess.run(["cmd", "/c", str(out / "build.cmd")], capture_output=True, text=True)
     if b.returncode:
         sys.exit(f"{name}: build failed\n{b.stdout[-4000:]}{b.stderr[-2000:]}")
-    r = subprocess.run([str(out / "bench.exe"), a.states, str(a.reps)] + ([a.ranges] if a.ranges else []),
-                       capture_output=True, text=True, timeout=1800)
+    args = [str(out / "bench.exe"), a.states, str(a.reps)] + ([a.ranges] if a.ranges else [])
+    env = dict(os.environ, GT5P_SPU_CHAIN_IB="0") if a.chain_ab else None
+    r = subprocess.run(args, env=env, capture_output=True, text=True, timeout=1800)
     if r.returncode:
         sys.exit(f"{name}: run failed\n{r.stdout}{r.stderr}")
+    if a.chain_ab:
+        if "_chain_ret" not in src_v.read_text(encoding="utf-8"):
+            sys.exit("--chain-ab needs a full SPU_CHAIN_IB=1 lift")
+        on = subprocess.run(args, env=dict(os.environ, GT5P_SPU_CHAIN_IB="1"),
+                            capture_output=True, text=True, timeout=1800)
+        pattern = r"entry ([0-9A-F]+) calls +\d+: +[\d.]+ us  hash ([0-9A-F]{16})"
+        before, after = re.findall(pattern, r.stdout), re.findall(pattern, on.stdout)
+        if on.returncode or not before or before != after:
+            sys.exit(f"{name}: indirect-chain off/on mismatch or run failure\n{on.stdout}{on.stderr}")
+        print(f"{name}: indirect-chain off/on identical over {len(before)} states")
     if a.count:
         print(r.stdout[r.stdout.find("counts"):])
+    for line in r.stdout.splitlines():
+        if line.startswith("coverage-table native calls:"):
+            print(line)
     rows = re.findall(r"entry ([0-9A-F]+) calls +\d+: +([\d.]+) us  hash ([0-9A-F]{16})", r.stdout)
     times = [float(t) for _, t, _ in rows]
     hashes = [h for _, _, h in rows]

@@ -122,6 +122,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if(getenv("PT5_TEST_HITCH")) { fprintf(stderr,"[stall] no present for 3001 ms after 900 presents\n"); return 0; }
+    if(const char* c=getenv("PT5_TEST_SCRIPT_ERROR")) { fprintf(stderr,"[script-error] FatalError m_adhoc.cpp:864: nil object cannot be used as Foo.\n[null-read] noise\n"); return atoi(c); }
     if(const char* c=getenv("PT5_TEST_EXIT")) { fprintf(stderr,"fatal: something went wrong\n"); return atoi(c); }
     return 0;
 }
@@ -618,6 +619,10 @@ report_run({'PT5_TEST_EXIT': '3'}, False, 'error')
 query = urllib.parse.parse_qs(urllib.parse.urlsplit(url_file.read_text()).query)
 assert query['title'] == ['Error exit: exited with code 3 (abort) (0x00000003)'], query['title']
 assert 'fatal: something went wrong' in query['body'][0]
+report_run({'PT5_TEST_SCRIPT_ERROR': '1'}, False, 'error')
+query = urllib.parse.parse_qs(urllib.parse.urlsplit(url_file.read_text()).query)
+assert query['title'] == ['Error exit: stopped on a game script error (nil object cannot be used as Foo.), exit code 1'], query['title']
+assert query['body'][0].index('[script-error] FatalError') < query['body'][0].index('[null-read] noise')
 report_run({'PT5_TEST_CRASH': '1', 'PT5_CRASH_REPORT': '0'}, False, None)
 report_run({}, True, None)
 print('PASS: error exit reported; PT5_CRASH_REPORT=0 and a clean exit make no report')

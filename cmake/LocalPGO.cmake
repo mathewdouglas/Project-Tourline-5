@@ -1,0 +1,20 @@
+option(GT5P_PGO_AUTO "Use a local merged PGO profile for 01.04 when available" ON)
+if(GT5P_PGO_AUTO AND GT5P_TARGET STREQUAL "BCUS98114-v104"
+   AND NOT CMAKE_C_COMPILER_LAUNCHER AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
+    set(local_profile "${CMAKE_SOURCE_DIR}/scratch/pgo/gt5.profdata")
+    if(EXISTS "${local_profile}")
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        file(SHA256 "${local_profile}" profile_hash)
+        string(SUBSTRING "${profile_hash}" 0 12 profile_tag)
+        set(used_profile "${CMAKE_SOURCE_DIR}/scratch/pgo/use/gt5-${profile_tag}.profdata")
+        file(MAKE_DIRECTORY "${CMAKE_SOURCE_DIR}/scratch/pgo/use")
+        configure_file("${local_profile}" "${used_profile}" COPYONLY)
+        # Content-addressed paths make Ninja rebuild when the profile changes.
+        # Keep these out of the cache: turning AUTO off restores plain compiles.
+        set(CMAKE_C_COMPILER_LAUNCHER "${Python3_EXECUTABLE};${CMAKE_SOURCE_DIR}/scripts/pgo/pgocc.py;use;${used_profile}")
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${CMAKE_C_COMPILER_LAUNCHER}")
+        message(STATUS "01.04 default PGO profile: ${profile_tag} (GT5P_PGO_AUTO=OFF to disable)")
+    else()
+        message(STATUS "No local 01.04 PGO profile; building unprofiled (see docs/pgo.md)")
+    endif()
+endif()

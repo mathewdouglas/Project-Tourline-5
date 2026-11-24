@@ -176,6 +176,8 @@ def collect(args, version):
     files[lic + 'at3_standalone-COPYING.LGPLv2.1.txt'] = text(at3 / 'COPYING.LGPLv2.1')
     files[lic + 'at3_standalone-README.txt'] = text(at3 / 'README.txt')
     files[lic + 'tomlplusplus-LICENSE.txt'] = text(ROOT / 'external/tomlplusplus/LICENSE')
+    # Native SPU fast blocks (src/gt5p_native_mixer.c) and steering wheel emulation (libs/hardware/wheel_*.c) adapted from gt5-recomp.
+    files[lic + 'gt5-recomp-LICENSE.txt'] = text(ROOT / 'third_party_notices/gt5-recomp-LICENSE.txt')
     generated = {lic + 'FFmpeg-SOURCE.txt': FFMPEG_SOURCE.format(**ffmpeg_pin()),
                  lic + 'MSVC-NOTICE.txt': MSVC_NOTICE.format(folder=vc.name if vc.name else str(vc)),
                  lic + 'at3_standalone-NOTICE.txt': AT3_NOTICE.format(version=version)}

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(gt5p_recompiled
-    VERSION 0.1.11
+    VERSION 0.2.1
     DESCRIPTION "Gran Turismo 5 Prologue - Static Recompilation for PC"
     LANGUAGES C CXX
 )
@@ -8,6 +8,10 @@ project(gt5p_recompiled
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Use this checkout's private mixed-route profile for ordinary 01.04 builds.
+# Explicit compiler launchers (instrumentation and clean releases) take precedence.
+include(cmake/LocalPGO.cmake)
 
 # =============================================================================
 # ps3recomp runtime
@@ -101,6 +105,10 @@ string(JSON GT5P_TOP_MENU_WORD ERROR_VARIABLE GT5P_TOP_MENU_WORD_ERR GET "${GT5P
 if(GT5P_TOP_MENU_WORD_ERR)
     set(GT5P_TOP_MENU_WORD "")
 endif()
+string(JSON GT5P_OPTIONS_WORD ERROR_VARIABLE GT5P_OPTIONS_WORD_ERR GET "${GT5P_T}" options_word)
+if(GT5P_OPTIONS_WORD_ERR)
+    set(GT5P_OPTIONS_WORD "")
+endif()
 # vtable of the title's mListBox widget: the settings page finds the race
 # pause bar by it (Phase 117); absent: none.
 string(JSON GT5P_ASPECT_ADDR ERROR_VARIABLE GT5P_ASPECT_ADDR_ERR GET "${GT5P_T}" aspect_16_9_float)
@@ -123,6 +131,16 @@ endif()
 string(JSON GT5P_LISTBOX_RANGE ERROR_VARIABLE GT5P_LISTBOX_RANGE_ERR GET "${GT5P_T}" menu_listbox_range)
 if(GT5P_LISTBOX_RANGE_ERR)
     set(GT5P_LISTBOX_RANGE "")
+endif()
+string(JSON GT5P_CHASE_CAM_BSS ERROR_VARIABLE GT5P_CHASE_CAM_BSS_ERR GET "${GT5P_T}" chase_cam_bss)
+if(GT5P_CHASE_CAM_BSS_ERR)
+    set(GT5P_CHASE_CAM_BSS "0")
+endif()
+string(JSON GT5P_CHASE_CAM_V211 ERROR_VARIABLE GT5P_CHASE_CAM_V211_ERR GET "${GT5P_T}" chase_cam_v211)
+if(GT5P_CHASE_CAM_V211_ERR OR NOT GT5P_CHASE_CAM_V211)
+    set(GT5P_CHASE_CAM_V211 0)
+else()
+    set(GT5P_CHASE_CAM_V211 1)
 endif()
 message(STATUS "game build: ${GT5P_TARGET} (code end ${GT5P_CODE_END}, boot_from=${GT5P_BOOT_FROM})")
 
@@ -161,6 +179,15 @@ if(GT5P_VM_INLINE)
             COMPILE_OPTIONS "SHELL:-include ${GT5P_VM_INLINE_H}")
     endif()
     message(STATUS "lifted PPU chunks: guest memory access inline")
+endif()
+# SSE4.1 for the lifted PPU chunks, as the lifted SPU code already has: the
+# AltiVec byte moves (vperm, lvlx, lvrx, lvsl/lvsr) are then byte shuffles
+# (runtime/ppu/ppu_vshuf.h) instead of sixteen-step byte loops, and the
+# per-lane byte swaps of the vector float ops vectorise. Same results bit for
+# bit (scripts/test/ppu_vshuf.py). OFF builds the scalar forms.
+option(GT5P_PPU_SSE41 "Build the lifted PPU code with SSE4.1" ON)
+if(GT5P_PPU_SSE41 AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+    set_property(SOURCE ${GENERATED_SOURCES} APPEND PROPERTY COMPILE_OPTIONS "-msse4.1")
 endif()
 
 # The runtime library does not bundle the PPU loader/HLE/VFS translation units;
@@ -204,6 +231,12 @@ if(GT5P_ENABLE_SPU)
     # Native replacements hooked into lifted SPU blocks (scripts/spu_native_patch.py).
     set_source_files_properties(src/gt5p_spu_native.c PROPERTIES
         INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu")
+    # The car render job's triangle loop as native code (jump hook at b0196FF40 0xAF88,
+    # spu_native_hooks); its AVX2 code is chosen at run time.
+    set_source_files_properties(src/gt5p_native_cull.c PROPERTIES
+        INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu" COMPILE_OPTIONS "-msse4.1")
+    set_source_files_properties(src/gt5p_native_eiger.c PROPERTIES
+        INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu" COMPILE_OPTIONS "-msse4.1")
     # SSE4.1 for the lifted SPU code only. Its helpers (spu_shufb above all)
     # have a vector form behind __SSE4_1__ and fall back to a byte loop without
     # it; that loop was a sixth of the sound job thread. Any CPU with a D3D12
@@ -240,9 +273,13 @@ add_executable(gt5p
     src/gt5p_present.cpp
     src/gt5p_audio_native.cpp
     src/gt5p_spin.cpp
+    src/gt5p_script_error.cpp
     src/gt5p_uifix.cpp
     src/gt5p_spu_native.c
+    src/gt5p_native_cull.c
+    src/gt5p_native_eiger.c
     src/gt5p_settings.cpp
+    src/gt5p_patches.cpp
     src/gt5p_controls.cpp
     src/gt5p_profview.cpp
     src/gt5p_debug_export.cpp
@@ -253,6 +290,7 @@ add_executable(gt5p
     src/gt5p_allocwatch.cpp
     src/gt5p_bbcount.cpp
     src/gt5p_longjmp.cpp
+    src/gt5p_guest_eh.cpp
     ${GT5P_SPU_SOURCES}
     src/gen/ppu_hle_nids.cpp    # generated: NID -> ps3recomp lib handler
     ${PS3RECOMP_PPU_SOURCES}
@@ -316,6 +354,7 @@ set(GT5P_MAIN_DEFS
     "GT5P_INSTALL_PROMPT_FILE=\"${GT5P_INSTALL_PROMPT_FILE}\""
     "GT5P_ARGV_BASE=${GT5P_ARGV_BASE}u"
     "GT5P_TOP_MENU_WORD=\"${GT5P_TOP_MENU_WORD}\""
+    "GT5P_OPTIONS_WORD=\"${GT5P_OPTIONS_WORD}\""
     "GT5P_LISTBOX_VT=\"${GT5P_LISTBOX_VT}\""
     "GT5P_LISTBOX_RANGE=\"${GT5P_LISTBOX_RANGE}\""
     "GT5P_ASPECT_ADDR=\"${GT5P_ASPECT_ADDR}\""
@@ -342,6 +381,8 @@ foreach(key IN ITEMS core vtable get set load save)
     list(APPEND GT5P_CONTROLS_DEFS "GT5P_CONTROLS_${upper}=${value}u")
 endforeach()
 set_source_files_properties(src/gt5p_controls.cpp PROPERTIES COMPILE_DEFINITIONS "${GT5P_CONTROLS_DEFS}")
+set_source_files_properties(src/gt5p_patches.cpp PROPERTIES COMPILE_DEFINITIONS
+    "GT5P_CHASE_CAM_BSS=${GT5P_CHASE_CAM_BSS}u;GT5P_CHASE_CAM_V211=${GT5P_CHASE_CAM_V211}")
 
 if(GT5P_TITLE STREQUAL "BCUS98114")
     set_source_files_properties(src/gt5p_present.cpp PROPERTIES
@@ -359,6 +400,7 @@ target_link_libraries(gt5p PRIVATE ps3recomp_runtime)
 # Derived aliases and lifted source stay under build/; baseline SSE images remain available.
 string(JSON GT5P_AUDIO_IMAGES ERROR_VARIABLE GT5P_AUDIO_IMAGES_ERR GET "${GT5P_T}" audio_native_images)
 option(GT5P_AUDIO_EXTENDED_ZERO "Fix SPU extended/zero arithmetic in audio images" ON)
+option(GT5P_NATIVE_SPU_HOOKS "Native fast blocks in the FMA copies of audio images (audio_native_hooks)" ON)
 if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_ID MATCHES "Clang")
     string(JSON image_count LENGTH "${GT5P_AUDIO_IMAGES}")
     math(EXPR image_last "${image_count} - 1")
@@ -372,6 +414,30 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
     if(NOT audio_range_err AND audio_range)
         set(audio_range_def "GT5P_AUDIO_EXTENDED_RANGE_BUILD=1")
     endif()
+    # audio_extended_range_images: only these images get the range check (2.11:
+    # the EQ, j0B07CA3D, which makes the extended values). In every image it
+    # doubled the audio job time and the chain underran (482-511 underruns,
+    # 39-53% silent in a race); EQ only: 1 underrun, no NaN with scrubbing off.
+    # -DGT5P_AUDIO_RANGE_ALL=ON: every audio_extended_zero_images entry, as 0.1.11.
+    option(GT5P_AUDIO_RANGE_ALL "Extended-range check in every audio math image" OFF)
+    string(JSON audio_range_images ERROR_VARIABLE audio_range_images_err GET "${GT5P_T}" audio_extended_range_images)
+    set(audio_range_list "")
+    if(NOT audio_range_images_err AND NOT GT5P_AUDIO_RANGE_ALL)
+        string(JSON range_count LENGTH "${audio_range_images}")
+        math(EXPR range_last "${range_count} - 1")
+        foreach(i RANGE ${range_last})
+            string(JSON image GET "${audio_range_images}" ${i})
+            list(APPEND audio_range_list "${image}")
+        endforeach()
+    endif()
+    # The range define for one image: the target's, narrowed to the list when one is given.
+    function(gt5p_audio_range_def image out)
+        set(def "${audio_range_def}")
+        if(audio_range_list AND NOT image IN_LIST audio_range_list)
+            set(def "GT5P_AUDIO_EXTENDED_RANGE_BUILD=0")
+        endif()
+        set(${out} "${def}" PARENT_SCOPE)
+    endfunction()
     if(NOT math_images_err)
         string(JSON math_count LENGTH "${math_images}")
         math(EXPR math_last "${math_count} - 1")
@@ -381,8 +447,9 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
             set_property(SOURCE "${GT5P_SPU_GENERATED_DIR}/${image}/spu_recomp.c"
                 APPEND PROPERTY COMPILE_OPTIONS
                 "/FI${CMAKE_SOURCE_DIR}/src/gt5p_spu_audio_math.h")
+            gt5p_audio_range_def("${image}" image_range_def)
             set_property(SOURCE "${GT5P_SPU_GENERATED_DIR}/${image}/spu_recomp.c"
-                APPEND PROPERTY COMPILE_DEFINITIONS "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>" "${audio_range_def}")
+                APPEND PROPERTY COMPILE_DEFINITIONS "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>" "${image_range_def}")
         endforeach()
     endif()
     set(audio_manifest "/* Target-specific identities; generated from targets.json. */\n")
@@ -426,7 +493,59 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
                 string(REPLACE "gt5p_" "gt5p_audio_" alternate "${sym}")
                 string(APPEND wrapper "#define ${sym} ${alternate}\n")
             endforeach()
-            string(APPEND wrapper "#include \"${image_dir}/spu_recomp.c\"\n")
+            # Native fast blocks for this image (audio_native_hooks in
+            # config/targets.json; GT5P_NATIVE_SPU_HOOKS=OFF builds none): the
+            # FMA copy is compiled from a copy of the lifted file in which the
+            # hooked definitions are renamed ..._orig, and the native source
+            # defines the original names, so lifted callers and the registry
+            # reach it. The portable copy is never hooked.
+            set(hook_source "")
+            set(hook_functions "")
+            if(GT5P_NATIVE_SPU_HOOKS)
+                string(JSON n_hooks ERROR_VARIABLE hooks_err LENGTH "${GT5P_T}" audio_native_hooks)
+                if(NOT hooks_err AND n_hooks GREATER 0)
+                    math(EXPR last_hook "${n_hooks} - 1")
+                    foreach(h RANGE ${last_hook})
+                        string(JSON hook_image GET "${GT5P_T}" audio_native_hooks ${h} 0)
+                        if(hook_image STREQUAL image)
+                            string(JSON hook_source GET "${GT5P_T}" audio_native_hooks ${h} 1)
+                            string(JSON n_fn LENGTH "${GT5P_T}" audio_native_hooks ${h} 2)
+                            math(EXPR last_fn "${n_fn} - 1")
+                            foreach(f RANGE ${last_fn})
+                                string(JSON fn GET "${GT5P_T}" audio_native_hooks ${h} 2 ${f})
+                                list(APPEND hook_functions "${fn}")
+                            endforeach()
+                        endif()
+                    endforeach()
+                endif()
+            endif()
+            if(hook_source)
+                file(READ "${image_dir}/spu_recomp.c" hooked_text)
+                foreach(fn IN LISTS hook_functions)
+                    set(def "void gt5p_${image}_spu_func_${fn}(spu_context* ctx) {")
+                    string(FIND "${hooked_text}" "${def}" at)
+                    if(at LESS 0)
+                        message(FATAL_ERROR "audio_native_hooks: ${image} has no lifted function ${fn} (re-lift?)")
+                    endif()
+                    string(REPLACE "${def}" "void gt5p_${image}_spu_func_${fn}_orig(spu_context* ctx) {" hooked_text "${hooked_text}")
+                    string(APPEND wrapper "#define gt5p_${image}_spu_func_${fn}_orig gt5p_audio_${image}_spu_func_${fn}_orig\n")
+                endforeach()
+                file(WRITE "${CMAKE_BINARY_DIR}/hooked_${image}.c.tmp" "${hooked_text}")
+                configure_file("${CMAKE_BINARY_DIR}/hooked_${image}.c.tmp" "${CMAKE_BINARY_DIR}/hooked_${image}.c" COPYONLY)
+                set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${image_dir}/spu_recomp.c")
+                string(APPEND wrapper "#include \"${CMAKE_BINARY_DIR}/hooked_${image}.c\"\n")
+                set(hook_native "${CMAKE_SOURCE_DIR}/${hook_source}")
+                target_sources(gt5p PRIVATE "${hook_native}")
+                set_source_files_properties("${hook_native}" PROPERTIES
+                    COMPILE_OPTIONS "-msse4.1;-mfma"
+                    INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu;${image_dir}")
+                if(NOT GT5P_SPU_PROBES)
+                    set_property(SOURCE "${hook_native}" APPEND PROPERTY COMPILE_DEFINITIONS "SPU_LS_NO_PROBES")
+                endif()
+                message(STATUS "audio image ${image}: native hooks ${hook_functions} (${hook_source})")
+            else()
+                string(APPEND wrapper "#include \"${image_dir}/spu_recomp.c\"\n")
+            endif()
             set(native_source "${CMAKE_BINARY_DIR}/audio_native_${image}.c")
             file(CONFIGURE OUTPUT "${native_source}" CONTENT "${wrapper}" @ONLY)
             target_sources(gt5p PRIVATE "${native_source}")
@@ -438,7 +557,7 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
             endif()
             set_source_files_properties("${native_source}" PROPERTIES
                 COMPILE_OPTIONS "-msse4.1;-mfma"
-                INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu")
+                INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu;${image_dir}")
             if(NOT GT5P_SPU_PROBES)
                 set_property(SOURCE "${native_source}" APPEND PROPERTY COMPILE_DEFINITIONS "SPU_LS_NO_PROBES")
             endif()
@@ -449,8 +568,9 @@ if(GT5P_ENABLE_SPU AND NOT GT5P_AUDIO_IMAGES_ERR AND WIN32 AND CMAKE_C_COMPILER_
                 set_property(SOURCE "${native_source}"
                     APPEND PROPERTY COMPILE_OPTIONS
                     "/FI${CMAKE_SOURCE_DIR}/src/gt5p_spu_audio_math.h")
+                gt5p_audio_range_def("${image}" image_range_def)
                 set_property(SOURCE "${native_source}" APPEND PROPERTY COMPILE_DEFINITIONS
-                    "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>" "${audio_range_def}")
+                    "GT5P_AUDIO_EXTENDED_ZERO=$<BOOL:${GT5P_AUDIO_EXTENDED_ZERO}>" "${image_range_def}")
             endif()
         endforeach()
         set_source_files_properties(src/gt5p_audio_native.cpp PROPERTIES

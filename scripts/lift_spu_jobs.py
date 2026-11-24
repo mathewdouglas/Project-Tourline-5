@@ -345,6 +345,23 @@ CHAIN_BODIES = os.environ.get("SPU_CHAIN_BODIES", "1") != "0"
 # them on the dispatcher; SPU_CHAIN_BACK=0 at run time does the same for a
 # lift that has them (g_spu_chain_back).
 CHAIN_BACK = os.environ.get("SPU_CHAIN_BACK", "1") != "0"
+# Optional indirect-branch experiment (2026-11-22): SPU_CHAIN_IB=1 at lift
+# time emits guarded tail calls to spu_indirect_branch and arms nested return
+# boundaries. GT5P_SPU_CHAIN_IB=1 also enables it at run time; both defaults
+# are off pending a measured benefit (docs/progress-gt5.md).
+CHAIN_IB = os.environ.get("SPU_CHAIN_IB", "0") == "1"
+IB_RE = re.compile(r"ctx->pc = ([^;{}]+); g_spu_trampoline_fn = spu_indirect_branch; return;")
+IB_DECL = "extern volatile int g_gt5p_chain_ib; /* chain_forward */"
+CALL_RE = re.compile(r"ctx->host_depth\+\+; (.*?)spu_drain_call\(ctx, (0x[0-9A-Fa-f]+)\); ctx->host_depth--;", re.ASCII)
+
+
+def chain_call(m):
+    # A callee may reach its return before the first drain is entered. Arm the
+    # boundary BEFORE calling it, and restore the enclosing call's boundary
+    # after the drain (which clears drain_ret_pc). Locals unwind with host calls.
+    return ("uint32_t _chain_ret = ctx->drain_ret_pc; ctx->drain_ret_pc = %s; "
+            "ctx->host_depth++; %sspu_drain_call(ctx, %s); ctx->host_depth--; "
+            "ctx->drain_ret_pc = _chain_ret;" % (m.group(2), m.group(1), m.group(2)))
 
 
 def chain_forward(outdir):
@@ -364,12 +381,17 @@ def chain_forward(outdir):
     dispatcher's interrupt check inline and take the dispatcher while
     g_spu_chain_back is 0. A branch to 0 is a job's end, which only the
     dispatcher notices, so it is left alone.
-    `spu_link` calls and indirect branches are left alone. Idempotent."""
+    Indirect transfers keep the pending call's return boundary, including
+    nested calls. Calls themselves still use the drain. Idempotent."""
     src = outdir / "spu_recomp.c"
     text = src.read_text(encoding="utf-8")
     own = {m.group(1) + m.group(2) for m in map(FUNC_RE.match, text.split("\n")) if m}
     out, cur, n = [], None, 0
     for line in text.split("\n"):
+        if CHAIN_IB and "_chain_ret" not in line:
+            line = CALL_RE.sub(chain_call, line)
+            if "ctx->host_depth++;" in line and "_chain_ret" not in line:
+                raise ValueError(f"unrecognised SPU call boundary in {src}")
         m = FUNC_RE.match(line)
         if m:
             cur = int(m.group(2), 16)
@@ -389,7 +411,21 @@ def chain_forward(outdir):
                         "{ g_spu_trampoline_fn = %s; return; } __attribute__((musttail)) return %s(ctx); }"
                         % (x.group(1), x.group(2), x.group(3), x.group(3)))
             line = XFER_RE.sub(sub, line)
+            if CHAIN_IB and "spu_link(" not in line:
+                def ib(x):
+                    nonlocal n
+                    n += 1
+                    return ("ctx->pc = %s; if (__builtin_expect(!g_gt5p_chain_ib || !g_spu_fast || !g_spu_chain_back || g_yz_lockstep_on || "
+                            "!ctx->drain_ret_pc || !(ctx->pc & SPU_LS_MASK) || "
+                            "(ctx->drain_ret_pc && ((ctx->pc ^ ctx->drain_ret_pc) & SPU_LS_MASK) == 0) || g_spu_stack_reset_n || "
+                            "(ctx->int_enable && (ctx->event_status & ctx->event_mask)), 0)) "
+                            "{ g_spu_trampoline_fn = spu_indirect_branch; return; } "
+                            "__attribute__((musttail)) return spu_indirect_branch(ctx);" % x.group(1))
+                line = IB_RE.sub(ib, line)
         out.append(line)
+    if CHAIN_IB and IB_DECL not in out and any("return spu_indirect_branch(ctx);" in l for l in out):
+        last = max(i for i, l in enumerate(out[:60]) if l.startswith("#include"))
+        out.insert(last + 1, IB_DECL)
     src.write_text("\n".join(out), encoding="utf-8", newline="\n")
     return n
 

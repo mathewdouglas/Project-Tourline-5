@@ -19,7 +19,7 @@
 
 An unofficial port of **Gran Turismo 5** (PS3, US disc BCUS98114, update 01.04) to Windows x64. It is a static recompilation: the game's own code, translated ahead of time to native x64, then run with a Direct3D 12 renderer. No emulator runs while you play.
 
-> **Status: early.** The game boots to the main menu with sound, and Arcade races run at around 55 FPS at High Speed Ring. Player builds are on the [Releases](https://github.com/mathewdouglas/Project-Tourline-5/releases) page; what changed in each is in [CHANGELOG.md](CHANGELOG.md). The investigation, with dates and measurements, is in [docs/progress-gt5.md](docs/progress-gt5.md).
+> **Status: v0.2.0.** The game boots to the main menu with sound, supports **steering wheels with force feedback** (Logitech, Thrustmaster, Fanatec and other DirectInput wheels via an emulated Logitech G27, with live presets and interactive binding under **F1 > WHEEL / WHEEL MAP** — see [docs/wheels.md](docs/wheels.md)), and runs near a locked 60 FPS across Arcade races and menus (High Speed Ring ~59.8 FPS, Car List ~59.4 FPS, Eiger heavy rain ~58.8 FPS, Rome ~58.4 FPS). Player builds are on the [Releases](https://github.com/mathewdouglas/Project-Tourline-5/releases) page; what changed in each is in [CHANGELOG.md](CHANGELOG.md). The investigation, with dates and measurements, is in [docs/progress-gt5.md](docs/progress-gt5.md).
 
 This tree continues [Tourline Prologue](https://github.com/mathewdouglas/Tourline-Prologue). Both are built with [ps3recomp](https://github.com/sp00nznet/ps3recomp), from the [sp00nznet/GT5P](https://github.com/sp00nznet/GT5P) port of Gran Turismo 5 Prologue.
 
@@ -81,9 +81,15 @@ The keyboard is used when no controller is connected: arrows, Z Cross, X Circle,
 
 F1 **Controls** has trigger dead-zone and response-curve options. **Feedback**
 offers optional SDL vibration, Xbox trigger rumble and fixed DualSense trigger
-resistance; these default off. The shared improvements adopted from Tourline
-Prologue, their rollback switches and remaining GT5 prerequisites are recorded
-in [the port review](docs/prologue-sync-review.md).
+resistance; these default off. **Steering wheels** are supported through
+DirectInput with GT5's own force feedback (emulated Logitech G27, verified on
+Logitech G29): **F1 > WHEEL** configures presets (`Auto`, `G29/G923 PS`,
+`G920/G923 Xbox`, `G25/G27/DFGT`, `Thrustmaster`, `Custom`), rotation, force
+strength/direction, centring and damping; **F1 > WHEEL MAP** binds axes, pedals
+and buttons interactively with live telemetry ([docs/wheels.md](docs/wheels.md)).
+The shared improvements adopted from Tourline Prologue, their rollback switches
+and remaining GT5 prerequisites are recorded in
+[the port review](docs/prologue-sync-review.md).
 
 `scripts\get_sdl2.ps1` fetches SDL2 for more controllers. `scripts\get_ffmpeg.ps1` fetches FFmpeg for the opening movie. Without FFmpeg the movie stays black. The build copies both beside the executable. Keep `shadercache/`. It belongs to this machine.
 
@@ -95,7 +101,7 @@ while a new shader compiles, instead of leaving the detail out.
 
 ## Known problems
 
-- A locked 60 frames per second is not reached. Warm High Speed Ring races run at about 55 frames per second at 720p, Eiger Nordwand in rain at about 47 to 50, and runs vary. The first visit to a menu, track or effect still has some hitches while shaders compile; later visits use the shader cache.
+- A completely locked 60 frames per second is not reached on every track yet, though warm races now run very close (High Speed Ring ~59.8 FPS, Car List ~59.4 FPS, Eiger Nordwand in heavy rain ~58.8 FPS, Rome ~58.4 FPS; runs vary by hardware). The first visit to a menu, track or effect still has some hitches while shaders compile (significantly reduced in 0.2.0); later visits use the shader cache.
 - One-frame flashes (a purple road, grass on the road, noise in the mirror) were reported while thousands of shaders compiled. Copies that changed a texture the frame still being drawn had bound are now ordered with that frame. The flashes were not reproduced in the shorter local checks.
 - A split-second blue flicker of the road, about 18 seconds into a race and during the rolling start, was reported. Burst captures after that report did not show it again.
 - Online services are not part of this port.

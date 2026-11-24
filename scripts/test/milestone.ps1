@@ -178,18 +178,28 @@ $GT5RaceHold = "$GT5GridHold," + ((0..20 | ForEach-Object { $t = 15000 + 3000 * 
 
 # The same race route with another track and car: -Track Rights on the track
 # list (6 = Eiger Nordwand, weather change: Phase 45), -Car Rights on the car
-# list. Rights go 3 s after the screen's first file, 0.7 s apart, and the
+# list, -Tab the track list's tab (0 Original, 1 World Circuits, 2 City: Rome
+# is City's first track; Up to the tabs, Rights, Cross back into the row).
+# Rights go 3 s after the screen's first file, 0.7 s apart, and the
 # Crosses resume after them. Open loop: check the shots for the track/car.
-function Get-GT5RaceRoute([int]$Track = 0, [int]$Car = 0) {
-    if (-not $Track -and -not $Car) { return $GT5RaceHold }
+function Get-GT5RaceRoute([int]$Track = 0, [int]$Car = 0, [int]$Tab = 0) {
+    if (-not $Track -and -not $Car -and -not $Tab) { return $GT5RaceHold }
     $s = @("$GT5BootHold", "@MusicDecode+5000-5100:RIGHT")
     $from = "MusicDecode"; $t0 = 7000
     foreach ($step in @(@("TrackList", $Track), @("CarList", $Car))) {
         $screen, $n = $step
-        if (-not $n) { continue }
+        $tabs = if ($screen -eq "TrackList") { $Tab } else { 0 }
+        if (-not $n -and -not $tabs) { continue }
         for ($t = $t0; $t -le 150000; $t += 3000) { $s += "@$from+$t-$($t+200)!$($screen):CROSS" }
-        for ($k = 0; $k -lt $n; $k++) { $t = 3000 + 700 * $k; $s += "@$screen+$t-$($t+150):RIGHT" }
-        $from = $screen; $t0 = 3000 + 700 * $n + 2000
+        $t1 = 3000
+        if ($tabs) {
+            $s += "@$screen+3000-3150:UP"
+            for ($k = 0; $k -lt $tabs; $k++) { $t = 4000 + 1000 * $k; $s += "@$screen+$t-$($t+150):RIGHT" }
+            $t = 4000 + 1000 * $tabs + 500; $s += "@$screen+$t-$($t+150):CROSS"
+            $t1 = $t + 2000
+        }
+        for ($k = 0; $k -lt $n; $k++) { $t = $t1 + 700 * $k; $s += "@$screen+$t-$($t+150):RIGHT" }
+        $from = $screen; $t0 = $t1 + 700 * $n + 2000
     }
     for ($t = $t0; $t -le 150000; $t += 3000) { $s += "@$from+$t-$($t+200)!RaceLoad:CROSS" }
     for ($t = 15000; $t -le 75000; $t += 3000) { $s += "@RaceLoad+$t-$($t+200)!RaceStart:CROSS" }

@@ -156,10 +156,22 @@ inline Analysis analyze(unsigned long code, const std::string& err) {
     } else if (code) {
         a.kind = Kind::error;
         a.what = "exited with code " + std::to_string(code) + (code == 3 ? " (abort)" : "") + " (" + hex + ")";
+        // A game script error the port could not hand to the game's own
+        // handler (src/gt5p_script_error.cpp): name it, it is the cause.
+        for (int i = (int)ls.size() - 1; i >= 0; i--)
+            if (starts(ls[i], "[script-error] ")) {
+                const auto colon = ls[i].find(": ");
+                std::string msg = colon == std::string::npos ? ls[i].substr(15) : ls[i].substr(colon + 2);
+                if (msg.size() > 90) msg = msg.substr(0, 90) + "...";
+                a.what = "stopped on a game script error (" + msg + "), exit code " + std::to_string(code);
+                for (const auto& l : ls)
+                    if (starts(l, "[script-error] ") && a.detail.size() < 4) a.detail.push_back(l);
+                break;
+            }
         std::vector<std::string> tail;
         for (int i = (int)ls.size() - 1; i >= 0 && tail.size() < 20; i--)
             if (!ls[i].empty()) tail.push_back(ls[i]);
-        a.detail.assign(tail.rbegin(), tail.rend());
+        a.detail.insert(a.detail.end(), tail.rbegin(), tail.rend());
     }
     for (auto& d : a.detail) if (d.size() > 400) d = d.substr(0, 400) + " ...";
     return a;
@@ -371,6 +383,8 @@ inline Report write(const fs::path& data, const Analysis& a, const fs::path& gam
     const fs::path dir = data / L"logs" / L"reports";
     fs::create_directories(dir);
     Report r; r.zip = dir / (std::string(stamp) + ".zip");
+    // Two stops in one second (a quick restart) must not overwrite a report.
+    for (int n = 2; fs::exists(r.zip) && n < 100; n++) r.zip = dir / (std::string(stamp) + "-" + std::to_string(n) + ".zip");
     const std::string sys = sc.apply(system_info()), game = sc.apply(game_info());
     Analysis shown = a;
     for (auto& d : shown.detail) d = sc.apply(d);

@@ -53,10 +53,29 @@ struct Gt5pSettings {
     int keys[16] = { 'Z', 'X', 'A', 'S', 'Q', 'W', '1', '2', 0, 0,
                      0x0D /* Enter */, 0x09 /* Tab */, 0x26, 0x28, 0x25, 0x27 /* arrows */ };
 
+    /* [wheel]: a steering wheel shown to the game as a Logitech G27
+     * (ps3recomp libs/hardware/wheel_*.c, docs/wheels.md). */
+    bool wheel = true;          /* look for a wheel (PS3_WHEEL=off: never) */
+    int wheel_range = 900;      /* degrees the PC wheel turns, lock to lock (PS3_WHEEL_RANGE) */
+    int ffb_strength = 80;      /* force feedback strength, 0..100 % (PS3_WHEEL_FFB) */
+    bool ffb_invert = false;    /* the game's steering force the other way (PS3_WHEEL_FFB_INVERT) */
+    int ffb_springs = 100;      /* spring, damper and friction effects, 0..200 % (PS3_WHEEL_FFB_SPRING) */
+    int ffb_min_force = 0;      /* minimum steering force, 0..50 % (PS3_WHEEL_FFB_MIN) */
+    bool ffb_pause = true;      /* no forces while F1 is open or the game is in the background (PS3_WHEEL_FFB_MUTE) */
+    std::string wheel_preset = "auto"; /* auto, g29, g920, g27, thrustmaster, custom */
+    std::string wheel_steer;           /* "" (auto=X) or axis name X..S1 (PS3_WHEEL_STEER) */
+    std::string wheel_pedals;          /* "" (auto) or "throttle=Y,brake=RZ,clutch=Z" (PS3_WHEEL_PEDALS) */
+    std::string wheel_buttons;         /* "" (auto) or "cross=1,circle=3,..." (PS3_WHEEL_BUTTONS) */
+
     /* [game] */
     bool skip_movie = false;    /* press through the opening movie (PAD_SKIP_MOVIE) */
     bool smooth_colour = true;  /* 16-bit targets, no dither noise (RSX_HIGH_PRECISION) */
     int anisotropy = 16;        /* 1 (trilinear), 4, 8 or 16: forced anisotropic filtering (RSX_ANISO) */
+    bool looser_chase_camera = false; /* RPCS3 Looser Chase Camera patch (GT5_PATCH_LOOSER_CHASE_CAMERA) */
+    int chase_cam_damper = 90;        /* chase camera spring damper, 0..300 (vanilla 300) */
+    int chase_cam_max_angle = 35;     /* chase camera max rotation angle, 0..100 (vanilla 30) */
+    bool unlock_fps = false;          /* RPCS3 Unlock FPS patch (GT5_PATCH_UNLOCK_FPS, 02.11) */
+    std::string player_name;    /* the PS3 user name the game shows; "" = "User" (PS3_USER_NAME) */
 
     /* [audio] */
     int audio_channels = 2;     /* sound output: 2 stereo, 6 (5.1), 8 (7.1), 0 auto (AUDIO_OUTPUT_CHANNELS) */

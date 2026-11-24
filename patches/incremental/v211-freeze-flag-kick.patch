@@ -1,5 +1,5 @@
 diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
-index deadc68..470f59a 100644
+index deadc68..76a18fd 100644
 --- a/libs/spurs/cellSpurs.c
 +++ b/libs/spurs/cellSpurs.c
 @@ -539,7 +539,8 @@ static int spurs_ready_coh(void)
@@ -49,9 +49,37 @@ index deadc68..470f59a 100644
          unsigned long long ran = ran_us / 1000;
          if (ran_us >= 500 && a->did_work) *a->did_work = 1;
          if (g_tl_on) ps3_tl_rec('L', a->wid << 8 | a->spu_num, (uint32_t)(ps3_tl_us() - tl0));
-@@ -2239,25 +2243,32 @@ static int spurs_lane_join_on(void)
+@@ -2200,6 +2204,7 @@ struct spurs_wkl_group {
+     HANDLE lane_kick[8];               /* SPURS_LANE_KICK_WAKE: wakes a lane sleeping in a retry */
+     volatile LONG lane_kick_wait[8];
+     volatile LONG lane_run[8];         /* SPURS_LANE_JOIN: the lane is inside this pass */
++    volatile LONG flag_pending;        /* SPURS_FLAG_KICK_KEEP=2: a flag kick met this pass */
+     SRWLOCK join_lock;                 /* a join and a dispatch's setup never overlap */
+ };
+ static struct spurs_wkl_group s_wkl_group[CELL_SPURS_MAX_WORKLOAD];
+@@ -2238,26 +2243,52 @@ static int spurs_lane_join_on(void)
+     return on;
  }
  static void spurs_group_end(struct spurs_wkl_group* g);
++/* SPURS_FLAG_KICK_KEEP: 2 (default) a workload-flag kick met during a pass
++ * sets the flag again when the pass ends; 1 only when the pass refuses it;
++ * 0 the old way (consumed by the running pass). */
++static int spurs_flag_kick_keep(void)
++{
++    static int keep = -1;
++    if (keep < 0) { const char* e = getenv("SPURS_FLAG_KICK_KEEP"); keep = e ? atoi(e) : 2; }
++    return keep;
++}
++/* At a pass's end: a flag kick that met it is set again (the game only clears
++ * the word to kick, so 0 restores a kick), for the next dispatch to take. */
++static void spurs_flag_pending_restore(struct spurs_wkl_group* g)
++{
++    if (!InterlockedExchange(&g->flag_pending, 0) || spurs_flag_kick_keep() < 2) return;
++    const u32 ea = g->a.ea, wid = g->a.wid;
++    if (*(vm_base + ea + SPURS_WKL_FLAG_RECV) != wid) return;
++    vm_write32(ea + SPURS_WKL_FLAG_WORD, 0);
++    spurs_kev(wid, 'K', 1, 0, 0);
++}
  static int spurs_lane_pool_on(void);
 -static void spurs_group_join_locked(struct spurs_wkl_group* g, u8 value);
 +static int spurs_group_join_locked(struct spurs_wkl_group* g, u8 value);
@@ -87,7 +115,7 @@ index deadc68..470f59a 100644
          if (InterlockedCompareExchange(&g->remaining, r + 1, r) != r) continue;
          int got = -1;
          for (u32 i = 0; i < n && got < 0; i++)
-@@ -2265,8 +2276,9 @@ static void spurs_group_join_locked(struct spurs_wkl_group* g, u8 value)
+@@ -2265,8 +2296,9 @@ static void spurs_group_join_locked(struct spurs_wkl_group* g, u8 value)
                  got = (int)i;
          if (got < 0) {                                    /* nobody to send: give the slot back */
              if (InterlockedDecrement(&g->remaining) == 0) spurs_group_end(g);
@@ -98,7 +126,7 @@ index deadc68..470f59a 100644
          g->lane_a[got].delay_ms = 0; g->lane_a[got].delay_us = 0;
          { static volatile LONG said;
            if (InterlockedIncrement(&said) <= 3)
-@@ -2276,6 +2288,7 @@ static void spurs_group_join_locked(struct spurs_wkl_group* g, u8 value)
+@@ -2276,6 +2308,7 @@ static void spurs_group_join_locked(struct spurs_wkl_group* g, u8 value)
          SetEvent(g->lane_go[got]);
          running++;
      }
@@ -106,15 +134,24 @@ index deadc68..470f59a 100644
  }
  static void spurs_group_kick(u32 ea, u32 wid, u8 value)
  {
-@@ -2365,6 +2378,7 @@ static void spurs_group_end(struct spurs_wkl_group* g)
+@@ -2319,6 +2352,7 @@ static DWORD WINAPI spurs_wkl_group_thread(LPVOID p)
+     }
+     spurs_cont_store(g->a.ea, g->a.wid, 0);
+     ps3_tl('E', g->a.wid, 0);
++    spurs_flag_pending_restore(g);
+     InterlockedExchange(&g->busy, 0);
+     if (spurs_kern_wake_on()) spurs_kern_wake(g->a.ea);
+     return 0;
+@@ -2365,6 +2399,8 @@ static void spurs_group_end(struct spurs_wkl_group* g)
                } }
      spurs_cont_store(g->a.ea, g->a.wid, 0);
      ps3_tl('E', g->a.wid, 0);
 +    spurs_kev(g->a.wid, 'E', *(vm_base + g->a.ea + SPURS_WKL_READY1 + g->a.wid), 0, busiest);
++    spurs_flag_pending_restore(g);
      InterlockedExchange(&g->busy, 0);
      if (spurs_kern_wake_on()) spurs_kern_wake(g->a.ea);
  }
-@@ -2778,6 +2792,34 @@ void cellSpurs_debug_dump_to(FILE* out)
+@@ -2778,6 +2814,34 @@ void cellSpurs_debug_dump_to(FILE* out)
                  for (int k = 0; k < 16; k++) fprintf(out, "%s%02X", (k & 1) ? "" : " ", q[k]);
                  fprintf(out, "%c", 10);
              }
@@ -149,7 +186,7 @@ index deadc68..470f59a 100644
      }
      fflush(out);
  }
-@@ -2990,9 +3032,24 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+@@ -2990,9 +3054,34 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
                   * SPUs would take it, with its lanes joining (GT5 2.11 sets the flag
                   * during workload 4's pass; kept for later, it started an empty pass
                   * after the real one, ~2 ms the title waited for contention 0). */
@@ -163,19 +200,29 @@ index deadc68..470f59a 100644
 +                 * with SPURS_KEVLOG=4 on a scrolling car list: lanes all left,
 +                 * 'n', pass end with ready 0). The game only clears the word to
 +                 * kick, so writing 0 back restores a kick, never invents one. */
++                /* =2 (the default): a flag kick met during a pass is also marked
++                 * pending on the group, and when the pass ends the flag is set
++                 * again, so the next dispatch runs the workload once more, as on
++                 * hardware, where the kernel consumes the flag only when it
++                 * selects the workload. A kick that met lanes still inside the
++                 * pass but past their last look at the list ('j') was lost too:
++                 * a second freeze shape, all four lanes inside, then leaving with
++                 * the new jobs unread. (Leaving the flag set during the pass
++                 * would send each leaving lane straight back, and the pass would
++                 * never end.) =1 keeps it only when the pass refused it. */
                  if (s_gate && flag_kick && spurs_lane_join_on() && spurs_lane_pool_on()) {
-+                    static int keep = -1;
-+                    if (keep < 0) { const char* e = getenv("SPURS_FLAG_KICK_KEEP"); keep = !(e && *e == '0'); }
++                    const int keep = spurs_flag_kick_keep();
                      vm_write32(ea + SPURS_WKL_FLAG_WORD, 0xFFFFFFFFu);
 -                    spurs_group_join(&s_wkl_group[wid], 0xFF);
-+                    if (!spurs_group_join(&s_wkl_group[wid], 0xFF) && keep) {
++                    if (keep >= 2) InterlockedExchange(&s_wkl_group[wid].flag_pending, 1);
++                    if (!spurs_group_join(&s_wkl_group[wid], 0xFF) && keep >= 1) {
 +                        vm_write32(ea + SPURS_WKL_FLAG_WORD, 0);
 +                        spurs_kev(wid, 'K', 0, 0, 0);    /* flag kick kept for the next pass */
 +                    }
                  }
                  continue;
              }
-@@ -3126,6 +3183,7 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+@@ -3126,6 +3215,7 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
                                        wid, maxcont, *rdy, *(vm_base + ea + SPURS_WKL_MAXCONT + wid), 10); }
                      InterlockedExchange(&g->busy, 1);
                      InterlockedIncrement(&s_kstat_runs[wid]);

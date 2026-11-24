@@ -18,7 +18,8 @@
 #   scratch\pv\<t>.frames.txt. -Cpu adds per-thread CPU over the window.
 #   Each screen milestone reached is printed with its time after the menu.
 #   -Track <n> / -Car <n> (with -Route race): Rights on the track list / car
-#   list (Get-GT5RaceRoute; -Track 6 is Eiger Nordwand). Check the shots.
+#   list (Get-GT5RaceRoute; -Track 6 is Eiger Nordwand). -Tab <n>: the track
+#   list tab first (2 = City; -Tab 2 alone is Rome). Check the shots.
 #   -Exe <path>: run another build of gt5.exe (default build\gt5.exe), e.g.
 #   build_pgo_use\gt5.exe (scripts\pgo\pgo.py).
 #   -ExtraHold "<presses>": appended to the PAD_HOLD script (e.g. a camera
@@ -28,7 +29,7 @@
 param([string]$Tag = "gt5", [int]$Settle = 60, [int]$Gap = 10, [switch]$Fresh, [switch]$FreshSave, [switch]$Movie,
       [ValidateSet("menu", "carlist", "grid", "race")][string]$Route = "menu", [string]$ShotsFrom = "",
       [switch]$FrameTest, [int]$SampleDelay = 20, [switch]$Cpu, [string]$ExtraHold = "", [string]$Exe = "",
-      [int]$Track = 0, [int]$Car = 0,
+      [int]$Track = 0, [int]$Car = 0, [int]$Tab = 0,
       [Parameter(ValueFromRemainingArguments = $true)] $Vars)
 . "$PSScriptRoot\milestone.ps1"
 Add-Type -AssemblyName System.Drawing
@@ -60,7 +61,7 @@ $set = @{ GT5P_NO_SETTINGS = "1"; FS_HIDE = "grim/file/contents"; PS3_VERBOSE = 
           PAD_MILESTONE_FILES = $GT5MilestoneFiles; PAD_HOLD = $GT5BootHold }
 if ($Route -eq "carlist") { $set.PAD_HOLD = $GT5CarListHold }
 if ($Route -eq "grid") { $set.PAD_HOLD = $GT5GridHold; if (-not $ShotsFrom) { $ShotsFrom = "RaceLoad" } }
-if ($Route -eq "race") { $set.PAD_HOLD = Get-GT5RaceRoute $Track $Car; if (-not $ShotsFrom) { $ShotsFrom = "RaceStart" } }
+if ($Route -eq "race") { $set.PAD_HOLD = Get-GT5RaceRoute $Track $Car $Tab; if (-not $ShotsFrom) { $ShotsFrom = "RaceStart" } }
 if ($Movie) { $set.Remove("PAD_HOLD") }
 if ($FrameTest) { $set.GT5P_FRAME_LOG = "$dir\$Tag.frames.csv"; $set.PAD_HOLD += ",@RaceStart+1000-900000:CROSS" }
 if ($ExtraHold) { $set.PAD_HOLD += ",$ExtraHold" }

@@ -223,3 +223,23 @@ was reproduced in menu, opening movie and race, with native and portable
 menu paths both affected. Containment alone restored the movie but left menu/race silent; the
 root-cause fix above restores them. Subjective
 speaker/headphone listening remains separate from signal/meter verification.
+
+## 2.11 race underruns from the range check (fixed 0.1.12)
+
+The range check above ran in all five `audio_extended_zero_images`; only the
+EQ, `j0B07CA3D` (image 2, `socepdideq`), makes extended values. High Speed
+Ring race, 2.11, `AUDIO_RATE=1 SPURS_JC_STATS=1 AUDIO_NONFINITE_SCRUB=0`, two
+runs each (0.1.11's 2.11 objects relinked; the other four images and their
+FMA copies recompiled with `GT5P_AUDIO_EXTENDED_RANGE_BUILD=0`):
+
+| Range check in | Underruns | Silent blocks | Per job | Chain busy | NaN samples |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| all five images | 511 / 482 | 52.9% / 39.1% | 0.85 / 0.66 ms | 97-98% | 0 (scrubbed) / 0 |
+| the EQ only | 1 / 1 | 0% / 0% | 0.31 / 0.32 ms | 74-79% | 0 / 0 |
+
+With scrubbing off, no invalid sample reached the port, and peaks were
+0.30-0.37 as in the NaN fix's runs: the EQ's output to the bus stays in
+range. `config/targets.json` `audio_extended_range_images` names the images
+that get the check (2.11: `["j0B07CA3D"]`); without the key every math image
+gets it, as before. CMake `-DGT5P_AUDIO_RANGE_ALL=ON` restores 0.1.11's
+build; `GT5P_AUDIO_EXTENDED_RANGE=0` still turns the check off at run time.

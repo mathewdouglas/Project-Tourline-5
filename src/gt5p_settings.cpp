@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iterator>
 #include <optional>
+#include <cctype>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -42,7 +43,11 @@ const char* const kEnvNames[] = {
     "PAD_MODERN_CONTROLS", "PAD_TRIGGER_DEADZONE", "PAD_TRIGGER_CURVE", "PAD_ADAPTIVE_TRIGGERS", "PAD_TRIGGER_RUMBLE", "PAD_SDL_RUMBLE",
     "PAD_NO_SDL", "PAD_NO_KEYBOARD", "PS3_VERBOSE",
     "GT5P_VBLANK_HZ", "SPURS_LANE_PIN", "SPURS_JL_SPU3", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_STARTUP", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "PAD_SKIP_MOVIE", "RSX_SHADER_INTERP",
-    "AUDIO_OUTPUT_CHANNELS",
+    "AUDIO_OUTPUT_CHANNELS", "PS3_USER_NAME",
+    "GT5_PATCH_LOOSER_CHASE_CAMERA", "GT5_CHASE_CAM_DAMPER", "GT5_CHASE_CAM_MAX_ANGLE", "GT5_PATCH_UNLOCK_FPS",
+    "PS3_WHEEL", "PS3_WHEEL_RANGE", "PS3_WHEEL_FFB", "PS3_WHEEL_FFB_INVERT", "PS3_WHEEL_FFB_SPRING",
+    "PS3_WHEEL_FFB_MIN", "PS3_WHEEL_FFB_MUTE",
+    "PS3_WHEEL_STEER", "PS3_WHEEL_PEDALS", "PS3_WHEEL_BUTTONS",
 };
 bool g_env_set[sizeof kEnvNames / sizeof kEnvNames[0]];
 
@@ -183,6 +188,15 @@ void read_lane_cores(toml::node_view<const toml::node> v, int& out)
     warn("performance.lane_pinning must be \"off\", \"hint\" or \"strict\"; keeping the default");
 }
 
+void read_int_range(toml::node_view<const toml::node> v, const char* key, int lo, int hi, int& out)
+{
+    if (!v) return;
+    const auto n = v.value_exact<int64_t>();
+    if (n && *n >= lo && *n <= hi) { out = (int)*n; return; }
+    warn(std::string(key) + " must be an integer from " + std::to_string(lo) + " to " + std::to_string(hi)
+         + "; keeping " + std::to_string(out));
+}
+
 void read_bool(toml::node_view<const toml::node> v, const char* key, bool& out)
 {
     if (!v) return;
@@ -196,6 +210,15 @@ void read_tristate(toml::node_view<const toml::node> v, const char* key, int& ou
     if (auto b = v.value_exact<bool>()) { out = *b ? 1 : 0; return; }
     if (auto s = v.value<std::string>(); s && *s == "auto") { out = -1; return; }
     warn(std::string(key) + " must be \"auto\", true or false; keeping the default");
+}
+
+/* A name the game can show: 1-16 printable characters, none that need quoting. */
+bool gt5p_player_name_ok(const std::string& v)
+{
+    if (v.empty() || v.size() > 16) return false;
+    for (unsigned char c : v)
+        if (!(isalnum(c) || c == ' ' || c == '.' || c == '-' || c == '_' || c == '\'')) return false;
+    return v.front() != ' ' && v.back() != ' ';
 }
 
 /* Keys this version knows, so a misspelt one is reported instead of ignored. */
@@ -213,7 +236,13 @@ bool known_key(std::string_view section, std::string_view key)
         {"input", "adaptive_triggers"},
         {"input", "trigger_rumble"},
         {"input", "sdl_rumble"},
+        {"wheel", "enabled"}, {"wheel", "rotation"}, {"wheel", "ffb_strength"}, {"wheel", "ffb_invert"},
+        {"wheel", "ffb_springs"}, {"wheel", "ffb_min_force"}, {"wheel", "ffb_pause"},
+        {"wheel", "preset"}, {"wheel", "steer"}, {"wheel", "pedals"}, {"wheel", "buttons"},
         {"game", "skip_movie"},       {"game", "smooth_colour"},    {"game", "anisotropy"},
+        {"game", "looser_chase_camera"}, {"game", "chase_cam_damper"}, {"game", "chase_cam_max_angle"},
+        {"game", "unlock_fps"},
+        {"game", "player_name"},
         {"audio", "output"},
         {"performance", "vblank_hz"}, {"performance", "lane_pinning"},
         {"performance", "fifth_spu_lane"},
@@ -327,6 +356,34 @@ void parse_into(const toml::table& tbl, Gt5pSettings& s)
         if (v && (*v == 1 || *v == 4 || *v == 8 || *v == 16)) s.anisotropy = (int)*v;
         else warn("game.anisotropy must be 1, 4, 8 or 16; keeping the default");
     }
+    read_bool(tbl["game"]["looser_chase_camera"], "game.looser_chase_camera", s.looser_chase_camera);
+    read_int_range(tbl["game"]["chase_cam_damper"], "game.chase_cam_damper", 0, 300, s.chase_cam_damper);
+    read_int_range(tbl["game"]["chase_cam_max_angle"], "game.chase_cam_max_angle", 0, 100, s.chase_cam_max_angle);
+    read_bool(tbl["game"]["unlock_fps"], "game.unlock_fps", s.unlock_fps);
+    if (auto n = tbl["game"]["player_name"]) {
+        const auto v = n.value<std::string>();
+        if (v && gt5p_player_name_ok(*v)) s.player_name = *v;
+        else warn("game.player_name must be 1 to 16 letters, digits, spaces or . - _ ' characters; keeping \"User\"");
+    }
+    read_bool(tbl["wheel"]["enabled"], "wheel.enabled", s.wheel);
+    read_int_range(tbl["wheel"]["rotation"], "wheel.rotation", 90, 3600, s.wheel_range);
+    read_int_range(tbl["wheel"]["ffb_strength"], "wheel.ffb_strength", 0, 100, s.ffb_strength);
+    read_bool(tbl["wheel"]["ffb_invert"], "wheel.ffb_invert", s.ffb_invert);
+    read_int_range(tbl["wheel"]["ffb_springs"], "wheel.ffb_springs", 0, 200, s.ffb_springs);
+    read_int_range(tbl["wheel"]["ffb_min_force"], "wheel.ffb_min_force", 0, 50, s.ffb_min_force);
+    read_bool(tbl["wheel"]["ffb_pause"], "wheel.ffb_pause", s.ffb_pause);
+    if (auto n = tbl["wheel"]["preset"]) {
+        if (auto v = n.value<std::string>()) s.wheel_preset = *v;
+    }
+    if (auto n = tbl["wheel"]["steer"]) {
+        if (auto v = n.value<std::string>()) s.wheel_steer = *v;
+    }
+    if (auto n = tbl["wheel"]["pedals"]) {
+        if (auto v = n.value<std::string>()) s.wheel_pedals = *v;
+    }
+    if (auto n = tbl["wheel"]["buttons"]) {
+        if (auto v = n.value<std::string>()) s.wheel_buttons = *v;
+    }
     read_audio_output(tbl["audio"]["output"], s.audio_channels);
     read_vblank(tbl["performance"]["vblank_hz"], s.vblank_hz100);
     read_lane_cores(tbl["performance"]["lane_pinning"], s.lane_cores);
@@ -368,6 +425,17 @@ void apply_env(const Gt5pSettings& s)
     snprintf(buf, sizeof buf, "%d", (int)s.sdl_rumble); set_default_env("PAD_SDL_RUMBLE", buf);
     set_default_env("PAD_KEYMAP", gt5p_keymap_format(s.keys).c_str());
     set_default_env("GT5P_GLYPHS", kPromptNames[s.button_prompts >= 0 && s.button_prompts < 5 ? s.button_prompts : 0]);
+    /* The steering wheel (ps3recomp libs/hardware/wheel_host_win.c). */
+    set_default_env("PS3_WHEEL", s.wheel ? "auto" : "off");
+    snprintf(buf, sizeof buf, "%d", s.wheel_range); set_default_env("PS3_WHEEL_RANGE", buf);
+    snprintf(buf, sizeof buf, "%d", s.ffb_strength); set_default_env("PS3_WHEEL_FFB", buf);
+    set_default_env("PS3_WHEEL_FFB_INVERT", s.ffb_invert ? "1" : "0");
+    snprintf(buf, sizeof buf, "%d", s.ffb_springs); set_default_env("PS3_WHEEL_FFB_SPRING", buf);
+    snprintf(buf, sizeof buf, "%d", s.ffb_min_force); set_default_env("PS3_WHEEL_FFB_MIN", buf);
+    set_default_env("PS3_WHEEL_FFB_MUTE", s.ffb_pause ? "1" : "0");
+    if (!s.wheel_steer.empty()) set_default_env("PS3_WHEEL_STEER", s.wheel_steer.c_str());
+    if (!s.wheel_pedals.empty()) set_default_env("PS3_WHEEL_PEDALS", s.wheel_pedals.c_str());
+    if (!s.wheel_buttons.empty()) set_default_env("PS3_WHEEL_BUTTONS", s.wheel_buttons.c_str());
     /* The screen whose first read starts the presses (cellPad.c). */
     /* GT5P_MOVIE_SCREEN: the target's opening-movie screen (src/main.cpp,
      * config/targets.json movie_screen); Prologue's script name otherwise. */
@@ -378,6 +446,13 @@ void apply_env(const Gt5pSettings& s)
     if (!s.smooth_colour)   set_default_env("RSX_HIGH_PRECISION", "0");
     snprintf(buf, sizeof buf, "%d", s.anisotropy);
     set_default_env("RSX_ANISO", buf);
+    if (s.looser_chase_camera) set_default_env("GT5_PATCH_LOOSER_CHASE_CAMERA", "1");
+    snprintf(buf, sizeof buf, "%d", s.chase_cam_damper);
+    set_default_env("GT5_CHASE_CAM_DAMPER", buf);
+    snprintf(buf, sizeof buf, "%d", s.chase_cam_max_angle);
+    set_default_env("GT5_CHASE_CAM_MAX_ANGLE", buf);
+    if (s.unlock_fps) set_default_env("GT5_PATCH_UNLOCK_FPS", "1");
+    if (!s.player_name.empty()) set_default_env("PS3_USER_NAME", s.player_name.c_str());
     if (s.verbose_log >= 0) set_default_env("PS3_VERBOSE", s.verbose_log ? "1" : "0");
     set_default_env("AUDIO_OUTPUT_CHANNELS", s.audio_channels == 6 ? "6" : s.audio_channels == 8 ? "8" : s.audio_channels == 0 ? "auto" : "2");
     set_default_env("GT5P_VBLANK_HZ", s.vblank_hz100 == 6250 ? "62.5" : "59.94");
@@ -432,9 +507,39 @@ void reflect_env(Gt5pSettings& s)
         s.sdl_rumble = *e && !*end && n >= 0 && n <= 1 ? (int)n : 0;
     }
     if (const char* e = getenv("PAD_KEYMAP")) gt5p_keymap_parse(e, s.keys);
+    if (const char* e = getenv("PS3_WHEEL"))
+        s.wheel = !(!strcmp(e, "off") || !strcmp(e, "0") || !strcmp(e, "no") || !strcmp(e, "OFF"));
+    {   /* the runtime clamps these the same way */
+        auto num = [](const char* name, int lo, int hi, int& out) {
+            if (const char* e = getenv(name)) {
+                char* end; const long n = strtol(e, &end, 10);
+                if (*e && !*end) out = n < lo ? lo : n > hi ? hi : (int)n;
+            }
+        };
+        num("PS3_WHEEL_RANGE", 90, 3600, s.wheel_range);
+        num("PS3_WHEEL_FFB", 0, 100, s.ffb_strength);
+        num("PS3_WHEEL_FFB_SPRING", 0, 200, s.ffb_springs);
+        num("PS3_WHEEL_FFB_MIN", 0, 50, s.ffb_min_force);
+    }
+    if (const char* e = getenv("PS3_WHEEL_FFB_INVERT")) s.ffb_invert = e[0] == '1';
+    if (const char* e = getenv("PS3_WHEEL_FFB_MUTE")) s.ffb_pause = e[0] != '0';
+    if (const char* e = getenv("PS3_WHEEL_STEER")) s.wheel_steer = e;
+    if (const char* e = getenv("PS3_WHEEL_PEDALS")) s.wheel_pedals = e;
+    if (const char* e = getenv("PS3_WHEEL_BUTTONS")) s.wheel_buttons = e;
     { const char* e = getenv("PAD_SKIP_MOVIE"); s.skip_movie = e && *e && strcmp(e, "0") != 0; }
     { const char* e = getenv("RSX_HIGH_PRECISION"); s.smooth_colour = !(e && e[0] == '0'); }
+    if (const char* e = getenv("PS3_USER_NAME"); e && gt5p_player_name_ok(e)) s.player_name = e;
     if (const char* e = getenv("RSX_ANISO")) { const int a = atoi(e); s.anisotropy = a >= 16 ? 16 : a >= 8 ? 8 : a >= 4 ? 4 : 1; }
+    { const char* e = getenv("GT5_PATCH_LOOSER_CHASE_CAMERA"); s.looser_chase_camera = e && e[0] && e[0] != '0'; }
+    if (const char* e = getenv("GT5_CHASE_CAM_DAMPER")) {
+        char* end; const long n = strtol(e, &end, 10);
+        if (*e && !*end) s.chase_cam_damper = n < 0 ? 0 : n > 300 ? 300 : (int)n;
+    }
+    if (const char* e = getenv("GT5_CHASE_CAM_MAX_ANGLE")) {
+        char* end; const long n = strtol(e, &end, 10);
+        if (*e && !*end) s.chase_cam_max_angle = n < 0 ? 0 : n > 100 ? 100 : (int)n;
+    }
+    { const char* e = getenv("GT5_PATCH_UNLOCK_FPS"); s.unlock_fps = e && e[0] && e[0] != '0'; }
     if (const char* e = getenv("PS3_VERBOSE")) s.verbose_log = (e[0] && e[0] != '0') ? 1 : 0;
     if (const char* e = getenv("AUDIO_OUTPUT_CHANNELS"))
         s.audio_channels = (e[0] == 'a' || e[0] == 'A') ? 0 : atoi(e) == 6 ? 6 : atoi(e) == 8 ? 8 : 2;
@@ -577,6 +682,36 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "# LeftBracket, Backslash, RightBracket, or None. [PAD_KEYMAP]\n"
          << keyboard_lines(s) <<
          "\n"
+         "[wheel]\n"
+         "# A steering wheel (Logitech, Thrustmaster, Fanatec, ...) is shown to the game\n"
+         "# as a Logitech G27, with force feedback through DirectInput. Plug it in before\n"
+         "# starting. false: don't look for one. Restart to apply. [PS3_WHEEL]\n"
+         "enabled = " << (s.wheel ? "true" : "false") << "\n"
+         "# Degrees your wheel turns lock to lock, as set in its own software (G HUB:\n"
+         "# 900). The game asks for its own rotation per car. Restart to apply. [PS3_WHEEL_RANGE]\n"
+         "rotation = " << s.wheel_range << "\n"
+         "# Force feedback strength, 0 (off) to 100 percent. Applies live. [PS3_WHEEL_FFB]\n"
+         "ffb_strength = " << s.ffb_strength << "\n"
+         "# true if the wheel pulls away from the centre instead of towards it. [PS3_WHEEL_FFB_INVERT]\n"
+         "ffb_invert = " << (s.ffb_invert ? "true" : "false") << "\n"
+         "# The game's centring spring, damping and friction, 0 to 200 percent. [PS3_WHEEL_FFB_SPRING]\n"
+         "ffb_springs = " << s.ffb_springs << "\n"
+         "# Lift small steering forces to at least this percent, 0 to 50: gear and belt\n"
+         "# wheels (G29, G920, T300) hide weak forces in their own friction. [PS3_WHEEL_FFB_MIN]\n"
+         "ffb_min_force = " << s.ffb_min_force << "\n"
+         "# Stop all forces while F1 is open or the game window is in the background.\n"
+         "# Restart to apply. [PS3_WHEEL_FFB_MUTE]\n"
+         "ffb_pause = " << (s.ffb_pause ? "true" : "false") << "\n"
+         "# Axis and button preset: \"auto\" (detect by model), \"g29\", \"g920\", \"g27\",\n"
+         "# \"thrustmaster\", or \"custom\". Set from F1 > WHEEL or F1 > WHEEL MAP.\n"
+         "preset = \"" << s.wheel_preset << "\"\n"
+         "# Custom steering axis (empty = auto/X; or X, Y, Z, RX, RY, RZ, S0, S1). [PS3_WHEEL_STEER]\n"
+         "steer = \"" << s.wheel_steer << "\"\n"
+         "# Custom pedal axes (empty = auto; e.g. \"throttle=Y,brake=RZ,clutch=Z\"). [PS3_WHEEL_PEDALS]\n"
+         "pedals = \"" << s.wheel_pedals << "\"\n"
+         "# Custom wheel buttons (empty = auto; e.g. \"cross=1,circle=3,start=10\"). [PS3_WHEEL_BUTTONS]\n"
+         "buttons = \"" << s.wheel_buttons << "\"\n"
+         "\n"
          "[game]\n"
          "# Skip the opening movie (it plays only when the TV content is installed):\n"
          "# Cross is pressed for you once it starts. [PAD_SKIP_MOVIE]\n"
@@ -587,6 +722,22 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "# Texture filtering: 1 (trilinear, the game's own), or 4, 8 or 16 for\n"
          "# anisotropic: surfaces at a slant stay sharp into the distance. [RSX_ANISO]\n"
          "anisotropy = " << s.anisotropy << "\n"
+         "# Looser chase camera (RPCS3 patch): lets the chase camera sway freely with\n"
+         "# steering and drift instead of locking rigidly behind the car. Applies live.\n"
+         "# [GT5_PATCH_LOOSER_CHASE_CAMERA]\n"
+         "looser_chase_camera = " << (s.looser_chase_camera ? "true" : "false") << "\n"
+         "# Looser chase camera spring damper, 0 to 300 (lower = looser, 90 default,\n"
+         "# 300 vanilla). Applies live. [GT5_CHASE_CAM_DAMPER]\n"
+         "chase_cam_damper = " << s.chase_cam_damper << "\n"
+         "# Looser chase camera max rotation angle, 0 to 100 (35 default, 30 vanilla).\n"
+         "# Applies live. [GT5_CHASE_CAM_MAX_ANGLE]\n"
+         "chase_cam_max_angle = " << s.chase_cam_max_angle << "\n"
+         "# Unlock FPS (RPCS3 patch, GT5 2.11): removes the 30/60 Hz flip-interval\n"
+         "# cap in menus and races. Off by default. Applies live. [GT5_PATCH_UNLOCK_FPS]\n"
+         "unlock_fps = " << (s.unlock_fps ? "true" : "false") << "\n"
+         "# Your name in the game (profile, race results), up to 16 letters, digits,\n"
+         "# spaces or . - _ '. Empty: \"User\". Restart to apply. [PS3_USER_NAME]\n"
+         "player_name = \"" << s.player_name << "\"\n"
          "\n"
          "[audio]\n"
          "# Sound output: \"stereo\" (the default), \"5.1\" or \"7.1\" for surround\n"

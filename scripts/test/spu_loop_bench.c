@@ -13,6 +13,7 @@
 
 volatile int g_spu_fast = 1;
 volatile int g_spu_chain_back = 1;
+volatile int g_yz_lockstep_on;
 unsigned g_spu_stack_reset_n;
 int g_spu_ls_watch_n;
 SPU_THREAD_LOCAL void (*g_spu_trampoline_fn)(spu_context*);
@@ -29,6 +30,8 @@ static void (*lookup(uint32_t pc))(spu_context*)
 static int s_bench_bad, s_bench_left;
 static uint32_t s_lo, s_hi = 0x40000;   /* the routine's address range (argv[3]) */
 static uint32_t s_ret;                   /* the call's return address (r0 on entry) */
+static uint32_t s_chain[16]; static int s_chain_n;   /* BENCH_CHAIN */
+static int chain_has(uint32_t pc) { for (int i = 0; i < s_chain_n; i++) if (s_chain[i] == pc) return 1; return 0; }
 /* The runtime's indirect branch: here a lookup in this image's table. A
  * target outside the routine's range ends the run there (s_bench_left): routines
  * that leave through a register branch instead of returning. */
@@ -46,6 +49,7 @@ static void unreached(const char* what) { fprintf(stderr, "%s reached: not a sel
 void spu_drain_call_impl(spu_context* ctx, uint32_t return_pc) { (void)ctx; (void)return_pc; unreached("spu_drain_call_impl"); }
 u128 spu_rdch(spu_context* ctx, uint32_t channel) { (void)ctx; (void)channel; unreached("spu_rdch"); return (u128){0}; }
 void spu_wrch(spu_context* ctx, uint32_t channel, u128 value) { (void)ctx; (void)channel; (void)value; unreached("spu_wrch"); }
+uint32_t spu_rchcnt(spu_context* ctx, uint32_t channel) { (void)ctx; (void)channel; unreached("spu_rchcnt"); return 0; }
 void spu_halt(spu_context* ctx) { (void)ctx; unreached("spu_halt"); }
 void spu_stop(spu_context* ctx) { (void)ctx; unreached("spu_stop"); }
 /* The native replacements and the switches of the post-lift steps already
@@ -54,6 +58,7 @@ void spu_stop(spu_context* ctx) { (void)ctx; unreached("spu_stop"); }
  * unless this variant is built to test them. */
 volatile int g_spu_exp;
 #include "../../src/gt5p_spu_native.c"
+#include "../../src/gt5p_native_cull.c"
 #ifdef BENCH_COUNT
 static unsigned s_cnt[0x40000 / 4];
 void bench_count(unsigned a) { s_cnt[(a & 0x3FFFF) / 4]++; }
@@ -88,6 +93,11 @@ int main(int argc, char** argv)
     BENCH_REGISTER();
     FILE* f = fopen(argv[1], "rb");
     if (!f) { perror(argv[1]); return 2; }
+    for (const char* q = getenv("BENCH_CHAIN"); q && *q && s_chain_n < 16; ) {
+        char* e; s_chain[s_chain_n++] = (uint32_t)strtoul(q, &e, 16);
+        if (*e != ',') break;
+        q = e + 1;
+    }
     const int reps = atoi(argv[2]);
     SetThreadAffinityMask(GetCurrentThread(), 1u << 2);
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
@@ -123,6 +133,15 @@ int main(int argc, char** argv)
             for (int guard = 0; g_spu_trampoline_fn && !s_bench_left && guard < 100000000; guard++) {
                 void (*t)(spu_context*) = g_spu_trampoline_fn; g_spu_trampoline_fn = NULL; t(&s_ctx);
             }
+#ifdef BENCH_BLOCK
+            /* BENCH_CHAIN=a,b,... (hex): in block mode, a transfer to one of these function
+             * entries is followed (a loop that spans several lifted functions). */
+            for (int guard = 0; chain_has(s_ctx.pc) && guard < 1000000; guard++) {
+                void (*t)(spu_context*) = lookup(s_ctx.pc);
+                if (!t) break;
+                t(&s_ctx);
+            }
+#endif
             QueryPerformanceCounter(&t1);
             if (s_bench_bad
 #ifndef BENCH_BLOCK
@@ -131,7 +150,23 @@ int main(int argc, char** argv)
                 ) { fprintf(stderr, "state %d: ended at pc 0x%X, expected 0x%X (bad=%d)\n", k, s_ctx.pc, ret, s_bench_bad); return 1; }
             const double us = (double)(t1.QuadPart - t0.QuadPart) * 1e6 / (double)qf.QuadPart;
             if (nb < 64) best[nb++] = us;
+            /* BENCH_IGNORE_REGS=lo-hi: registers left out of the comparison (a routine run to its
+             * return: the SPU ABI's volatile registers) */
+            { static int lo = -2, hi = -1;
+              if (lo == -2) { const char* e = getenv("BENCH_IGNORE_REGS"); lo = -1;
+                              if (e && *e) { char* q; lo = (int)strtol(e, &q, 10); hi = (*q == '-') ? (int)strtol(q + 1, NULL, 10) : lo; } }
+              for (int g = lo; g >= 0 && g <= hi && g < 128; g++) memset(&s_ctx.gpr[g], 0, sizeof s_ctx.gpr[g]); }
             const uint32_t endpc = s_ctx.pc;
+            const char* dump_dir = getenv("BENCH_STATE_DIR");
+            if (r == 0 && dump_dir && *dump_dir) {
+                char path[2048]; snprintf(path, sizeof path, "%s/state-%03d.bin", dump_dir, k);
+                FILE* dump = fopen(path, "wb");
+                if (!dump) { perror(path); return 3; }
+                fwrite(&endpc, sizeof endpc, 1, dump);
+                fwrite(s_ctx.gpr, sizeof s_ctx.gpr, 1, dump);
+                fwrite(s_ctx.ls, SPU_LS_SIZE, 1, dump);
+                fclose(dump);
+            }
             uint64_t hh = fnv(&endpc, 4, fnv(s_ctx.ls_store, SPU_LS_SIZE, fnv(s_ctx.gpr, sizeof s_ctx.gpr, 1469598103934665603ULL)));
             hh=fnv(&s_ctx.int_enable,sizeof s_ctx.int_enable,hh);
             if (r && hh != hash) { fprintf(stderr, "state %d: not deterministic\n", k); return 1; }
@@ -142,6 +177,10 @@ int main(int argc, char** argv)
         total += best[nb / 2]; k++;
     }
     printf("total %.1f us over %d states\n", total, k);
+#ifdef NC_TABLE_TEST
+    if (!s_nc_table_hits) { fprintf(stderr, "coverage-table native path never exercised\n"); return 4; }
+    printf("coverage-table native calls: %u\n", s_nc_table_hits);
+#endif
 #ifdef BENCH_COUNT
     printf("counts (function entries per call, all states):\n");
     for (int n = 0; n < 25; n++) {

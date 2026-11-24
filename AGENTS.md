@@ -168,13 +168,38 @@ old) and lwmutex slots on destroy (`PS3_LWM_SLOT_FREE=0` old). Test:
 freeing it.
 
 **2.11 picture freeze (0.1.12, runtime).** #28/#36/#38/#39/#47: a
-workload-flag kick that met workload 4's pass as it ended was consumed and
-lost (`gFKsE` polled `0x00B95248` for ever). The flag is now put back when
-the pass refuses it (`SPURS_FLAG_KICK_KEEP=0` old). Reproduce: 2.11 Arcade
-car list with Right every 3 s for 10 minutes (about one freeze per 8 min
-before; 0 in 33 min after). `SPURS_KEVLOG=4` (GT5 default) prints the
+workload-flag kick that met workload 4's running pass was consumed by it
+and lost when the lanes were already past their last look at the list
+(`gFKsE` polled `0x00B95248` for ever). Such a kick is now pending and sets
+the flag again when the pass ends, as hardware consumes the flag only at
+dispatch (`SPURS_FLAG_KICK_KEEP=2` default, `=1` only refused kicks, `=0`
+old). Reproduce: 2.11 Arcade car list with Right every 3 s for 10 minutes
+(2 of 2 runs froze before; 0 in 34 min after). `SPURS_KEVLOG=4` (GT5 default) prints the
 workload's passes, lane exits, joins and kicks in every stall dump. See
 progress-gt5.md.
+
+**Car damage streaks (0.1.12, runtime).** #42/#47: GT5 scratches each
+car's 256x512 damage map with a border-addressed scratch texture; the
+sampler bank had no border mode, so clamp stretched its edges over whole
+panels. Border units (RSX wrap 4/7) now return their border colour outside
+0..1 via a per-unit shader wrapper keyed in the pipeline (`RSX_TEX_BORDER_ADDR=0`
+old); such draws wait for their pipeline rather than use the interpreter.
+Reproduce: `gt5boot.ps1 -Route race -FrameTest` (Fiat scrapes the walls).
+See progress-gt5.md.
+
+**Texture slots and stale textures (0.1.12, runtime).** #49/#52 (track
+map gone until restart) logged `texture slots full (1024)`; the table is
+2048, past 1024 only for a frame's overflow (`RSX_TEX_SLOTS=1024`,
+`RSX_TEX_SLOTS_SOFT`). Held textures were only sample-checked: the damage
+map and lighting cubes stayed stale; a per-frame full re-check budget
+re-uploads them (`RSX_TEX_CSUM_ROLL=0` old). Map fix unconfirmed. #48 (2.11
+freeze at 3x speed, lanes' 1 MB rings full) not reproduced. See
+progress-gt5.md.
+
+**2.11 race audio underruns (0.1.12).** The extended-range check runs only
+in the images named by `audio_extended_range_images` (2.11: the EQ
+`j0B07CA3D`): 482-511 underruns -> 1 per race, no NaN with scrubbing off
+(`-DGT5P_AUDIO_RANGE_ALL=ON` old). See audio.md.
 
 **Antivirus (release check).** Bitdefender `Gen:Variant.Lazy` scores the
 first 16 KB of `.text`: every PGO `gt5.exe` 0.1.4-0.1.10 was flagged because
@@ -197,6 +222,128 @@ texture bound at an offset with no IO mapping (the backend then reads VRAM
 instead); `RSX_IO_UNMAPPED=0` off, `=2` check mode. None at High Speed Ring.
 See progress-gt5.md, 2026-11-12.
 
+
+**gt5-recomp ideas (2026-11-22, `perf/gt5recomp-natives`).** PPU AltiVec byte moves are
+shuffles (`runtime/ppu/ppu_vshuf.h`, PPU chunks `-msse4.1`; `PPU_VSHUF=0` at lift,
+`GT5P_PPU_SSE41=OFF`): -3% game CPU. Native fast blocks from gt5-recomp (MIT) run in the FMA
+copies of the mixer `jD58063CD` and EQ `jEB79FDFC` (`audio_native_hooks` in targets.json,
+`src/gt5p_native_mixer.c`, `src/gt5p_native_eq.c`; `GT5P_NATIVE_MIXER=0`, `GT5P_NATIVE_EQ=0`,
+`-DGT5P_NATIVE_SPU_HOOKS=OFF`): sound chain 60% -> 37% busy. A new hooked function needs
+`scripts/test/native_audio.py` on captured states first (identical registers and LS). Re-lift
+after pulling (lifter change). See progress-gt5.md, 2026-11-22.
+
+**Further native CPU experiments (2026-11-22).** 01.04 has opt-in integer bulk fills
+(`GT5P_NATIVE_FILL=1`) and coverage-table culling (`GT5P_NATIVE_CULL_TABLE=1`); both remain
+off because live tests did not establish a CPU saving, despite exact replay checks.
+Re-run `spu_native_patch.py` after lifting. `spu_fill.py` checks 2,400 full states;
+`native_cull.py --table-only --expand` checks the new cull actually executes.
+`pgo.py play --routes hsr,rome,eiger,carlist` trains a mixed profile; `ab --route ...`
+compares CPU per frame and per second as well as pacing. Fresh profiles stay private,
+and comparisons against an unprofiled build are not gains over an older PGO release.
+See the newest entry in docs/progress-gt5.md for measurements and rollbacks.
+
+**PGO default accepted (2026-11-22).** The user accepted the mixed profile's Eiger
+pacing tradeoff. Ordinary 01.04 `scripts/build.cmd` builds now use the local
+`scratch/pgo/gt5.profdata` when present (`-DGT5P_PGO_AUTO=OFF` opts out); no profile
+falls back to unprofiled. Explicit compiler launchers and 2.11 are unchanged.
+`pgo.py ab` explicitly disables AUTO for its baseline. Clean 01.04 releases select
+the private checkout profile by default; `--no-profile` opts out. Profiles still
+need refreshing for changed compiled sources; release source-fit checks remain.
+
+**SPU runtime fast paths & Eiger PPU/wake fixes (2026-11-23).** `runtime/spu/spu_channels.c`
+adds `SPU_OVL_FAST` (O(1) EA hash + 64-bit sig bloom in `spu_overlay_note_get`),
+`SPU_FLAT_DISPATCH` (lazy per-image 64K flat `spu_fn` table in `spu_lookup_fast`),
+`SPU_IRQ_FAST` (stay on `SPU_FAST` during IRQ handlers when `int_enable == 0`), and
+`SPU_TSC_CLOCK` (calibrated invariant `__rdtsc()` in `spu_host_ns()`), each `=0` off.
+Same-exe A/B: Car list `50.3 -> 53.3 FPS` (+6.0%, late `48.8/21.7% -> 20.0/15.9%`), Rome
+`57.4 -> 58.1 FPS` (p99 `25.8 -> 23.2 ms`, late `9.9% -> 6.8%`). `config/targets.json`
+(01.04 `spin_waits`) adds `0x00C350C0` (`GT5P_SPIN_YIELD=0` off; Eiger top PPU thread
+`70.1% -> 43.1%`, process CPU `5.75 -> 5.41 cores`), and `src/main.cpp` defaults
+`SPURS_SPU_KICK_WAKE=1` for GT5 (`=0` off; Eiger `53.6 -> 55.6 FPS`, median `17.9 -> 17.0 ms`).
+Refreshed 4-route PGO rebuilt `build/gt5.exe` with 0 stale hash mismatches. `runtime/spu/spu_helpers.h`
+also vectorizes `spu_frest`, `spu_frsqest`, `spu_csflt`, `spu_cuflt`, `spu_cflts`, `spu_gb`, and
+`spu_fsm` under SSE4.1 (`-DSPU_FLOAT_SCALAR` rollback; `scripts/test/spu_helpers_sse.py`, 7M bit-exact
+checks): with refreshed PGO, HSR `59.5 FPS` (`1.3%` late, p99 `20.6 ms`), Rome `58.1 FPS` (`6.5%` late,
+p99 `24.1 ms`), Eiger heavy rain `54.3 FPS` (`17.7%` late, p99 `23.8 ms`, `4.89 cores`), Car list
+`55.4 FPS` (`10.4%` late, p99 `24.0 ms`). See progress-gt5.md.
+
+**Eiger native grid pass & default-on coverage-table cull (2026-11-23).** `src/gt5p_native_eiger.c`
+hooks `b01697100` `0x8298 -> 0x8934` (`GT5P_NATIVE_EIGER=0` off; `scripts/test/native_eiger.py`,
+200 randomized states bit-exact for both double and FMA; `scripts/spu_region.py` updated to
+preserve `/* spu_native_patch */` lines): 2.55M live hits, 0 bails, Eiger `54.3 -> 58.5 FPS`
+(`17.7% -> 5.2%` late, median `16.7 ms`). With SPU runtime overhead down to `21.4%` of Workload 4,
+`0xB240` became `20.5%` of Car list; `GT5P_NATIVE_CULL_TABLE` is now default on (`=0` off;
+`native_cull.py --table-only --expand` 854 states / 1,750 calls bit-identical): Car list
+`55.5 -> 59.0 FPS` (`10.0% -> 2.9%` late). Selective ThinLTO (`-flto=thin` on SPU+runtime) was
+tested and not kept (no Car list gain). Refreshed 4-route PGO `build/gt5.exe`: HSR `59.1 FPS`
+(`2.2%` late), Car list `58.5 FPS` (`3.2%` late), Eiger `58.5 FPS` (`5.2%` late), Rome `57.7-58.4 FPS`
+(`6.0-8.1%` late). Re-run `spu_native_patch.py` after lifting. See progress-gt5.md.
+
+**Native vertex stage & cold-cache stutter reduction (`perf/v0.1.17-locked60`, 2026-11-23).**
+`src/gt5p_native_cull.c` adds `gt5p_cull_ad30` (`b0196FF40` / 2.11 `b017BD780` `0xAD30 -> 0xAEB4`,
+`GT5P_NATIVE_VTX=0` off; 8-wide AVX2 vertex transform + per-lane scalar `fi` fallback;
+`native_cull.py --expand` 854 states bit-exact: `2.12x` double, `2.81x` fused; `spu_regpromo.py`
+updated to preserve leading `/* spu_native_patch */` hooks). `gt5p_native_eiger.c` uses 1-lane
+scalar `frest`/`frsqest`/`fi` and direct cell unpack/store (`native_eiger.py` 200 states bit-exact).
+In `rsx_d3d12_backend.c`, `RSX_SHADER_WORKER_AFFINITY` now defaults ON (`=0` off), `RSX_PSO_WAIT_CV`
+(`=0` old `Sleep(1)`) wakes offscreen PSO waits immediately on completion, and `RSX_SHADER_WORKERS_RACE`
+(default `2`, `=0` unlimited) caps concurrent DXC compiles during live races: cold HSR `>100 ms`
+hitches `19 -> 7` (-63%), `>50 ms` `57 -> 39` (-32%), max `282.6 -> 171.3 ms` (-39%), cold 60 s race
+`59.1 FPS` (`2.6%` late). `rsx_d3d12_backend.c` also adds 4-way O(1) `vp_upload_tex_slot` fast-hit
+(`RSX_TEX_FAST_HIT=0` off), D3D12 draw-loop state-diffing (`RSX_D3D_STATE_DIFF=0` off), range-guarded
+`off_rt_find_in`, and unset-unit `s_srvc` fast path: Rome `present-replay` `50.6% -> 42.5%` (-16%),
+opening 40 s `57.7 -> 58.2 FPS` (`8.1% -> 5.6%` late, `0` `RSX_CMD_CHECK` reports). `gt5p_cull_f970`
+(`b0196FF40` / 2.11 `b017BD780` `0xF970 -> 0xFA78`, `GT5P_NATIVE_F970=0` off; 8-wide AVX2 signed
+transform) and `gt5p_rain_a220` (`b016B5B00` `0xA220 -> RET`, `GT5P_NATIVE_RAIN_VOL=0` off; sphere +
+12-plane weather volume test; `"RET"` target added to `spu_native_patch.py`) are verified bit-exact
+(`scripts/test/native_spu_extra.py`, SSE4.1/FMA/AVX2+FMA): Car list `57.9 -> 58.7 FPS` (`6.6% -> 3.2%`
+late), Rome max `32.3 -> 27.5 ms`, Eiger rain `56.8 -> 58.5-59.3 FPS` (`8.1% -> 2.1-3.8%` late, p99
+`35.6 -> 21.1 ms`). `gt5p_cull_a3c0` (`b0196FF40` / 2.11 `b017BD780` `0xA3C0 -> RET`,
+`GT5P_NATIVE_A3C0=0` off; SSSE3 `palignr`+`pshufb` triangle-strip index decompressor directly in
+big-endian LS order; 500 states bit-exact across 256 KB LS in `native_spu_extra.py`): Car list
+`58.2 -> 59.1 FPS` (`4.0% -> 2.4%` late), Rome late `6.3% -> 5.4%` (`4.95 -> 4.81 cores`). `gt5p_cull_c440`
+(`b0196FF40` / 2.11 `b017BD780` `0xC440 -> RET`, `GT5P_NATIVE_C440=0` off; single-pass SSE4.1/FMA
+RSX `CMP` 10_11_11 normal packer bypassing `0xC5E0`; 300 states bit-exact across 256 KB LS in
+`native_spu_extra.py`): Car list `59.1 -> 59.4 FPS` (`2.4% -> 1.8%` late, top 4 lanes `-4.5%` each,
+`5.38 -> 5.23 cores`), Rome `57.9 -> 58.4 FPS` (`6.8% -> 5.1%` late, max `46.6 -> 29.3 ms`). On
+refreshed 4-route PGO `c1ff88396753`: HSR `59.8 FPS` (`0.5%` late, p99 `19.2 ms`, `4.71 cores`),
+Eiger heavy rain `58.8 FPS` (`4.3%` late, p99 `23.0 ms`, `5.20 cores`). See progress-gt5.md.
+
+**DXC fallback VS & `VS_PENDING` PSO fix (0.1.16, runtime).** `#70`/`#71` logged `[FP] PSO FAIL (0x80070057) vs_idx=-1`:
+when `RSX_SHADER_INTERP_VP=1` drew a `VS_PENDING` draw, `vp_get_fp_pso()` fell back to `s_d3d.vp_vs_blob` (compiled with
+FXC `vs_5_0`) and paired it with a DXC `ps_6_0` pixel shader, which D3D12 rejects with `E_INVALIDARG`. `vp_get_fp_pso()`
+now populates `vp_ps_hold` and skips PSO creation for `VS_PENDING` when `vp_interp_cfg()` is active
+(`RSX_VP_PENDING_NO_PSO=0` old), and `compile_vp()` compiles `s_d3d.vp_vs_blob` through `d3d_compile_cached` so any
+genuine `vs_idx == -1` fallback matches the active compiler (`RSX_VP_FALLBACK_DXC=0` old). Test:
+`scripts/test/vp_fallback_pso.py` (WARP). See progress-gt5.md.
+
+**v0.2.1 renderer fixes (`fix/v0.2.1`, 2026-11-24, runtime).** `#76` (cockpit/rear-of-car
+overdraw): `vp_get_fp_pso` and `interp_get_pso` left `DepthClipEnable = FALSE` (`pd = {0}`),
+clamping behind-camera geometry to `z = 0.0`. `rsx_commands` now decodes `NV4097_SET_ZMIN_MAX_CONTROL`
+(`0x1D78`, reset default `1`), `rsx_cull_key` bit 3 encodes depth-clip-disable (`0 = TRUE`,
+matching `rsx_interp_classes`; `RSX_DEPTH_CLIP=0` rollback), and both PSO builders set
+`DepthClipEnable`. `#70` (8192 pipeline cache flush in long dealership sessions): raised
+`VP_FP_CACHE` `8192 -> 32768`, `FPI_N` `16384 -> 65536`, `s_fp_orphan` `512 -> 2048`. `#74`
+(long-session TLS window exhaustion at 248 thread creates): `ppu_loader.cpp` now recycles
+exited threads' TLS blocks via `ppu_tls_free_block` / `g_ppu_tls_free_fn` (`PS3_TLS_REUSE=0`
+rollback; `scripts/test/tls_reuse.py`, 1,200 churn cycles).
+PGTA-inspired additions: SSE2 `spu_shlqbii`/`spu_rotqbii` (`-DSPU_QBI_SCALAR` rollback;
+`spu_helpers_sse.py`, 9M bit-exact), `s_stack_reset_hint[1024]`, `GCM_FAST_BLIT` (`=0` off),
+`PSO_WARM_MAX` `8192 -> 16384` + `RSX_PSO_RESERVE=4096` (`=0` off), Windows `GetWriteWatch`
+256 KB sub-block texture tracking (`RSX_TEX_WRITE_WATCH=0` off, `RSX_TEX_WW_CHECK=1` verify;
+Rome checksums `-90%`, `present-replay` `50.3% -> 44.0%` core, Car List checksums `-78%`,
+p99 `23.5 -> 22.5 ms`, `0` misses), `GCM_FIFO_BURST` (`=0` off; Rome `present` `55.3% -> 52.0%`
+core, walk `-0.50 ms/frame`) + 4-lane `tex_dense_sum`, and RPCS3 patch support (`ppu_lifter.py --insn-patches`, `scripts/rpcs3_patches.py`, `config/patches_bcus98114_{v104,v211}.json`, `src/gt5p_patches.{h,cpp}`) with live F1 `GAME` menu **Looser Chase Camera** (#77) on both 01.04 (`0x019AFE70`) and 02.11 (`0x017FDF40`) (`GT5_PATCH_LOOSER_CHASE_CAMERA`, `GT5_CHASE_CAM_DAMPER`, `GT5_CHASE_CAM_MAX_ANGLE`; default off; `scripts/test/rpcs3_patches.py`) and live `Unlock FPS` on 2.11 (`GT5_PATCH_UNLOCK_FPS`, `#53`). Also fixed `#79` (`GT5P_OPTIONS_WORD=0x017E0D1C=1` clears 2.11 Options hint when returning to GT Mode) and `#80` (Moza R3 wheel: 256-button `WheelRaw`, up to 4 aux USB shifters/button boxes on buttons `129..256`, `s_has_hat`-gated POV so button D-pads work, and `D-Pad Up/Down/Left/Right` in `F1 > WHEEL MAP`). See progress-gt5.md.
+
+**Steering wheels (`release/v0.2.0`).** GT5 drives Logitech wheels
+with its own `cellUsbd` driver; the runtime now shows it an emulated G27
+whatever wheel the PC has (DirectInput, force feedback), plus `cellPadLdd*`.
+Adapted from gt5-recomp (MIT, `third_party_notices/gt5-recomp-LICENSE.txt`).
+F1 `WHEEL` (presets + live FFB + G HUB/PS4-mode hints), `WHEEL MAP`
+(interactive live axis/button binding + telemetry), and `[wheel]` TOML;
+`PS3_WHEEL=off` turns it off. No game addresses. Offline unit test
+(`scripts/test/wheel_g27.py`), virtual-wheel race, and live Logitech G29
+(`046D:C24F`) hardware check all pass. See [docs/wheels.md](docs/wheels.md).
 
 **Game sound fixed (2026-11-14).** Menus and races were silent: the DSP
 image `j9804ABA8` produced NaN PCM from two SPU arithmetic differences (0 x
@@ -241,6 +388,58 @@ now. The stall dump lists the last 32 GET_REPORTs (`GCM_REPORT_RING=0` off)
 for the open #36 garage freeze. The runtime patch has a second, appended
 section for these; see progress-gt5.md. Tests: `lwmutex_host_state.py`,
 `gcm_report_memory.py`.
+
+**Script errors end the game (#55/#56/#57/#64, open).** GT5's script engine
+reports errors through one routine (`script_error_func`: 2.11 `0x009C3048`,
+01.04 `0x00B3FE1C`) that throws a guest C++ exception. `scripts/script_error_patch.py`
+(required post-lift step) logs `[script-error] <kind> <file>:<line>: <message>`
+and, after the routine composes it (`script_error_compose_ret`), the script
+frames (`name:line;...`); `GT5P_SCRIPT_ERROR_LOG=0` off. Guest exceptions
+never reached handlers (`__builtin_eh_return` is lifted as a return); now the
+port searches the game's tables and delivers to armed catch sites (`guest_eh`
+in config/targets.json, 2.11 only: the engine's native-call wrapper
+`0x009DA95C`; required post-lift step `scripts/guest_eh_patch.py`,
+`src/gt5p_guest_eh.cpp`, `GT5P_GUEST_EH=0` off). #64 is a save car (Kubelwagen,
+"!" in the garage) whose data is nil: no script catches it and a console's
+search ends in terminate too, so it still exits (cause of the nil open).
+See progress-gt5.md.
+
+**Fragment FACING (#30, 2026-11-21).** The decompiler returned 0 for the
+RSX FACING input; programs that multiply a normal by it (the Ford Mark IV
+body) lost lighting and paint (white instead of red). FACING now reads
+`SV_IsFrontFace` with the sign inverted (the port's front is the reverse of
+the RSX's; the inverse matches RPCS3); the interpreter takes the same sign.
+`RSX_FP_FACING=0` old zero, `=3` uninverted. `RSX_CAP_SMALLTEX=1` dumps a
+captured frame's small textures. See progress-gt5.md.
+
+**Player name (#60, 2026-11-21).** `game.player_name` in gt5p_settings.toml
+(1-16 letters, digits, spaces, `.-_'`; empty = "User") sets `PS3_USER_NAME`,
+which the runtime's current-user name (cellSysutil, cellUserInfo) returns.
+Shown on GT Life; not on the F1 page yet.
+
+**Garage thumbnails (runtime, 2026-11-21).** Were noise: 1:1 blits of a
+GPU-only surface over 64x64 now read back (`RSX_BLIT_READBACK_LARGE=0` off),
+synchronously at the blit by cutting the frame (`RSX_BLIT_READBACK_SYNC=0`:
+next frame), and a target that grows keeps its picture (`RSX_RT_GROW_KEEP=0`
+old). Textures over a target bind it before sub-viewport captures
+(`RSX_SUBVP_RT_FIRST=0`). `RSX_BLIT_READBACK_DUMP=<dir>` dumps readbacks.
+See progress-gt5.md.
+
+**Release 0.1.15** (tag `v0.1.15`, commit `bc00f98`): the #30 FACING fix;
+built like 0.1.14. VirusTotal: Microsoft `Wacatac.B!ml` on `tourline5.exe`
+only (local Defender clean; published with a note, see progress-gt5.md).
+
+**Release 0.1.14** (tag `v0.1.14`, commit `6feca45`): garage thumbnails,
+2.11 guest exception delivery, script frames in the log, player name; built
+like 0.1.13, VirusTotal clean. See progress-gt5.md.
+
+**Release 0.1.13** (tag `v0.1.13`, commit `dc3143e`): 0.1.12 plus the
+script-error log; built like 0.1.12, VirusTotal clean. See progress-gt5.md.
+
+**Release 0.1.12** (tag `v0.1.12`, commit `1c98718`): the 2.11 freeze
+(flag kick), 2.11 race audio, car damage border addressing and the texture
+slot/stale-texture fixes; built like 0.1.11, VirusTotal clean. See
+progress-gt5.md.
 
 **Release 0.1.11** (tag `v0.1.11`, commit `6d66309`): the sync slot fix,
 F2 game speed and the PGO antivirus layout; packaged with the VirusTotal
@@ -1997,6 +2196,8 @@ Run Python through the repo's virtual environment: `.venv\Scripts\python`.
 | `scripts/setjmp_patch.py` | Post-lift patch, required after every lift |
 | `scripts/spin_patch.py` | Post-lift patch, required after every lift: guest spin waits on SPU progress yield (`spin_waits` in `config/targets.json`) |
 | `scripts/ui_mask_patch.py` | Post-lift patch, required after every lift: text fade/clip masks centred in ultrawide (`ui_mask_sites`, Prologue's `ui_label_mask_func`; `GT5P_UI_MASK_FIX=0` off) |
+| `scripts/script_error_patch.py` | Post-lift patch, required after every lift: logs the game's script errors at `script_error_func` before they throw (`GT5P_SCRIPT_ERROR_LOG=0` off) |
+| `scripts/guest_eh_patch.py` | Post-lift patch, required for targets with `guest_eh` (2.11): delivers guest C++ exceptions to armed catch sites (`src/gt5p_guest_eh.cpp`); `GT5P_GUEST_EH=0` off |
 | `scripts/spu_native_patch.py` | Post-SPU-lift patch, required: hooks native replacements (`src/gt5p_spu_native.c`) into lifted SPU blocks (`spu_native_hooks`); `GT5P_SPU_NATIVE=0` off, `=2` check |
 | `scripts/spu_regpromo.py` | Post-SPU-lift patch, after `spu_native_patch.py`: copies of hot lifted SPU functions with registers in locals (`spu_regpromo`); `GT5P_SPU_REGPROMO=0` off (default), `1` on, `2` check, `3` A/B; measured slower (Phase 44) |
 | `scripts/spu_region.py` | Post-SPU-lift patch, required, after `spu_regpromo.py`: merges listed loops of lifted SPU functions into one with registers as `__m128i` locals (`spu_regions`); `GT5P_SPU_REGION=1` default, `0` off, `3` A/B; Eiger frames 7.5-8% shorter (Phase 45) |

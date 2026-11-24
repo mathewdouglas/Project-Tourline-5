@@ -1,0 +1,421 @@
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index 2144005..bc4c5f8 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -999,8 +999,15 @@ static void nv3089_blit(void)
+     if (s_nv3089.src_dma != 0xFEED0001u && (s_nv3089.fmt & 0xFFu) == 3u &&
+         s_nv3089.ds_dx == 0x100000u && s_nv3089.dt_dy == 0x100000u) {
+         extern void rsx_d3d12_note_blit_read(u32 off, u32 pitch, u32 w, u32 h);
++        extern void rsx_d3d12_note_blit_copy(u32 off, u32 pitch, u32 w, u32 h, u32 dst_ea, u32 dst_pitch);
+         const u32 u0 = (s_nv3089.in_uv & 0xFFFF) >> 4, v0 = (s_nv3089.in_uv >> 16) >> 4;
+-        rsx_d3d12_note_blit_read(s_nv3089.in_off + v0 * in_pitch + u0 * 4u, in_pitch, out_w, out_h);
++        const u32 src_off = s_nv3089.in_off + v0 * in_pitch + u0 * 4u;
++        if (out_w <= 64 && out_h <= 64)
++            rsx_d3d12_note_blit_read(src_off, in_pitch, out_w, out_h);
++        else   /* larger (GT5 2.11's garage thumbnails): written into the destination too */
++            rsx_d3d12_note_blit_copy(src_off, in_pitch, out_w, out_h,
++                cellGcmResolveLocated(s_gcm2d.dst_dma != 0xFEED0001u, s_gcm2d.dst_offset +
++                    (s_nv3089.out_pt >> 16) * dst_pitch + (s_nv3089.out_pt & 0xFFFF) * 4u), dst_pitch);
+     }
+     /* NV3089_GATE=<file>: log every blit's geometry while <file> exists, so a
+      * capture covers the scene of interest instead of the first N since boot. */
+diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
+index f4fb85b..b72375b 100644
+--- a/libs/video/rsx_d3d12_backend.c
++++ b/libs/video/rsx_d3d12_backend.c
+@@ -274,6 +274,8 @@ typedef struct {
+     u8    uw_edge;      /* ultrawide: edges stretched to the screen's (vp_record_cb), scissor widened */
+     u16   rb_x, rb_y, rb_w, rb_h;   /* its rectangle (the scissor fields get rewritten) */
+     u32   rb_ea;
++    u8    rb_large;     /* a blit over 64x64 (rsx_d3d12_note_blit_copy): its own buffer */
++    u32   rb_dst_ea, rb_dst_pitch;   /* and the blit's destination, written too */
+     u32   vp_hash;      /* vertex-interpreter program key; 0 when that switch is off */
+ } D3D12DrawRecord;
+ 
+@@ -12117,6 +12119,7 @@ static void off_rt_make_ms_impl(OffRT* r, int slot)
+ /* Ensure an RT resource exists for this surface; (re)creates the RTV at
+  * rt_rtv_heap[i] and the SRV at srv_heap[RT_SRV_BASE+i]. */
+ static int off_rt_get_impl(u32 off, u32 w, u32 h, u32 rsx_fmt, u32 pitch);
++static void off_rt_transition(int slot, D3D12_RESOURCE_STATES to);
+ /* RSX_HITCH_LOG: what the render-target pre-pass spent, for [hitch-setup]: calls by outcome
+  * (0 existing, 1 new in a free slot, 2 eviction, 3 recreation) and their ms, and inside them the
+  * GPU drains, eviction write-backs, initial contents from guest memory and MSAA work. */
+@@ -12263,6 +12266,8 @@ static int off_rt_get_impl(u32 off, u32 w, u32 h, u32 rsx_fmt, u32 pitch)
+     if (!h) h = s_gh;
+     { const u32 gw0 = w; w = uw_host_w(gw0, h); h = uw_host_h(gw0, h); }
+     DXGI_FORMAT want_fmt = rsx_surface_dxgi(rsx_fmt);
++    /* A target that grows keeps what it held (RSX_RT_GROW_KEEP, below). */
++    ID3D12Resource* keep = NULL; u32 keep_w = 0, keep_h = 0;
+     /* RT_FORCE_RGBA8=1: allocate every offscreen target as R8G8B8A8 rather than
+      * its native format. A title whose final composite reads a half-float
+      * surface cannot be shown with a plain CopyTextureRegion, and giving it an
+@@ -12298,7 +12303,22 @@ static int off_rt_get_impl(u32 off, u32 w, u32 h, u32 rsx_fmt, u32 pitch)
+                     slot, off, r->w, r->h, r->dxgi, w, h, (u32)want_fmt); } }
+         s_rt_churn++; s_rtp_kind = 3;
+         { const double _w = hitch_on() ? perf_now() : 0; wait_for_gpu(); if (_w > 0) s_rtp_wait_ms += (perf_now() - _w) * 1000.; }
+-        off_rt_defer_release(r->res); r->res = NULL;   /* dims/format changed */
++        /* Growing used to throw the contents away: the new resource is
++         * filled from guest memory, which never holds what was drawn on the
++         * GPU. Gran Turismo 5 2.11 draws a garage thumbnail's car scene into
++         * 0x06C63600 (768x432) one frame and, the next, widens that surface
++         * to 1920 for the composite before reading the scene: every small
++         * thumbnail was old video memory. Copy the old picture into the new
++         * resource (same format only; a multisampled twin is resolved first).
++         * RSX_RT_GROW_KEEP=0: as before. */
++        { static int gk = -1;
++          if (gk < 0) { const char* e = getenv("RSX_RT_GROW_KEEP"); gk = !(e && e[0] == '0'); }
++          if (gk && r->res && r->dxgi == (u32)want_fmt && w >= r->w && h >= r->h) {
++              off_rt_transition(slot, D3D12_RESOURCE_STATE_COPY_SOURCE);
++              keep = r->res; keep_w = r->w; keep_h = r->h; r->res = NULL;
++          } }
++        if (r->res) off_rt_defer_release(r->res);
++        r->res = NULL;   /* dims/format changed */
+         off_rt_defer_release(r->ms);  r->ms  = NULL; r->ms_dirty = 0;
+         off_rt_defer_release(r->self); r->self = NULL;
+         off_rt_defer_release(r->up);  r->up  = NULL;
+@@ -12349,8 +12369,10 @@ static int off_rt_get_impl(u32 off, u32 w, u32 h, u32 rsx_fmt, u32 pitch)
+     if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(
+             s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE, &td,
+             D3D12_RESOURCE_STATE_COPY_DEST, &cv,
+-            &IID_ID3D12Resource, (void**)&r->res)))
++            &IID_ID3D12Resource, (void**)&r->res))) {
++        if (keep) off_rt_defer_release(keep);
+         return -1;
++    }
+     r->off = off; r->w = w; r->h = h; r->dxgi = (u32)want_fmt;
+     r->pitch = pitch; r->aa = (rsx_fmt >> 12) & 0xFu;
+     r->st = D3D12_RESOURCE_STATE_COPY_DEST;
+@@ -12457,6 +12479,17 @@ static int off_rt_get_impl(u32 off, u32 w, u32 h, u32 rsx_fmt, u32 pitch)
+                 }
+             }
+         }
++        if (keep) {   /* RSX_RT_GROW_KEEP: over the guest fill, still COPY_DEST */
++            D3D12_TEXTURE_COPY_LOCATION kd = {0}, ks = {0};
++            kd.pResource = r->res; kd.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++            ks.pResource = keep;   ks.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++            D3D12_BOX kb = { 0, 0, 0, keep_w, keep_h, 1 };
++            DRED_MARK_COPY(s_d3d.cmd_list);
++            s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &kd, 0, 0, 0, &ks, &kb);
++            off_rt_defer_release(keep); keep = NULL;
++            { static int _n; if (_n < 8 && ++_n)
++                fprintf(stderr, "[RT] slot %d off=0x%X grew to %ux%u: kept its %ux%u picture%c", slot, off, w, h, keep_w, keep_h, 10); }
++        }
+         if (_pop0 > 0) s_rtp_pop_ms += (perf_now() - _pop0) * 1000.;
+         {
+             D3D12_RESOURCE_BARRIER b = {0};
+@@ -13521,9 +13554,237 @@ void rsx_d3d12_note_blit_read(u32 off, u32 pitch, u32 w, u32 h)
+     }
+ }
+ 
++/* Large readbacks (RSX_BLIT_READBACK_LARGE, default on): 1:1 blits of a
++ * GPU-only surface bigger than the 64x64 slots above. Gran Turismo 5 2.11
++ * renders each garage thumbnail into a local surface and blits it (192x54
++ * and 384x108, A8R8G8B8) into main memory, where the PPU encodes the PNG; the
++ * blit copied stale bytes, so every car's picture was the same noise. Each
++ * gets its own readback buffer, copied at its place in the frame, and is
++ * written into the blit's destination and the source surface's guest memory
++ * when the next frame starts (after the blit's own stale copy). Note runs on
++ * the recording thread; replay and flush on the replay thread. */
++static void render_frame(void);
++static void rt_wait_idle(void);
++static void lrb_flush(void);
++static HANDLE s_rt_thr;
++#define LRB_MAX 8
++#define LRB_MAX_SIDE 2048u
++static struct {
++    ID3D12Resource* buf; u64 cap;
++    u32 w, h, ea, pitch, dst_ea, dst_pitch, gx, gy, hx, hy, bpp, row;
++    float kx, ky;
++} s_lrb[LRB_MAX];
++static int s_lrb_n;
++
++static int lrb_on(void)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("RSX_BLIT_READBACK_LARGE"); on = !(e && e[0] == '0'); }
++    return on && blit_rb_on();
++}
++
++void rsx_d3d12_note_blit_copy(u32 off, u32 pitch, u32 w, u32 h, u32 dst_ea, u32 dst_pitch)
++{
++    extern u32 cellGcmResolveLocated(int local, u32 offset);
++    if (!lrb_on() || !w || !h || w > LRB_MAX_SIDE || h > LRB_MAX_SIDE || !pitch || (pitch & 3u) ||
++        !dst_ea || dst_pitch < w * 4u)
++        return;
++    if (FR->draw_count >= s_draw_cap) return;
++    /* The surface the last large blit read: a frame cut by the sync below
++     * leaves no draw into it for the blits right after (GT5 reads each
++     * thumbnail as two halves, one blit each). */
++    static D3D12DrawRecord s_lrb_last;
++    static int s_lrb_last_ok;
++    for (int d = (int)FR->draw_count - 1; d >= -1; d--) {
++        const D3D12DrawRecord* sd = d >= 0 ? &FR->draws[d] : (s_lrb_last_ok ? &s_lrb_last : NULL);
++        if (!sd) break;
++        if (sd->is_clear || !sd->is_vp || !sd->rt_off || sd->rt_pitch != pitch) continue;
++        if (off < sd->rt_off || off - sd->rt_off >= pitch * (sd->rt_h ? sd->rt_h : 1u)) continue;
++        if (d >= 0) { s_lrb_last = *sd; s_lrb_last_ok = 1; }
++        const u32 dlt = off - sd->rt_off, x = (dlt % pitch) / 4u, y = dlt / pitch;
++        D3D12DrawRecord* dr = &FR->draws[FR->draw_count++];
++        memset(dr, 0, sizeof(*dr));
++        dr->is_vp = 1; dr->is_clear = 1; dr->readback = 1; dr->rb_large = 1; dr->tex_slot = -1;
++        dr->rt_off = sd->rt_off; dr->rt_pitch = pitch; dr->rt_w = sd->rt_w; dr->rt_h = sd->rt_h;
++        dr->rb_x = (u16)x; dr->rb_y = (u16)y; dr->rb_w = (u16)w; dr->rb_h = (u16)h;
++        dr->rb_ea = cellGcmResolveLocated(1, off);
++        dr->rb_dst_ea = dst_ea; dr->rb_dst_pitch = dst_pitch;
++        /* RSX_BLIT_READBACK_SRC=1 (diagnostic, with _DUMP): also read back what the
++         * source draw's unit 0 sampled, when that is a target (written over its
++         * own guest memory). */
++        { static int srcdbg = -1;
++          if (srcdbg < 0) { const char* e = getenv("RSX_BLIT_READBACK_SRC"); srcdbg = e ? atoi(e) : 0; }
++          const D3D12DrawRecord* sd0 = sd; int from = d;
++          if (d < 0) srcdbg = srcdbg > 0 ? srcdbg : 0, from = -1;
++          for (int lvl = 0; lvl < srcdbg; lvl++) {
++          const u32 traw = sd->tex[0].raw, tw = sd->tex[0].w, th = sd->tex[0].h;
++          if (sd->tex[0].set && sd->tex[0].local && tw && th && tw <= LRB_MAX_SIDE && th <= LRB_MAX_SIDE &&
++              FR->draw_count < s_draw_cap) {
++              int ts = -1;
++              for (int q = from; q >= 0 && ts < 0; q--)
++                  if (FR->draws[q].rt_off == traw && FR->draws[q].is_vp && !FR->draws[q].is_clear) ts = q;
++              if (ts >= 0) {
++                  const D3D12DrawRecord* td = &FR->draws[ts];
++                  D3D12DrawRecord* x2 = &FR->draws[FR->draw_count++];
++                  memset(x2, 0, sizeof(*x2));
++                  x2->is_vp = 1; x2->is_clear = 1; x2->readback = 1; x2->rb_large = 1; x2->tex_slot = -1;
++                  x2->rt_off = traw; x2->rt_pitch = td->rt_pitch; x2->rt_w = td->rt_w; x2->rt_h = td->rt_h;
++                  x2->rb_x = 0; x2->rb_y = 0; x2->rb_w = (u16)tw; x2->rb_h = (u16)th;
++                  x2->rb_ea = cellGcmResolveLocated(1, traw);
++                  x2->rb_dst_ea = x2->rb_ea; x2->rb_dst_pitch = td->rt_pitch;
++                  fprintf(stderr, "[blit-rb] src readback %d: draw %d into 0x%X (rt %ux%u fp 0x%08X) %ux%u%c",
++                          lvl, ts, traw, td->rt_w, td->rt_h, td->fp_addr, tw, th, 10);
++                  sd = td; from = ts - 1;
++              } else { fprintf(stderr, "[blit-rb] src readback %d: no draw this frame into 0x%X%c", lvl, traw, 10); break; }
++          } else break;
++          }
++          sd = sd0; }
++        { static int _n; if (getenv("RSX_BLIT_READBACK_DBG") && (_n < 24 && ++_n))
++            fprintf(stderr, "[blit-rb] large note: source draw %d (rt %ux%u) rect %u,%u %ux%u -> 0x%08X/%u%c",
++                    d, sd->rt_w, sd->rt_h, x, y, w, h, dst_ea, dst_pitch, 10);
++          /* RSX_BLIT_READBACK_DBG=2: the draws into this surface before it. */
++          { const char* dbg2 = getenv("RSX_BLIT_READBACK_DBG"); if (dbg2 && dbg2[0] == '2')
++              for (int q = d, shown = 0; q >= 0 && shown < 12; q--) {
++                  const D3D12DrawRecord* p = &FR->draws[q];
++                  if (p->rt_off != sd->rt_off) continue;
++                  shown++;
++                  fprintf(stderr, "[blit-rb]   draw %d clear=%d fp 0x%08X vp %u,%u %ux%u n %u t0 raw 0x%08X %ux%u fmt 0x%X loc %d rt %d | t1 raw 0x%08X rt %d%c",
++                          q, p->is_clear, p->fp_addr, p->vp_x, p->vp_y, p->vp_w, p->vp_h, p->vertex_count,
++                          p->tex[0].raw, p->tex[0].w, p->tex[0].h, p->tex[0].fmt, p->tex[0].local, p->tex_rt[0],
++                          p->tex[1].raw, p->tex_rt[1], 10);
++              } } }
++        /* The guest reads the destination as soon as the GPU passes a label
++         * after the blit, which this walker writes long before the next frame
++         * starts: replay what is recorded now (an offscreen batch, no present),
++         * wait for it and write the pixels before going on; the flush writes the
++         * source surface too, so the blit's own copy below carries them.
++         * RSX_BLIT_READBACK_SYNC=0: at the next frame's start, as before. */
++        { static int sync = -1;
++          if (sync < 0) { const char* e = getenv("RSX_BLIT_READBACK_SYNC"); sync = !(e && e[0] == '0'); }
++          if (sync && s_d3d.initialized && !s_device_lost) {
++              FR->present = 0;
++              render_frame();
++              FR->present = 1;
++              if (s_rt_thr) rt_wait_idle();
++              wait_for_gpu();
++              lrb_flush();
++          } }
++        return;
++    }
++    { static int _n; if (getenv("RSX_BLIT_READBACK_DBG") && (_n < 24 && ++_n))
++        fprintf(stderr, "[blit-rb] large: no draw this frame into 0x%X (pitch %u)%c", off, pitch, 10); }
++}
++
++static void lrb_replay(const D3D12DrawRecord* dr, int cur_rt)
++{
++    /* Several targets can share an offset at different sizes: take the one of
++     * the guest size the source draws had, then the bound one, then any. */
++    int slot = -1;
++    for (int i = 0; i < MAX_OFF_RTS && slot < 0; i++)
++        if (s_d3d.off_rt[i].res && s_d3d.off_rt[i].off == dr->rt_off &&
++            rt_gw(i) == dr->rt_w && rt_gh(i) == dr->rt_h) slot = i;
++    if (slot < 0) slot = (cur_rt >= 0 && s_d3d.off_rt[cur_rt].off == dr->rt_off) ? cur_rt : off_rt_find(dr->rt_off);
++    { static int _n; if (getenv("RSX_BLIT_READBACK_DBG") && (_n < 24 && ++_n))
++        fprintf(stderr, "[blit-rb] large replay: slot %d (%ux%u, guest %ux%u) for guest %ux%u, cur_rt %d, first match %d%c",
++                slot, slot >= 0 ? s_d3d.off_rt[slot].w : 0, slot >= 0 ? s_d3d.off_rt[slot].h : 0,
++                slot >= 0 ? rt_gw(slot) : 0, slot >= 0 ? rt_gh(slot) : 0, dr->rt_w, dr->rt_h, cur_rt,
++                off_rt_find(dr->rt_off), 10); }
++    if (slot < 0 || s_lrb_n >= LRB_MAX) return;
++    OffRT* r = &s_d3d.off_rt[slot];
++    const u32 rbpp = r->dxgi == (u32)DXGI_FORMAT_R16G16B16A16_UNORM ? 8u : 4u;
++    if (!dxgi_is_rgba8_class(r->dxgi)) return;
++    const u32 gwid = rt_gw(slot), ghei = rt_gh(slot);
++    const float kx = gwid ? (float)r->w / (float)gwid : 1.0f;
++    const float ky = ghei ? (float)r->h / (float)ghei : 1.0f;
++    const u32 hx = (u32)(dr->rb_x * kx), hw = (u32)ceilf((dr->rb_x + dr->rb_w) * kx) - hx;
++    const u32 hy = (u32)(dr->rb_y * ky), hh = (u32)ceilf((dr->rb_y + dr->rb_h) * ky) - hy;
++    if (!hw || !hh || hx + hw > r->w || hy + hh > r->h) return;
++    const u32 row = (hw * rbpp + 255u) & ~255u;
++    const u64 need = (u64)row * hh;
++    const int k = s_lrb_n;
++    if (!s_lrb[k].buf || s_lrb[k].cap < need) {
++        if (s_lrb[k].buf) { s_lrb[k].buf->lpVtbl->Release(s_lrb[k].buf); s_lrb[k].buf = NULL; }
++        D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_READBACK;
++        D3D12_RESOURCE_DESC rd = {0};
++        rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
++        rd.Width = need; rd.Height = 1; rd.DepthOrArraySize = 1;
++        rd.MipLevels = 1; rd.SampleDesc.Count = 1; rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
++        if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE,
++                &rd, D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&s_lrb[k].buf))) {
++            s_lrb[k].buf = NULL; s_lrb[k].cap = 0; return;
++        }
++        s_lrb[k].cap = need;
++    }
++    off_rt_transition(slot, D3D12_RESOURCE_STATE_COPY_SOURCE);
++    D3D12_TEXTURE_COPY_LOCATION dst = {0}, src = {0};
++    dst.pResource = s_lrb[k].buf; dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
++    dst.PlacedFootprint.Footprint.Format = rbpp == 8 ? DXGI_FORMAT_R16G16B16A16_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
++    dst.PlacedFootprint.Footprint.Width = hw;
++    dst.PlacedFootprint.Footprint.Height = hh;
++    dst.PlacedFootprint.Footprint.Depth = 1;
++    dst.PlacedFootprint.Footprint.RowPitch = row;
++    src.pResource = r->res; src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++    D3D12_BOX box = { hx, hy, 0, hx + hw, hy + hh, 1 };
++    DRED_MARK_COPY(s_d3d.cmd_list);
++    s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list, &dst, 0, 0, 0, &src, &box);
++    if (slot == cur_rt) off_rt_transition(slot, D3D12_RESOURCE_STATE_RENDER_TARGET);
++    s_lrb[k].w = dr->rb_w; s_lrb[k].h = dr->rb_h; s_lrb[k].ea = dr->rb_ea; s_lrb[k].pitch = dr->rt_pitch;
++    s_lrb[k].dst_ea = dr->rb_dst_ea; s_lrb[k].dst_pitch = dr->rb_dst_pitch;
++    s_lrb[k].gx = dr->rb_x; s_lrb[k].gy = dr->rb_y; s_lrb[k].hx = hx; s_lrb[k].hy = hy;
++    s_lrb[k].kx = kx; s_lrb[k].ky = ky; s_lrb[k].bpp = rbpp; s_lrb[k].row = row;
++    s_lrb_n++;
++}
++
++/* Start of the next frame, GPU idle (after wb_flush). */
++static void lrb_flush(void)
++{
++    extern uint8_t* vm_base;
++    if (!s_lrb_n || !vm_base) { s_lrb_n = 0; return; }
++    for (int k = 0; k < s_lrb_n; k++) {
++        void* mp = NULL; D3D12_RANGE rr = {0, (SIZE_T)s_lrb[k].cap};
++        if (FAILED(s_lrb[k].buf->lpVtbl->Map(s_lrb[k].buf, 0, &rr, &mp)) || !mp) continue;
++        const u8* b = (const u8*)mp;
++        for (u32 y = 0; y < s_lrb[k].h; y++) {
++            const u32 hr = (u32)((s_lrb[k].gy + y) * s_lrb[k].ky) - s_lrb[k].hy;
++            for (u32 x = 0; x < s_lrb[k].w; x++) {
++                const u32 hc = (u32)((s_lrb[k].gx + x) * s_lrb[k].kx) - s_lrb[k].hx;
++                u8 g[4];
++                if (s_lrb[k].bpp == 8) {
++                    const uint16_t* q = (const uint16_t*)(b + (u64)hr * s_lrb[k].row + hc * 8u);
++                    g[0] = (u8)((q[3] + 128u) / 257u); g[1] = (u8)((q[0] + 128u) / 257u);
++                    g[2] = (u8)((q[1] + 128u) / 257u); g[3] = (u8)((q[2] + 128u) / 257u);
++                } else {
++                    const u8* q = b + (u64)hr * s_lrb[k].row + hc * 4u;
++                    g[0] = q[3]; g[1] = q[0]; g[2] = q[1]; g[3] = q[2];
++                }
++                memcpy(vm_base + s_lrb[k].dst_ea + y * s_lrb[k].dst_pitch + x * 4u, g, 4);
++                memcpy(vm_base + s_lrb[k].ea + y * s_lrb[k].pitch + x * 4u, g, 4);
++            }
++        }
++        D3D12_RANGE wr = {0, 0};
++        s_lrb[k].buf->lpVtbl->Unmap(s_lrb[k].buf, 0, &wr);
++        /* RSX_BLIT_READBACK_DUMP=<existing dir>: each one as the guest got it (P6, alpha dropped). */
++        { static const char* dir = (const char*)1; static int n;
++          if (dir == (const char*)1) dir = getenv("RSX_BLIT_READBACK_DUMP");
++          if (dir && n < 64) {
++              char path[512]; snprintf(path, sizeof path, "%s/lrb%03d_%ux%u_%08X.ppm", dir, n++, s_lrb[k].w, s_lrb[k].h, s_lrb[k].dst_ea);
++              FILE* f = fopen(path, "wb");
++              if (f) { fprintf(f, "P6 %u %u 255%c", s_lrb[k].w, s_lrb[k].h, 10);
++                  for (u32 y = 0; y < s_lrb[k].h; y++)
++                      for (u32 x = 0; x < s_lrb[k].w; x++) fwrite(vm_base + s_lrb[k].dst_ea + y * s_lrb[k].dst_pitch + x * 4u + 1, 1, 3, f);
++                  fclose(f); } } }
++        { static int _n; if (getenv("RSX_BLIT_READBACK_DBG") && (_n < 24 && ++_n)) {
++            const u8* g = vm_base + s_lrb[k].dst_ea;
++            fprintf(stderr, "[blit-rb] large %ux%u -> 0x%08X: first %02X%02X%02X%02X%c",
++                    s_lrb[k].w, s_lrb[k].h, s_lrb[k].dst_ea, g[0], g[1], g[2], g[3], 10); } }
++    }
++    s_lrb_n = 0;
++}
++
+ /* Replay: the copy for a readback record. */
+ static void rb_replay(const D3D12DrawRecord* dr, int cur_rt)
+ {
++    if (dr->rb_large) { lrb_replay(dr, cur_rt); return; }
+     /* Slots can share an offset at different sizes: take the one the
+      * preceding draws rendered into. */
+     const int slot = (cur_rt >= 0 && s_d3d.off_rt[cur_rt].off == dr->rt_off) ? cur_rt
+@@ -14208,7 +14469,7 @@ void rsx_d3d12_set_present_sync(int interval) { s_psync = interval < 0 ? 0 : int
+  * program code -- it now reads up to a frame later than before.
+  * RSX_PRESENT_THREAD=0: replay on the walker, as before. */
+ static char s_rt_title[256]; static int s_rt_title_new; static SRWLOCK s_rt_title_lock = SRWLOCK_INIT;
+-static HANDLE s_rt_go, s_rt_done, s_rt_thr;
++static HANDLE s_rt_go, s_rt_done;
+ static FrameSet* volatile s_rt_job;
+ static volatile LONG s_rt_busy;
+ static ID3D12Fence* s_rt_fence; static HANDLE s_rt_fev;
+@@ -14660,6 +14921,7 @@ static void render_frame_body_inner(void)
+     off_rt_release_deferred();   /* the list that last referenced them is done */
+     SU_MARK();
+     wb_flush();                  /* last frame's small results into guest memory */
++    lrb_flush();                 /* and the large blit readbacks (RSX_BLIT_READBACK_LARGE) */
+     SU_MARK();
+ 
+     /* Compile the real vertex program once its microcode is captured, and keep
+@@ -15348,6 +15610,13 @@ static void render_frame_body_inner(void)
+         for (int _u = 0; _u < RSX_TEX_UNITS; _u++) {
+             u32 wslot = DRAW_SRV_BASE + _d * RSX_TEX_UNITS + (u32)_u;
+             dr->tex_rt[_u] = -1;
++            /* RT_TEXDBG_FP=<hex fp>: that program's units as the pre-pass sees them (first 64). */
++            { static long fpw = -2; static int _n;
++              if (fpw == -2) { const char* e = getenv("RT_TEXDBG_FP"); fpw = e ? (long)strtoul(e, NULL, 16) : -1; }
++              if (fpw >= 0 && dr->fp_addr == (u32)fpw && dr->tex[_u].set && _n < 64 && ++_n)
++                  fprintf(stderr, "[RTTEX-FP] draw %u unit %d raw 0x%X off 0x%X %ux%u fmt 0x%X local %d depth %d cube %d ctrl1 0x%X find %d subvp %d%c",
++                          (unsigned)_d, _u, dr->tex[_u].raw, dr->tex[_u].off, dr->tex[_u].w, dr->tex[_u].h, dr->tex[_u].fmt,
++                          dr->tex[_u].local, dr->tex[_u].depth, dr->tex[_u].cube, dr->tex[_u].ctrl1, off_rt_find(dr->tex[_u].raw), s_subvp_n, 10); }
+             if (_u == 0) { dr->tex_sc = 0; dr->tex_dz = 0; dr->tex_disp = 0; dr->dz_sel = 0;
+                            dr->tex_mip = 0; dr->tex_self = 0; dr->tex_rtcube = 0; dr->tex_shd = 0; }
+             /* A depth-format unit: the buffer of the depth-only pass that drew
+@@ -15451,6 +15720,20 @@ static void render_frame_body_inner(void)
+                       mh = (float)(rt_gh(rt) * ay);
+                       kind = 1;
+                   }
++                  /* RT_TEXDBG_RAW=<hex offset>: how a texture there resolved (first 4000). */
++                  { static long want = -2; static int _n;
++                    if (want == -2) { const char* e = getenv("RT_TEXDBG_RAW"); want = e ? (long)strtoul(e, NULL, 16) : -1; }
++                    static long fpo = -2;
++                    if (fpo == -2) { const char* e = getenv("RT_TEXDBG_FP"); fpo = e ? (long)strtoul(e, NULL, 16) : -1; }
++                    if (want >= 0 && raw == (u32)want && (fpo < 0 || dr->fp_addr == (u32)fpo) && _n < 4000 && ++_n) {
++                        fprintf(stderr, "[RTTEX-RAW] fp 0x%X unit %d raw 0x%X %ux%u fmt 0x%02X -> kind %d rt %d at %u,%u (target %.0fx%.0f)%c",
++                                dr->fp_addr, _u, raw, dr->tex[_u].w, dr->tex[_u].h, dr->tex[_u].fmt, kind, rt, px, py,
++                                (double)mw, (double)mh, 10);
++                        for (int q = 0; q < MAX_OFF_RTS; q++)
++                            if (s_d3d.off_rt[q].res && s_d3d.off_rt[q].off <= raw + 0x400000u && s_d3d.off_rt[q].off + 0x400000u >= raw)
++                                fprintf(stderr, "[RTTEX-RAW]   target %d off 0x%X %ux%u guest %ux%u pitch %u used %d%c", q,
++                                        s_d3d.off_rt[q].off, s_d3d.off_rt[q].w, s_d3d.off_rt[q].h, rt_gw(q), rt_gh(q),
++                                        s_d3d.off_rt[q].pitch, s_d3d.off_rt[q].used, 10); } }
+                   /* Units 4-15: only a whole single-sample target at the
+                    * texture's own size and address, read by another target. */
+                   if (kind && _u >= 4) {
+@@ -15551,7 +15834,15 @@ static void render_frame_body_inner(void)
+             }
+             /* A sampler whose guest buffer was never written, at the size of a
+              * reduced-viewport pass we captured: that pass IS its producer. */
+-            if (dr->tex[_u].set && !dr->tex[_u].depth && texture_can_alias_rt(dr->tex[_u].local) && dr->tex[_u].off && s_subvp_n) {
++            /* A texture over one of our targets is that target, not a capture of
++             * the display that happens to have its size: Gran Turismo 5 2.11's
++             * garage thumbnail composite samples the 768x108 car render at
++             * 0x03780000 and got an old sub-viewport capture (stripes).
++             * RSX_SUBVP_RT_FIRST=0: captures first, as before. */
++            static int subvp_rt_first = -1;
++            if (subvp_rt_first < 0) { const char* e = getenv("RSX_SUBVP_RT_FIRST"); subvp_rt_first = !(e && e[0] == '0'); }
++            if (dr->tex[_u].set && !dr->tex[_u].depth && texture_can_alias_rt(dr->tex[_u].local) && dr->tex[_u].off && s_subvp_n &&
++                !(subvp_rt_first && off_rt_find(dr->tex[_u].raw) >= 0)) {
+                 int hit = -1;
+                 for (int i = 0; i < s_subvp_n; i++)
+                     if (s_subvp[i].res && s_subvp[i].w == dr->tex[_u].w &&
+@@ -20686,6 +20977,8 @@ u32 rsx_d3d12_backend_failure(void) { return 0; }
+ u64 rsx_d3d12_backend_present_count(void) { return 0; }
+ int rsx_d3d12_backend_present_suspended(void) { return 0; }
+ void rsx_d3d12_note_blit_read(u32 off, u32 pitch, u32 w, u32 h) { (void)off; (void)pitch; (void)w; (void)h; }
++void rsx_d3d12_note_blit_copy(u32 off, u32 pitch, u32 w, u32 h, u32 dst_ea, u32 dst_pitch)
++{ (void)off; (void)pitch; (void)w; (void)h; (void)dst_ea; (void)dst_pitch; }
+ void rsx_tex_set_replacer(rsx_tex_replace_fn fn) { (void)fn; }
+ void rsx_tex_set_replace_sizes(const u32* wh, int n) { (void)wh; (void)n; }
+ void rsx_tex_replace_invalidate(void) {}

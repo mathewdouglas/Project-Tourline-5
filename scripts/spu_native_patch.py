@@ -10,6 +10,11 @@ lifted block to finish so every register ends as the lifted code leaves it.
 GT5P_SPU_NATIVE at run time: 0 off, 1 on (default), 2 check (compute natively,
 compare against what the lifted code then does, change nothing).
 
+A fourth element makes a jump hook: [image, block, int fn(ctx, fused), target]. When the
+function returns nonzero it has done the block's work up to the target block itself, and
+the lifted code goes on there; zero runs the lifted block as it is. `fused` says whether
+this copy of the image computes fma/fms/fnms fused (an FMA copy) or through doubles.
+
 Run after every SPU lift or --chain, with spin_patch.py; generated/ is not in
 the repo.
 
@@ -56,8 +61,12 @@ def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
     hooks = target.TARGET.get("spu_native_hooks", [])
     by_image = {}
-    for image, block, fn in hooks:
+    jumps = {}
+    for hook in hooks:
+        image, block, fn = hook[:3]
         by_image.setdefault(image, []).append((int(block, 16), fn))
+        if len(hook) > 3:   # a jump hook: fn(ctx, fused) returns nonzero to go on at that block (or "RET")
+            jumps[(image, int(block, 16))] = "RET" if hook[3] == "RET" else int(hook[3], 16)
     round_calls = {}
     for image, block, count in target.TARGET.get("spu_audio_round_zero_calls", []):
         round_calls.setdefault(image, []).append((int(block, 16), count))
@@ -79,7 +88,18 @@ def main():
         if not want and not want_round:
             continue
         out, done = [], set()
-        decls = [f"void {fn}(spu_context* ctx); {MARK}" for _, fn in dict.fromkeys(want)]
+        decls = []
+        for block, fn in dict.fromkeys(want):
+            if (image, block) in jumps:
+                decls.append(f"int {fn}(spu_context* ctx, int fused); {MARK}")
+            else:
+                decls.append(f"void {fn}(spu_context* ctx); {MARK}")
+        if any(img == image for img, _ in jumps):
+            # Whether this copy's fma/fms/fnms are fused (the FMA copies) or computed through
+            # doubles (spu_helpers.h SPU__FMAF): a jump hook's native code does the same.
+            decls[:0] = [f"#if defined(__FMA__) || defined(SPU_FMA_LIBM) {MARK}",
+                         f"#define GT5P_HOOK_FUSED 1 {MARK}", f"#else {MARK}",
+                         f"#define GT5P_HOOK_FUSED 0 {MARK}", f"#endif {MARK}"]
         last_inc = max((i for i, l in enumerate(clean[:40]) if l.startswith("#include")), default=-1)
         for i, line in enumerate(clean):
             out.append(line)
@@ -89,7 +109,15 @@ def main():
             for block, fn in want:
                 head = f"void gt5p_{image}_spu_func_{block:08X}(spu_context* ctx) {{"
                 if line == head:
-                    out.append(f"        {fn}(ctx); {MARK}")
+                    to = jumps.get((image, block))
+                    if to is None:
+                        out.append(f"        {fn}(ctx); {MARK}")
+                    elif to == "RET":
+                        out.append(f"        if ({fn}(ctx, GT5P_HOOK_FUSED)) {{ SPU_RET(ctx); }} {MARK}")
+                    else:
+                        tgt = f"gt5p_{image}_spu_func_{to:08X}"
+                        out.append(f"        if ({fn}(ctx, GT5P_HOOK_FUSED)) {{ ctx->pc = 0x{to:X}u; "
+                                   f"__attribute__((musttail)) return {tgt}(ctx); }} {MARK}")
                     done.add(block)
         missing = [hex(b) for b, _ in want if b not in done]
         out, round_missing = wrap_audio_round_calls(out, image, want_round)

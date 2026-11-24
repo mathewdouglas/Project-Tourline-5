@@ -1,0 +1,124 @@
+{
+  "target": "BCUS98114-v211",
+  "patches": [
+    {
+      "addr": "0x00185454",
+      "orig": "0x39600001",
+      "new": "0x39600000",
+      "guard": "g_gt5_patch_unlock_fps",
+      "note": "Unlock FPS"
+    },
+    {
+      "addr": "0x00185460",
+      "orig": "0x39600002",
+      "new": "0x39600000",
+      "guard": "g_gt5_patch_unlock_fps",
+      "note": "Unlock FPS"
+    },
+    {
+      "addr": "0x00423C04",
+      "orig": "0x409E002C",
+      "new": "0x4800002C",
+      "guard": "g_gt5_patch_enable_bloom_and_lens_flares_in_all_cameras",
+      "note": "Enable Bloom and Lens Flares in All Cameras"
+    },
+    {
+      "addr": "0x008EA364",
+      "orig": "0x38630010",
+      "new": "0x4E800020",
+      "guard": "g_gt5_patch_disable_dithering",
+      "note": "Disable Dithering"
+    },
+    {
+      "addr": "0x0004F53C",
+      "orig": "0x893E0002",
+      "new": "0x39200000",
+      "guard": "g_gt5_patch_analogue_dials_in_all_cameras",
+      "note": "Analogue Dials in All Cameras"
+    },
+    {
+      "addr": "0x0004F588",
+      "orig": "0x8BBE0002",
+      "new": "0x3BA00000",
+      "guard": "g_gt5_patch_analogue_dials_in_all_cameras",
+      "note": "Analogue Dials in All Cameras"
+    },
+    {
+      "addr": "0x00486060",
+      "orig": "0x901C0000",
+      "new": "0x60000000",
+      "guard": "g_gt5_patch_chase_camera_car5_fov_and_pitch",
+      "note": "Chase Camera - CAR5 FOV and Pitch"
+    },
+    {
+      "addr": "0x004870F0",
+      "orig": "0x38C00005",
+      "new": "0x38C00025",
+      "guard": "g_gt5_patch_chase_camera_car5_fov_and_pitch",
+      "note": "Chase Camera - CAR5 FOV and Pitch"
+    },
+    {
+      "addr": "0x008B101C",
+      "orig": "0x38000005",
+      "new": "0x38000003",
+      "guard": "g_gt5_patch_use_2x_msaa_in_720p_mode",
+      "note": "Use 2x MSAA in 720p Mode"
+    },
+    {
+      "addr": "0x00482FDC",
+      "orig": "0x38000001",
+      "new": "0x38000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x00482FF4",
+      "orig": "0x98040321",
+      "new": "0x60000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x00483D74",
+      "orig": "0xD1A90004",
+      "new": "0x60000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x00483D8C",
+      "orig": "0xD1AA0004",
+      "new": "0x60000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x004846CC",
+      "orig": "0x7C2B01CE",
+      "new": "0x60000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x004846D8",
+      "orig": "0x7DAB01CE",
+      "new": "0x60000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x00488DF8",
+      "orig": "0x38000001",
+      "new": "0x38000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x00488E00",
+      "orig": "0x98040320",
+      "new": "0x60000000",
+      "guard": "g_gt5_patch_looser_chase_camera",
+      "note": "Looser Chase Camera"
+    }
+  ]
+}

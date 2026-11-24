@@ -3,16 +3,149 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.2.1] - 2026-11-24
+
+Bug-fix, wheel-compatibility, game-patch, and RSX/SPU performance release.
+
+### Added
+- **RPCS3 game-patch support & live Looser Chase Camera (#77):**
+  - Added `ppu_lifter.py --insn-patches` runtime-guarded instruction patching (zero overhead when off; default vanilla) and `scripts/rpcs3_patches.py` `patch.yml` converter.
+  - Added live **Looser chase camera**, **Chase cam damper** (`30..300`, default `90`), and **Chase cam max angle** (`15..80`, default `35`) controls in **F1 > GAME** (and `[game]` in `gt5p_settings.toml` / `GT5_PATCH_LOOSER_CHASE_CAMERA`) for both **01.04** and **02.11**.
+- **Live Unlock FPS toggle for GT5 2.11 (#53):** Exposed the `BCUS98114-v211` RPCS3 `Unlock FPS` patch in **F1 > GAME** (`unlock_fps` / `GT5_PATCH_UNLOCK_FPS`, off by default).
 
 ### Fixed
+- **Cockpit / close-camera near-plane clipping (#76):** Enabled D3D12 `DepthClipEnable` for guest pipelines (honoring RSX `NV4097_SET_ZMIN_MAX_CONTROL` `0x1D78`, default near/far clipping ON; `RSX_DEPTH_CLIP=0` restores the old clamped behaviour). Previously `DepthClipEnable` was zero-initialized to `FALSE`, causing geometry behind the cockpit camera to depth-clamp to `z = 0.0` and draw over the interior.
+- **Long-session PPU TLS exhaustion (#74):** Recycled exited threads' TLS blocks via a free list (`ppu_tls_free_block`, rollback `PS3_TLS_REUSE=0`) so long sessions with thread churn no longer fill the 248-slot TLS window and fall back to sharing the main thread's TLS block.
+- **Long-session pipeline cache overflow (#70):** Raised the resident guest pipeline cache from `8192` to `32768` entries (`FPI_N` `65536`, orphan buffer `2048`) so long dealership/garage sessions no longer flush the entire pipeline cache mid-session.
+- **Moza R3 wheel & USB sequential shifter support (#80):** Expanded wheel capture/mapping from 32 to **256 buttons** (`1..128` primary wheel, `129..256` up to 4 auxiliary USB DirectInput shifters/handbrakes/button boxes), gated POV hat decoding on `s_has_hat` so button-based wheel D-pads work, and added **D-Pad Up / Down / Left / Right** rows to **F1 > WHEEL MAP**.
+- **GT5 2.11 "PC Settings" hint stuck after leaving Options (#79):** Added `options_word` (`GT5P_OPTIONS_WORD=0x017E0D1C=1`) so the Options hint clears when returning to GT Mode as well as the Top Menu (without affecting F1 race pause).
+
+### Changed / Performance
+- **Windows `GetWriteWatch` 256 KB sub-block texture tracking (`RSX_TEX_WRITE_WATCH=0` rollback):** Skips per-frame checksums on static textures — Rome texture checksums `-90%`, `present-replay` CPU `50.3% -> 44.0%` core (`-12.6%`); Car List checksums `-78%`, p99 `23.5 -> 22.5 ms`.
+- **FIFO multi-header state burst (`GCM_FIFO_BURST=0` rollback) & 4-lane `tex_dense_sum`:** Cuts Rome `present` FIFO walker CPU `55.3% -> 52.0%` core (`-0.50 ms/frame`).
+- **Additional runtime fast paths:** SSE2 `spu_shlqbii`/`spu_rotqbii` (`-DSPU_QBI_SCALAR` rollback), O(1) SPU stack-reset hint, row-gathered NV3089 blit (`GCM_FAST_BLIT=0` rollback), and `PSO_WARM_MAX` `8192 -> 16384` with `RSX_PSO_RESERVE=4096` for live draws.
+
+## [0.2.0] - 2026-11-24
+
+Two headline additions: **steering wheel support with force feedback** and a major **near-locked 60 FPS & cold-cache performance overhaul**.
+
+### Added
+- **Steering wheels with force feedback (verified on Logitech G29).** GT5
+  has its own Logitech wheel driver; the port now shows it a Logitech G27
+  whatever wheel is plugged in (Logitech, Thrustmaster, Fanatec and others
+  through DirectInput), with the game's own force feedback. **F1 > WHEEL**
+  sets wheel presets (`Auto`, `G29/G923 PS`, `G920/G923 Xbox`, `G25/G27/DFGT`,
+  `Thrustmaster`, `Custom`), rotation, force strength and direction, centring
+  and damping, minimum force, and pausing forces while F1 is open or the game
+  is in the background. **F1 > WHEEL MAP** binds axes, pedals (with inversion),
+  and wheel buttons interactively with live telemetry and G HUB / PS4-mode
+  diagnostics. `PS3_WHEEL=off` turns it off. Adapted from gt5-recomp (MIT).
+  See docs/wheels.md.
+
+### Changed / Performance
+- **Native SPU geometry & weather stages (`b0196FF40` / 2.11 `b017BD780`, `b016B5B00`, `b01697100`):**
+  - 8-wide AVX2 vertex transforms (`0xAD30`, `GT5P_NATIVE_VTX=0`; `0xF970`, `GT5P_NATIVE_F970=0`), SSSE3 big-endian triangle-strip index decompressor (`0xA3C0` / `0xA408`, `GT5P_NATIVE_A3C0=0`), and single-pass SSE4.1/FMA RSX `CMP` normal/tangent packer (`0xC440` / `0xC5E0`, `GT5P_NATIVE_C440=0`) — all active on both 01.04 and 2.11 across every track, Car List, Garage, and Replay.
+  - Native weather volume culling (`b016B5B00` `0xA220`, `GT5P_NATIVE_RAIN_VOL=0`) and tightened scalar-LUT Eiger rain grid pass (`b01697100` `0x8298`).
+- **RSX replay fast paths & D3D12 state-diffing:** 4-way O(1) texture cache hit (`RSX_TEX_FAST_HIT=0`), D3D12 draw-loop state-diffing (`RSX_D3D_STATE_DIFF=0`), range-guarded offscreen RT lookup, and unset-unit `s_srvc` fast path cut `present-replay` CPU by ~16% on dense city tracks like Rome.
+- **Cold-cache shader/pipeline stutter reduction:** `RSX_SHADER_WORKER_AFFINITY` now defaults on (`=0` off), `RSX_PSO_WAIT_CV` (`=0` old `Sleep(1)`) wakes offscreen PSO waits immediately, and `RSX_SHADER_WORKERS_RACE=2` (`=0` unlimited) caps concurrent DXC compiles during live races. Cold HSR `>100 ms` hitches dropped `19 -> 7` (-63%) and max hitch dropped `282.6 -> 171.3 ms` (-39%).
+- **Measured results (01.04, 4-route PGO):** High Speed Ring **59.8 FPS** (`0.5%` late), Car List **59.4 FPS** (`1.8%` late), Eiger heavy rain **58.8 FPS** (`4.3%` late), Rome **58.4 FPS** (`5.1%` late).
+
+## [0.1.15] - 2026-11-21
+
+Fixes cars whose paint and lighting depend on which side of a surface is drawn,
+such as the Ford Mark IV Race Car '67 (#30).
+
+### Fixed
+- The Ford Mark IV Race Car '67 showed white in the dealership list and a dull
+  maroon close up instead of its bright red, with odd lighting on its body and
+  glass (#30). The renderer gave shaders 0 for "is this the front or back of
+  the surface", and that car's paint shader multiplies its surface direction
+  by it, which wiped out its lighting, paint colour and reflections. Any other
+  car or object that uses the same input is fixed too, on 01.04 and 2.11.
+  `RSX_FP_FACING=0` restores the old behaviour.
+
+## [0.1.14] - 2026-11-21
+
+Fixes the garage car pictures and adds a setting for your name in the game.
+
+### Added
+- Your name in the game: set `player_name` under `[game]` in
+  gt5p_settings.toml (up to 16 letters, digits, spaces or . - _ '); empty
+  keeps "User" (#60). `PS3_USER_NAME` does the same.
+- A game script error now logs where in the game's scripts it happened (the
+  script files and lines), so a report of an "exited with code 1" quit names
+  the script that failed (#55-#58, #64).
+
+### Fixed
+- Car pictures in the garage ("Create Thumbnail" and "Create Thumbnails for
+  All Cars") came out as the same noise for every car (#62). Three renderer
+  faults: copies of the rendered picture into memory were only read back from
+  the GPU up to 64x64 pixels, they arrived a frame after the game read them,
+  and a render surface that grew threw away what was drawn in it. Pictures
+  made by earlier versions stay noisy until made again. Switches:
+  `RSX_BLIT_READBACK_LARGE=0`, `RSX_BLIT_READBACK_SYNC=0`, `RSX_RT_GROW_KEEP=0`,
+  `RSX_SUBVP_RT_FIRST=0` restore the old behaviour.
+- 2.11: a game script error that the game's own scripts catch no longer ends
+  the game; the error now reaches the game's handler as on a console
+  (`GT5P_GUEST_EH=0` restores the old exit). Errors no script catches still
+  end the game, as they would on a console.
+
+### Known issues
+- #64: a save whose garage holds a car the game cannot load (shown with a
+  yellow "!") quits on any action on that car, as on a console. Remove that
+  car; a new one from the dealership works.
+
+## [0.1.13] - 2026-11-20
+
+Names the game script error behind the sudden "exited with code 1" quits
+(#55-#58), so the next report says which script failed.
+
+### Added
+- When a game script error makes the game quit (exit code 1 with no other
+  message; #55, #56, #57), the log and the crash report now name the error,
+  for example `[script-error] FatalError m_adhoc.cpp:864: nil object cannot
+  be used as ...`, and the report's title says it stopped on a script error.
+  `GT5P_SCRIPT_ERROR_LOG=0` turns the log line off.
+
+### Fixed
+- Two problem reports made within the same second no longer overwrite each
+  other.
+
+## [0.1.12] - 2026-11-20
+
+Fixes the 2.11 picture freezes on car screens, crackling 2.11 race sound and
+the streaks that car damage drew over whole panels.
+
+### Fixed
+- Textures that changed in place could keep showing their old picture: the
+  renderer only sampled a texture's bytes to notice changes. In a race this
+  caught the car damage map and the cars' small lighting maps. Each frame now
+  re-checks part of the held textures in full and re-uploads any that changed,
+  at no measurable cost (High Speed Ring 59.6-59.9 FPS against 59.7-59.8).
+  `RSX_TEX_CSUM_ROLL=0` restores the old check.
+- Frames that use more than 1024 textures, seen around race starts and in
+  B-Spec, left thousands of texture binds empty. The likely cause of the
+  track map disappearing for the rest of a race until a restart (#49, #52);
+  not yet confirmed in game. The table now has 2048 slots, filled past 1024
+  only when a frame needs them. `RSX_TEX_SLOTS=1024` restores the old size.
+- Car damage drawn as long streaks over whole panels after any contact
+  (#42, #47; the striped paint seen on dark cars). Each impact scratches the
+  car's damage map with a scratch texture that should end at its edges; the
+  renderer stretched its edge pixels across the panel instead, and every hit
+  added more. The marks now stay where the car was hit, as on RPCS3.
+  `RSX_TEX_BORDER_ADDR=0` restores the old behaviour.
 - 2.11: the picture stopping while the game keeps running, on screens that
   show a car (dealership, garage, tuning shop, settings, B-Spec; #28, #36,
-  #38, #39, #47). A restart signal the game sends its car-rendering jobs
-  could be dropped when it arrived just as the previous batch finished; the
-  jobs then never ran and the game waited for them for ever. Reproduced on
-  the Arcade car list (one freeze in 8 minutes of browsing) and gone in 33
-  minutes with the fix. `SPURS_FLAG_KICK_KEEP=0` restores the old behaviour.
+  #38, #39, #47, #51). A restart signal the game sends its car-rendering jobs
+  was dropped when it arrived while the previous batch was finishing; the
+  new jobs then never ran and the game waited for them for ever. Reproduced
+  on the Arcade car list (both test runs froze, after 8 minutes and 3 minutes
+  of browsing); no freeze in 34 minutes with the fix.
+  `SPURS_FLAG_KICK_KEEP=0` restores the old behaviour.
+- 2.11: crackling, cutting-out sound in races. A check that keeps 2.11's
+  audio EQ from producing invalid samples ran in all five audio stages instead
+  of only the EQ, doubling the sound work: 480-510 underruns and 40-50%
+  silent blocks in a race, now 1 underrun and none silent.
 - Freeze reports now record the last 256 job-system events for the car
   rendering work (`SPURS_KEVLOG=-1` turns this off).
 
