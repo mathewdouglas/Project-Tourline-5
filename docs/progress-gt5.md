@@ -12,7 +12,7 @@ Built cleanly under `C:\pt5-release\0.3.0` (refreshed 4-route PGO `be2b822e5443`
 Packaged 01.04 engine (`gt5.exe`), High Speed Ring 60 s frame test (`RSX_CMD_CHECK=1`):
 - **58.5 FPS** (`5.9%` late, median `16.7 ms`, p99 `24.5 ms`, max `56.3 ms`, `walk 6.43 ms/frame`; steady `299–301` frames/5 s on track).
 
-Antivirus: local Defender `MpCmdRun -Scan -ScanType 3` found `0` threats on the ZIP and extracted folder. VirusTotal scan pending user API key (`scripts/release/vt.py scan C:\pt5-release\0.3.0\final\out\project-tourline-5-v0.3.0-windows-x64.zip`).
+Antivirus: local Defender `MpCmdRun -Scan -ScanType 3` found `0` threats on the ZIP and extracted folder. VirusTotal (`C:\pt5-release\0.3.0\vt.log`): ZIP `1/63` and `gt5.exe` `1/68` (`Webroot=W32.Malware.gen` only; `0` on Bitdefender, Microsoft Defender, and all other engines), `nvngx_dlss.dll` `0/70`, `nvngx_dlssg.dll` `0/70`, all 9 other DLLs `0/63–72`, `tourline5.exe`/`pt5_upscale_dlss.dll`/`gt5_211.exe` `0/0` (unscanned fresh hashes from ZIP).
 
 ## 0.3.0 upstream `ps3recomp` v0.19.0 / v0.20.0 runtime cherry-picks (`release/v0.3.0`, 2026-11-25)
 
