@@ -3,6 +3,24 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
+## [0.3.0] - 2026-11-25
+
+NVIDIA DLSS / DLAA & Frame Generation release, plus a cleaner compact F1 settings UI, a dedicated **PATCHES** tab with Accurate Throttle Linearity, Arcade menu text fix (#83), and upstream `ps3recomp` v0.19/v0.20 runtime ports.
+
+### Added
+- **NVIDIA DLSS Super Resolution & DLAA (`F1 > VIDEO`):** Optional dynamic plug-in (`pt5_upscale_dlss.dll` + NVIDIA `nvngx_dlss.dll`, Preset K) supporting **DLAA (native)**, **DLSS Quality**, **Balanced**, **Performance**, and **Ultra Perf** on NVIDIA RTX GPUs, with live F1 switching, native-resolution HUD/UI compositing, pre-tonemap linear HDR/AutoExposure, and clean fallback to MSAA when absent (`RSX_AA`).
+- **NVIDIA DLSS Frame Generation (`F1 > VIDEO`):** Direct-NGX Frame Generation (**Off / 2x / 3x / 4x**) on NVIDIA RTX 40/50 GPUs with HAGS (`nvngx_dlssg.dll`), live F1 toggle (`RSX_FG`), triple-buffered swapchain, real clip-space camera motion matrices + jitter, and effective FG FPS readout in the **F3** profiler (`e.g. 60.0 fps (120.0 FG 2x)`).
+- **Dedicated `F1 > PATCHES` tab & Accurate Throttle Linearity:** Moved RPCS3 game patches (**Looser chase camera**, **Chase cam damper**, **Chase cam max angle**, **Unlock FPS**) into a new **PATCHES** tab and added **Accurate throttle linearity** (1:1 throttle response for both **01.04** and **02.11**, off by default, applies live; `GT5_PATCH_ACCURATE_THROTTLE_LINEARITY`).
+- **DLSS release packaging:** `scripts/release/clean_build.py` and `scripts/release/package_player.py` bundle `pt5_upscale_dlss.dll`, verified `rel/` `nvngx_dlss.dll` / `nvngx_dlssg.dll`, and NVIDIA license/notice files when the DLSS SDK is present (`--no-dlss` opts out).
+
+### Fixed
+- **Arcade menu / 2D vector font garbled text (#83):** Disabled D3D12 `DepthClipEnable` for draws with `depth_test_enable == 0` so 2D UI / vector font stencil passes render cleanly while keeping `DepthClipEnable = TRUE` for all 3D depth-tested geometry (#76).
+- **F1 in-race pause reliability:** Extended the injected Start pulse from `150 ms` to `250 ms` so opening F1 during a race reliably triggers GT5's pause menu.
+
+### Changed
+- **Compact F1 PC Settings UI:** Slightly reduced UI scale and widened the settings panel so all tabs and busy pages fit comfortably without crowding or overlapping rows, while preserving GT5's native styling.
+- **Upstream `ps3recomp` v0.19.0/v0.20.0 runtime ports:** Fair FIFO `lwmutex` handoff, slotted-VS FP PSOs surviving `vp_gen` bumps, `rsx_gpu_wait_alive()` GPU wait handling, SSSE3 `SPU_LS_VEC` quadword LS load/store (`-DSPU_LS_VEC=0` rollback), Windows host-boot QPC timebase, and positional Nintendo face buttons.
+
 ## [0.2.1] - 2026-11-24
 
 Bug-fix, wheel-compatibility, game-patch, and RSX/SPU performance release.

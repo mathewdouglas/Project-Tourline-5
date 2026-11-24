@@ -15,6 +15,7 @@ extern int g_gt5_patch_chase_camera_car5_fov_and_pitch;
 extern int g_gt5_patch_analogue_dials_in_all_cameras;
 extern int g_gt5_patch_use_2x_msaa_in_720p_mode;
 extern int g_gt5_patch_unlock_fps;
+extern int g_gt5_patch_accurate_throttle_linearity;
 
 /* Call once after ELF load in main(). Reads settings + GT5_PATCH_* env vars
  * and writes any enabled boot-time data/BSS patches into guest memory. */
@@ -31,6 +32,10 @@ bool gt5p_patches_has_chase_cam(void);
 /* Live toggle for Unlock FPS (issue #53, 02.11 RPCS3 patch). */
 void gt5p_patches_apply_unlock_fps(bool enabled);
 bool gt5p_patches_has_unlock_fps(void);
+
+/* Live toggle for Accurate Throttle Linearity (RPCS3 patch, 01.04 & 02.11). */
+void gt5p_patches_apply_throttle_linearity(bool enabled);
+bool gt5p_patches_has_throttle_linearity(void);
 
 #ifdef __cplusplus
 }

@@ -77,6 +77,7 @@ struct Gt5pSettings {
     int chase_cam_damper = 90;        /* chase camera spring damper, 0..300 (vanilla 300) */
     int chase_cam_max_angle = 35;     /* chase camera max rotation angle, 0..100 (vanilla 30) */
     bool unlock_fps = false;          /* RPCS3 Unlock FPS patch (GT5_PATCH_UNLOCK_FPS, 02.11) */
+    bool throttle_linearity = false;  /* RPCS3 Accurate Throttle Linearity patch (GT5_PATCH_ACCURATE_THROTTLE_LINEARITY) */
     std::string player_name;    /* the PS3 user name the game shows; "" = "User" (PS3_USER_NAME) */
 
     /* [audio] */

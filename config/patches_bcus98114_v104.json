@@ -56,6 +56,13 @@
       "new": "0x60000000",
       "guard": "g_gt5_patch_looser_chase_camera",
       "note": "Looser Chase Camera"
+    },
+    {
+      "addr": "0x00551510",
+      "orig": "0x7C6707B4",
+      "hook": "gt5p_patch_throttle_linearity_hook",
+      "guard": "g_gt5_patch_accurate_throttle_linearity",
+      "note": "Accurate Throttle Linearity"
     }
   ]
 }

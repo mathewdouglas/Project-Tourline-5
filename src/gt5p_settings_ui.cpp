@@ -558,14 +558,14 @@ const std::vector<Item>& items()
           "RSX_ANISO", { {1, L"Trilinear"}, {4, L"4x anisotropic"}, {8, L"8x anisotropic"}, {16, L"16x anisotropic"} },
           [](const UiSettings& s) { return s.anisotropy; },
           [](UiSettings& s, int v) { s.anisotropy = v; }, nullptr },
-        { L"GAME", L"Looser chase camera",
+        { L"PATCHES", L"Looser chase camera",
           L"RPCS3 Looser Chase Camera patch: lets the chase camera sway freely with steering "
           L"and drift instead of locking rigidly behind the car. Applies live.",
           "GT5_PATCH_LOOSER_CHASE_CAMERA", kOnOff,
           [](const UiSettings& s) { return s.looser_chase_camera ? 1 : 0; },
           [](UiSettings& s, int v) { s.looser_chase_camera = v != 0; },
           [](int) { /* pushed in set_value via gt5p_patches_apply_chase_cam */ } },
-        { L"GAME", L"Chase cam damper",
+        { L"PATCHES", L"Chase cam damper",
           L"Spring damper for Looser chase camera. Lower values let the camera swing further "
           L"(90 default, 300 vanilla). Applies live when Looser chase camera is On.",
           "GT5_CHASE_CAM_DAMPER", { {30, L"30 (Very loose)"}, {60, L"60 (Loose)"}, {90, L"90 (Default)"},
@@ -573,7 +573,7 @@ const std::vector<Item>& items()
           [](const UiSettings& s) { return s.chase_cam_damper; },
           [](UiSettings& s, int v) { s.chase_cam_damper = v; },
           [](int) { /* pushed in set_value via gt5p_patches_apply_chase_cam */ } },
-        { L"GAME", L"Chase cam max angle",
+        { L"PATCHES", L"Chase cam max angle",
           L"Maximum rotation angle for Looser chase camera (35 default, 30 vanilla). "
           L"Applies live when Looser chase camera is On.",
           "GT5_CHASE_CAM_MAX_ANGLE", { {15, L"15"}, {25, L"25"}, {30, L"30 (Vanilla)"},
@@ -581,7 +581,14 @@ const std::vector<Item>& items()
           [](const UiSettings& s) { return s.chase_cam_max_angle; },
           [](UiSettings& s, int v) { s.chase_cam_max_angle = v; },
           [](int) { /* pushed in set_value via gt5p_patches_apply_chase_cam */ } },
-        { L"GAME", L"Unlock FPS",
+        { L"PATCHES", L"Accurate throttle linearity",
+          L"RPCS3 Accurate Throttle Linearity patch: corrects controller throttle linearity to 1:1 "
+          L"with your input without altering brake, steering, or wheel pedals. Applies live.",
+          "GT5_PATCH_ACCURATE_THROTTLE_LINEARITY", kOnOff,
+          [](const UiSettings& s) { return s.throttle_linearity ? 1 : 0; },
+          [](UiSettings& s, int v) { s.throttle_linearity = v != 0; },
+          [](int v) { gt5p_patches_apply_throttle_linearity(v != 0); } },
+        { L"PATCHES", L"Unlock FPS",
           L"RPCS3 Unlock FPS patch (GT5 2.11): removes the 30/60 Hz flip-interval cap in "
           L"menus and races. Off by default. Applies live.",
           "GT5_PATCH_UNLOCK_FPS", kOnOff,
@@ -653,12 +660,12 @@ const std::vector<Item>& items()
  * backbuffer's pixels over 1.5 at 1080p); sizes and greys were measured from
  * the game's screens (Phases 115-116). */
 const int kW = 1280, kH = 720;
-const int kPx0 = 250, kPx1 = 1030, kPy0 = 84, kPy1 = 640;     /* the panel */
-const int kBarY = 124, kBarH = 30, kRule1 = 168;              /* section bar, rule under it */
-const int kRowY = 186, kRowH = 54;                            /* first row, pitch */
-const int kFieldX = 650, kFieldW = 250, kFieldH = 32, kDropW = 33;
-const int kHelpY = 468, kRule2 = 536;
-const int kBtnW = 157, kBtnH = 37, kBtnY = 556, kBtnGap = 16;
+const int kPx0 = 160, kPx1 = 1120, kPy0 = 56, kPy1 = 668;     /* the panel */
+const int kBarY = 92, kBarH = 26, kRule1 = 126;               /* section bar, rule under it */
+const int kRowY = 138, kRowH = 38;                            /* first row, pitch */
+const int kFieldX = 660, kFieldW = 260, kFieldH = 25, kDropW = 26;
+const int kHelpY = 532, kRule2 = 588;
+const int kBtnW = 136, kBtnH = 31, kBtnY = 602, kBtnGap = 14;
 
 HWND s_game, s_wnd;
 bool s_open;
@@ -684,8 +691,9 @@ WheelRawUi s_wcap_base = {};    /* wheel axes/buttons when wheel capture began *
 enum { kRowRestart = -1, kRowClose = -2, kRowHead = -3, kRowDefaults = -4, kRowSetup211 = -5, kRowMods = -6 };
 bool is_button(int id) { return id == kRowRestart || id == kRowClose || id == kRowDefaults || id == kRowSetup211 || id == kRowMods; }
 
-/* The Keyboard & Wheel Map pages: sixteen bindings in two columns of eight. */
-const int kKeyY = 180, kKeyH = 34, kKeyFieldW = 130;
+/* The Keyboard & Wheel Map pages: bindings in two columns. */
+const int kKeyY = 144, kKeyH = 36, kKeyFieldW = 130;
+const int kWmapY = 140, kWmapPitch = 34, kWmapH = 30;
 bool keyboard_page();
 bool wheel_page();
 bool wheel_map_page();
@@ -711,6 +719,9 @@ const std::vector<const wchar_t*>& sections()
     static std::vector<const wchar_t*> v;
     if (v.empty())
         for (const Item& it : items()) {
+            if (!wcscmp(it.section, L"PATCHES") && !gt5p_patches_has_chase_cam() &&
+                !gt5p_patches_has_unlock_fps() && !gt5p_patches_has_throttle_linearity())
+                continue;
             bool seen = false;
             for (const wchar_t* s : v) seen |= !wcscmp(s, it.section);
             if (!seen) v.push_back(it.section);
@@ -728,6 +739,7 @@ std::vector<int> rows()
             (!env_is(items()[i], "GT5P_MOD") || mods_available()) &&
             (gt5p_patches_has_chase_cam() || !(env_is(items()[i], "GT5_PATCH_LOOSER_CHASE_CAMERA") ||
                 env_is(items()[i], "GT5_CHASE_CAM_DAMPER") || env_is(items()[i], "GT5_CHASE_CAM_MAX_ANGLE"))) &&
+            (gt5p_patches_has_throttle_linearity() || !env_is(items()[i], "GT5_PATCH_ACCURATE_THROTTLE_LINEARITY")) &&
             (gt5p_patches_has_unlock_fps() || !env_is(items()[i], "GT5_PATCH_UNLOCK_FPS"))) r.push_back(i);
     const char* ready211=getenv("GT5P_VERSION_211_READY");
     const char* supported211=getenv("GT5P_VERSION_211_SUPPORTED");
@@ -755,22 +767,22 @@ std::vector<Slot> layout(const std::vector<int>& r)
     }
     /* Six shader rows must leave space for the selected row's help. Keyboard
      * and wheel bindings retain their separate two-column layout. */
-    const int available_pitch = nitems > 1 ? (kHelpY - 12 - kFieldH - kRowY) / (nitems - 1) : kRowH;
+    const int available_pitch = nitems > 1 ? (kHelpY - 10 - kFieldH - kRowY) / (nitems - 1) : kRowH;
     const int pitch = available_pitch < kRowH ? available_pitch : kRowH;
     int bx = kW / 2 - (nbtn * kBtnW + (nbtn - 1) * kBtnGap) / 2;
     for (int id : r) {
-        if (id == kRowHead) out.push_back({ kPx0 + 40, kPx1 - 40, kBarY });
+        if (id == kRowHead) out.push_back({ kPx0 + 28, kPx1 - 28, kBarY });
         else if (id >= 0 && items()[id].key >= 0) {
             const int k = items()[id].key, col = k / 8;
-            const int x0 = col ? kW / 2 + 10 : kPx0 + 30;
-            out.push_back({ x0, x0 + (kPx1 - kPx0) / 2 - 40, kKeyY + (k % 8) * kKeyH });
+            const int x0 = col ? kW / 2 + 12 : kPx0 + 30;
+            out.push_back({ x0, x0 + (kPx1 - kPx0) / 2 - 42, kKeyY + (k % 8) * kKeyH });
         }
         else if (id >= 0 && items()[id].wmap >= 0) {
             const int k = items()[id].wmap, col = k / 10;
-            const int x0 = col ? kW / 2 + 10 : kPx0 + 30;
-            out.push_back({ x0, x0 + (kPx1 - kPx0) / 2 - 40, 180 + (k % 10) * 28 });
+            const int x0 = col ? kW / 2 + 12 : kPx0 + 30;
+            out.push_back({ x0, x0 + (kPx1 - kPx0) / 2 - 42, kWmapY + (k % 10) * kWmapPitch });
         }
-        else if (id >= 0) { out.push_back({ kPx0 + 40, kPx1 - 40, y }); y += pitch; }
+        else if (id >= 0) { out.push_back({ kPx0 + 28, kPx1 - 28, y }); y += pitch; }
         else { out.push_back({ bx, bx + kBtnW, kBtnY }); bx += kBtnW + kBtnGap; }
     }
     return out;
@@ -1274,7 +1286,7 @@ void text_in(HDC dc, HFONT f, int x0, int y0, int x1, int y1, COLORREF c, const 
 /* A pill button with its label. */
 void button(HDC dc, int x0, int y, const wchar_t* label, bool focused)
 {
-    static HFONT f = font(21, FW_NORMAL);
+    static HFONT f = font(17, FW_NORMAL);
     pill(dc, x0, y, x0 + kBtnW, y + kBtnH, focused);
     text_in(dc, f, x0, y, x0 + kBtnW, y + kBtnH - 2, grey(232), label);
 }
@@ -1302,17 +1314,17 @@ std::vector<SectionTab> s_tabs;
  * opens that page. GT5P_SETTINGS_TABS=0: only the current page's name. */
 void section_bar(HDC dc, int x0, int x1, int y, bool sel)
 {
-    static HFONT f = font(19, FW_SEMIBOLD), fk = font(9, FW_BOLD);
+    static HFONT f = font(16, FW_SEMIBOLD), fk = font(8, FW_BOLD);
     static int tabs_on = -1;
     if (tabs_on < 0) { const char* e = getenv("GT5P_SETTINGS_TABS"); tabs_on = !(e && e[0] == '0'); }
     fill(dc, x0, y, x1, y + 1, sel ? RGB(168, 0, 0) : grey(70));
     vgrad(dc, x0, y + 1, x1, y + kBarH - 1, [](double t) { return grey(lerp(3, 34, t)); });
     fill(dc, x0, y + kBarH - 1, x1, y + kBarH, sel ? RGB(168, 0, 0) : grey(70));
     for (int k = 0; k < 2; k++) {
-        const int cx = k ? x1 - 22 : x0 + 22, cy = y + kBarH / 2;
-        stadium(dc, cx - 10, cy - 10, cx + 10, cy + 10, [](double t) { return grey(lerp(80, 18, t)); });
-        stadium(dc, cx - 8.5, cy - 8.5, cx + 8.5, cy + 8.5, [](double t) { return grey(lerp(14, 44, t)); });
-        text_in(dc, fk, cx - 10, cy - 10, cx + 10, cy + 10, grey(170), k ? L"R1" : L"L1");
+        const int cx = k ? x1 - 18 : x0 + 18, cy = y + kBarH / 2;
+        stadium(dc, cx - 8.5, cy - 8.5, cx + 8.5, cy + 8.5, [](double t) { return grey(lerp(80, 18, t)); });
+        stadium(dc, cx - 7.0, cy - 7.0, cx + 7.0, cy + 7.0, [](double t) { return grey(lerp(14, 44, t)); });
+        text_in(dc, fk, cx - 9, cy - 9, cx + 9, cy + 9, grey(170), k ? L"R1" : L"L1");
     }
     const auto& secs = sections();
     std::vector<std::wstring> names;
@@ -1327,10 +1339,10 @@ void section_bar(HDC dc, int x0, int x1, int y, bool sel)
         return;
     }
     /* The names share the room between the knobs, evenly spaced; the font
-     * steps down if they would not fit (it is 15 units for ten pages). */
-    const int a0 = x0 + 40, a1 = x1 - 40;
+     * steps down if they would not fit. */
+    const int a0 = x0 + 36, a1 = x1 - 36;
     static HFONT fonts[4][2];
-    static const int sizes[4] = { 16, 15, 14, 12 };
+    static const int sizes[4] = { 14, 13, 12, 11 };
     int pick = 3, total = 0;
     std::vector<int> widths(names.size());
     for (int k = 0; k < 4; k++) {
@@ -1342,7 +1354,7 @@ void section_bar(HDC dc, int x0, int x1, int y, bool sel)
             widths[i] = sz.cx; total += sz.cx;
         }
         SelectObject(dc, o);
-        if (total + 10 * (int)names.size() <= a1 - a0) { pick = k; break; }
+        if (total + 8 * (int)names.size() <= a1 - a0) { pick = k; break; }
     }
     const double gap = names.empty() ? 0 : (double)(a1 - a0 - total) / (double)names.size();
     double x = a0 + gap / 2;
@@ -1351,7 +1363,7 @@ void section_bar(HDC dc, int x0, int x1, int y, bool sel)
         const bool cur = (int)i == s_section;
         text_in(dc, fonts[pick][cur ? 1 : 0], tx0 - 4, y, tx1 + 4, y + kBarH - 2,
                 cur ? grey(245) : grey(120), names[i].c_str());
-        if (cur) fill(dc, tx0, y + kBarH - 6, tx1, y + kBarH - 4, RGB(200, 16, 16));
+        if (cur) fill(dc, tx0, y + kBarH - 5, tx1, y + kBarH - 3, RGB(200, 16, 16));
         s_tabs[i] = { (int)(x - gap / 2), (int)(x + widths[i] + gap / 2) };
         x += widths[i] + gap;
     }
@@ -1368,7 +1380,7 @@ void drop_button(HDC dc, int x, int y, bool sel)
         if (t < 0.5) { const double u = t / 0.5; return RGB(lerp(123, 74, u), lerp(121, 73, u), lerp(132, 74, u)); }
         const double u = (t - 0.5) / 0.5;
         return grey(u < 0.6 ? lerp(10, 3, u / 0.6) : lerp(3, 38, (u - 0.6) / 0.4)); });
-    POINT tri[] = { {x + s / 2 - 7, y + s / 2 - 3}, {x + s / 2 + 7, y + s / 2 - 3}, {x + s / 2, y + s / 2 + 5} };
+    POINT tri[] = { {x + s / 2 - 5, y + s / 2 - 2}, {x + s / 2 + 5, y + s / 2 - 2}, {x + s / 2, y + s / 2 + 4} };
     HBRUSH b = CreateSolidBrush(grey(231)); HPEN p = CreatePen(PS_SOLID, 1, grey(231));
     HGDIOBJ ob = SelectObject(dc, b), op = SelectObject(dc, p);
     Polygon(dc, tri, 3);
@@ -1378,17 +1390,17 @@ void drop_button(HDC dc, int x, int y, bool sel)
 /* The open list, over the rows: light grey entries, the highlighted one a
  * pale blue gradient, a dash before the current value. Placed so the
  * current value sits on the value box. */
-const int kDropItemH = 38;
+const int kDropItemH = 29;
 int drop_top(int row_y, int cur, int n)
 {
-    int y = row_y - 3 - cur * kDropItemH;
+    int y = row_y - 2 - cur * kDropItemH;
     if (y + n * kDropItemH > kRule2) y = kRule2 - n * kDropItemH;
     if (y < kRule1) y = kRule1;
     return y;
 }
 void drop_list(HDC dc, const Item& it, int row_y)
 {
-    static HFONT f = font(19, FW_NORMAL);
+    static HFONT f = font(16, FW_NORMAL);
     const int n = (int)it.choices.size(), cur = choice_index(it);
     const int y0 = drop_top(row_y, cur, n);
     const int x0 = kFieldX, x1 = kFieldX + kFieldW;
@@ -1400,19 +1412,19 @@ void drop_list(HDC dc, const Item& it, int row_y)
                 return RGB(lerp(154, 222, t), lerp(181, 244, t), lerp(206, 250, t)); });
         else fill(dc, x0, y, x1, y + kDropItemH, grey(204));
         fill(dc, x0, y + kDropItemH - 1, x1, y + kDropItemH, grey(127));
-        if (i == cur) fill(dc, x0 + 13, y + kDropItemH / 2, x0 + 20, y + kDropItemH / 2 + 2, grey(115));
-        text_in(dc, f, x0 + 30, y, x1 - 8, y + kDropItemH - 2, grey(51), it.choices[i].label, DT_LEFT);
+        if (i == cur) fill(dc, x0 + 11, y + kDropItemH / 2, x0 + 18, y + kDropItemH / 2 + 2, grey(115));
+        text_in(dc, f, x0 + 26, y, x1 - 8, y + kDropItemH - 2, grey(51), it.choices[i].label, DT_LEFT);
     }
 }
 
 /* The page: one of the game's settings popups. */
 void paint(HDC dc)
 {
-    static HFONT fTitle = font(22, FW_NORMAL), fRow = font(19, FW_NORMAL), fTag = font(12, FW_SEMIBOLD),
-                 fHelp = font(15, FW_NORMAL), fStatus = font(13, FW_NORMAL);
+    static HFONT fTitle = font(19, FW_NORMAL), fRow = font(16, FW_NORMAL), fTag = font(11, FW_SEMIBOLD),
+                 fHelp = font(13, FW_NORMAL), fStatus = font(12, FW_NORMAL);
     SetBkMode(dc, TRANSPARENT);
     panel(dc, kPx0, kPy0, kPx1, kPy1);
-    text_in(dc, fTitle, kPx0, kPy0 + 4, kPx1, kPy0 + 34, grey(178), L"PC Settings");
+    text_in(dc, fTitle, kPx0, kPy0 + 3, kPx1, kPy0 + 29, grey(178), L"PC Settings");
 
     const std::vector<int> r = rows();
     const std::vector<Slot> sl = layout(r);
@@ -1426,17 +1438,17 @@ void paint(HDC dc)
         if (id == kRowHead) { section_bar(dc, sl[i].x0, sl[i].x1, y, sel); continue; }
         if (id < 0) {
             button(dc, sl[i].x0, y, id == kRowRestart ? L"Restart" : id == kRowDefaults ? L"Defaults" : id == kRowSetup211 ? L"Set up 2.11" : id == kRowMods ? L"Mods" : L"Close", sel);
-            if (sel) cursor(dc, sl[i].x0 + kBtnW / 2 + 2, y + 18);
+            if (sel) cursor(dc, sl[i].x0 + kBtnW / 2 + 2, y + kBtnH / 2);
             continue;
         }
         const Item& it = items()[id];
         const bool over = !launcher_item(it) && gt5p_settings_overridden(it.env);
         if (it.key >= 0 || it.wmap >= 0) {
             /* A binding: the button's name, then its key or wheel axis/button in a box. */
-            const int x0 = sl[i].x0, fx = x0 + 160;
-            const int rh = it.wmap >= 0 ? 28 : kKeyH;
+            const int x0 = sl[i].x0, fx = x0 + 185;
+            const int rh = it.wmap >= 0 ? kWmapH : kKeyH;
             const bool cap = (it.key >= 0 && s_capture == id) || (it.wmap >= 0 && s_wcap == id);
-            text_in(dc, fRow, x0, y, fx - 16, y + rh - 4, over ? grey(100) : grey(190), it.label, DT_RIGHT);
+            text_in(dc, fRow, x0, y, fx - 14, y + rh - 4, over ? grey(100) : grey(190), it.label, DT_RIGHT);
             fill(dc, fx - 1, y - 1, fx + kKeyFieldW + 1, y + rh - 3, sel ? RGB(168, 0, 0) : grey(5));
             fill(dc, fx, y, fx + kKeyFieldW, y + rh - 4, RGB(0, 4, 0));
             std::wstring v;
@@ -1447,30 +1459,32 @@ void paint(HDC dc)
                 v = cap ? (it.wmap == 0 ? L"Turn wheel" : it.wmap <= 3 ? L"Press pedal" : L"Press button")
                         : wheel_slot_display(s_edit, it.wmap);
             }
-            text_in(dc, fRow, fx + 12, y, fx + kKeyFieldW - 6, y + rh - 5,
+            text_in(dc, fRow, fx + 10, y, fx + kKeyFieldW - 6, y + rh - 5,
                     cap ? RGB(237, 60, 60) : over ? grey(100) : grey(204), v.c_str(), DT_LEFT | DT_END_ELLIPSIS);
             if (sel && !cap) cursor(dc, fx + kKeyFieldW - 18, y + (rh > 30 ? 8 : 5));
             continue;
         }
         const bool later = !it.apply && !over && it.get(s_edit) != it.get(s_boot);
-        /* A dotted rule under every row but the last. */
-        if (i + 1 < r.size() && r[i + 1] >= 0)
+        /* A dotted rule centred between every row and the next. */
+        if (i + 1 < r.size() && r[i + 1] >= 0) {
+            const int rule_y = (y + kFieldH + sl[i + 1].y) / 2;
             for (int x = kPx0 + 26; x < kPx1 - 26; x += 7)
-                fill(dc, x, y + kFieldH + 11, x + 2, y + kFieldH + 12, grey(96));
-        text_in(dc, fRow, kPx0 + 20, y, kFieldX - 24, y + kFieldH - 2, over ? grey(100) : grey(190), it.label, DT_RIGHT);
+                fill(dc, x, rule_y, x + 2, rule_y + 1, grey(96));
+        }
+        text_in(dc, fRow, kPx0 + 20, y, kFieldX - 20, y + kFieldH - 2, over ? grey(100) : grey(190), it.label, DT_RIGHT);
         fill(dc, kFieldX, y, kFieldX + kFieldW, y + kFieldH, RGB(0, 4, 0));
         fill(dc, kFieldX, y + kFieldH - 1, kFieldX + kFieldW, y + kFieldH, RGB(99, 101, 107));
-        text_in(dc, fRow, kFieldX + 14, y, kFieldX + kFieldW - 8, y + kFieldH - 2, over ? grey(100) : grey(204),
+        text_in(dc, fRow, kFieldX + 12, y, kFieldX + kFieldW - 8, y + kFieldH - 2, over ? grey(100) : grey(204),
                 (it.env && !strcmp(it.env,"PAD_MODERN_CONTROLS") && gt5p_modern_controls_state()<0) ?
                     (gt5p_modern_controls_state()==-2 ? L"Unavailable" : L"Waiting for game") : it.choices[choice_index(it)].label, DT_LEFT | DT_END_ELLIPSIS);
         /* Notes sit in the row's empty left side. */
         if (later)
-            text_in(dc, fTag, kPx0 + 30, y, kFieldX, y + kFieldH - 2, RGB(237, 60, 60), L"after restart", DT_LEFT);
+            text_in(dc, fTag, kPx0 + 28, y, kFieldX, y + kFieldH - 2, RGB(237, 60, 60), L"after restart", DT_LEFT);
         else if (over)
-            text_in(dc, fTag, kPx0 + 30, y, kFieldX, y + kFieldH - 2, grey(110),
+            text_in(dc, fTag, kPx0 + 28, y, kFieldX, y + kFieldH - 2, grey(110),
                     (L"set by " + widen(it.env)).c_str(), DT_LEFT);
-        drop_button(dc, kFieldX + kFieldW + 12, y, sel);
-        if (sel && !s_drop) cursor(dc, kFieldX + kFieldW + 12 + kDropW / 2 + 1, y + kDropW / 2 + 2);
+        drop_button(dc, kFieldX + kFieldW + 10, y, sel);
+        if (sel && !s_drop) cursor(dc, kFieldX + kFieldW + 10 + kDropW / 2 + 1, y + kDropW / 2 + 1);
         if (sel && s_drop) drop_row = (int)i;
     }
 
@@ -1526,13 +1540,13 @@ void paint(HDC dc)
         const Item& it = items()[r[drop_row]];
         drop_list(dc, it, sl[drop_row].y);
         const int y0 = drop_top(sl[drop_row].y, choice_index(it), (int)it.choices.size());
-        cursor(dc, kFieldX + kFieldW - 70, y0 + s_drop_sel * kDropItemH + 18);
+        cursor(dc, kFieldX + kFieldW - 64, y0 + s_drop_sel * kDropItemH + kDropItemH / 2);
     }
 }
 
 /* The quit question, a copy of the game's "Confirmation" popup. */
 const int kQx0 = 360, kQx1 = 920, kQy0 = 175, kQy1 = 547, kQbtnY = 480;
-const int kQbtnX[2] = { 475, 648 };
+const int kQbtnX[2] = { kW / 2 - kBtnW - 10, kW / 2 + 10 };
 void paint_quit(HDC dc)
 {
     static HFONT fTitle = font(22, FW_NORMAL), fMsg = font(22, FW_NORMAL);
@@ -1543,7 +1557,7 @@ void paint_quit(HDC dc)
     fill(dc, kQx0, 448, kQx1, 449, grey(76));
     button(dc, kQbtnX[0], kQbtnY, L"Cancel", s_quit_sel == 0);
     button(dc, kQbtnX[1], kQbtnY, L"OK", s_quit_sel == 1);
-    cursor(dc, kQbtnX[s_quit_sel] + kBtnW / 2 + 2, kQbtnY + 18);
+    cursor(dc, kQbtnX[s_quit_sel] + kBtnW / 2 + 2, kQbtnY + kBtnH / 2);
 }
 
 void activate(int dir);
@@ -1576,8 +1590,8 @@ void click(int mx, int my)
         if (id == kRowHead) {
             if (my >= y && my < y + kBarH && mx >= sl[i].x0 && mx < sl[i].x1) {
                 s_sel = 0;
-                if (mx < sl[i].x0 + 40) switch_section(-1);
-                else if (mx >= sl[i].x1 - 40) switch_section(+1);
+                if (mx < sl[i].x0 + 36) switch_section(-1);
+                else if (mx >= sl[i].x1 - 36) switch_section(+1);
                 else for (size_t t = 0; t < s_tabs.size(); t++)
                     if (mx >= s_tabs[t].x0 && mx < s_tabs[t].x1 && (int)t != s_section) {
                         switch_section((int)t - s_section);   /* straight to that page */
@@ -1588,9 +1602,9 @@ void click(int mx, int my)
         } else if (id < 0) {
             if (my >= y && my < y + kBtnH && mx >= sl[i].x0 && mx < sl[i].x1) { s_sel = (int)i; press(); return; }
         } else if (items()[id].key >= 0 || items()[id].wmap >= 0) {
-            const int rh = items()[id].wmap >= 0 ? 28 : kKeyH;
+            const int rh = items()[id].wmap >= 0 ? kWmapH : kKeyH;
             if (my >= y && my < y + rh - 3 && mx >= sl[i].x0 && mx < sl[i].x1) { s_sel = (int)i; press(); return; }
-        } else if (my >= y && my < y + kFieldH && mx >= kPx0 && mx < kFieldX + kFieldW + 12 + kDropW) {
+        } else if (my >= y && my < y + kFieldH && mx >= kPx0 && mx < kFieldX + kFieldW + 10 + kDropW) {
             s_sel = (int)i;
             if (mx >= kFieldX) press();
             return;

@@ -8,6 +8,7 @@
  */
 #include "gt5p_patches.h"
 #include "gt5p_settings.h"
+#include "ppu_context.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -31,6 +32,7 @@ int g_gt5_patch_chase_camera_car5_fov_and_pitch = 0;
 int g_gt5_patch_analogue_dials_in_all_cameras = 0;
 int g_gt5_patch_use_2x_msaa_in_720p_mode = 0;
 int g_gt5_patch_unlock_fps = 0;
+int g_gt5_patch_accurate_throttle_linearity = 0;
 }
 
 static void write_be_f32(uint32_t ea, float val)
@@ -67,6 +69,36 @@ extern "C" void gt5p_patches_apply_unlock_fps(bool enabled)
         return;
     }
     g_gt5_patch_unlock_fps = enabled ? 1 : 0;
+}
+
+extern "C" bool gt5p_patches_has_throttle_linearity(void)
+{
+    return GT5P_CHASE_CAM_BSS != 0u;
+}
+
+extern "C" void gt5p_patches_apply_throttle_linearity(bool enabled)
+{
+    if (!gt5p_patches_has_throttle_linearity()) {
+        g_gt5_patch_accurate_throttle_linearity = 0;
+        return;
+    }
+    g_gt5_patch_accurate_throttle_linearity = enabled ? 1 : 0;
+}
+
+/* RPCS3 "Accurate Throttle Linearity" (Pappapatu, 01.04 0x00551510 / 02.11 0x0048D0DC):
+ * Inverts GT5's piecewise-linear throttle LUT for action ID 4 (r30 == 4) so
+ * throttle response is 1:1 with input without altering brake, steering, or
+ * wheel-pedal inputs. Runs immediately before `extsw r7, r3`. */
+extern "C" void gt5p_patch_throttle_linearity_hook(ppu_context* ctx)
+{
+    if ((uint32_t)ctx->gpr[30] != 4u)
+        return;
+    uint32_t v = (uint32_t)ctx->gpr[3];
+    if (v < 0x2000u)
+        v = v * 3u;
+    else
+        v = (v - 0x2000u) / 3u + 0x6000u;
+    ctx->gpr[3] = (uint64_t)v;
 }
 
 extern "C" void gt5p_patches_apply_chase_cam(bool enabled, int damper, int max_angle)
@@ -129,6 +161,14 @@ extern "C" void gt5p_patches_apply_boot(void)
         if (on) {
             gt5p_patches_apply_unlock_fps(true);
             printf("[GT5P] patch: Unlock FPS enabled\n");
+        }
+    }
+
+    if (gt5p_patches_has_throttle_linearity()) {
+        const bool on = env_flag("GT5_PATCH_ACCURATE_THROTTLE_LINEARITY", s.throttle_linearity ? 1 : 0) != 0;
+        if (on) {
+            gt5p_patches_apply_throttle_linearity(true);
+            printf("[GT5P] patch: Accurate Throttle Linearity enabled\n");
         }
     }
 
