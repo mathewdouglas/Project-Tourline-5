@@ -2155,7 +2155,7 @@ void pause_race_if_running()
     if (on < 0) { const char* e = getenv("GT5P_SETTINGS_PAUSE"); on = !(e && e[0] == '0'); }
     if (!on || !s_in_race) return;
     if (race_menu_state() != kRaceRunning) return;
-    s_inject_until = GetTickCount64() + 150;
+    s_inject_until = GetTickCount64() + 250;
     g_pad_inject_buttons = kStart;
     if (s_dbg_screens > 0) fprintf(stderr, "[settings-ui] race running: Start pressed to pause it%c", 10);
 }

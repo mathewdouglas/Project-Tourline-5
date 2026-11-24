@@ -500,6 +500,40 @@ static void fg_mat_ident(float m[4][4])
     m[0][0] = m[1][1] = m[2][2] = m[3][3] = 1.0f;
 }
 
+static bool fg_mat_inv4(const float in[4][4], float out[4][4])
+{
+    double a[4][8];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            a[i][j]     = (double)in[i][j];
+            a[i][j + 4] = (i == j) ? 1.0 : 0.0;
+        }
+    }
+    for (int col = 0; col < 4; col++) {
+        int piv = col;
+        double best = fabs(a[col][col]);
+        for (int r = col + 1; r < 4; r++) {
+            double v = fabs(a[r][col]);
+            if (v > best) { best = v; piv = r; }
+        }
+        if (best < 1e-12) return false;
+        if (piv != col) {
+            for (int j = 0; j < 8; j++) { double t = a[col][j]; a[col][j] = a[piv][j]; a[piv][j] = t; }
+        }
+        double diag = a[col][col];
+        for (int j = 0; j < 8; j++) a[col][j] /= diag;
+        for (int r = 0; r < 4; r++) {
+            if (r == col) continue;
+            double f = a[r][col];
+            for (int j = 0; j < 8; j++) a[r][j] -= f * a[col][j];
+        }
+    }
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            out[i][j] = (float)a[i][j + 4];
+    return true;
+}
+
 PT5_EXPORT int pt5_fg_eval(void* d3d12_cmd_list, const Pt5FgEval* ev,
                            char* reason_out, size_t reason_cap)
 {
@@ -530,8 +564,18 @@ PT5_EXPORT int pt5_fg_eval(void* d3d12_cmd_list, const Pt5FgEval* ev,
     op.clipToCameraView[3][2] = 1.0f;
     op.clipToCameraView[3][3] = 1.0f / zn;
     fg_mat_ident(op.clipToLensClip);
-    fg_mat_ident(op.clipToPrevClip);
-    fg_mat_ident(op.prevClipToClip);
+    if (ev->struct_size >= sizeof(Pt5FgEval) && ev->has_clip_to_prev) {
+        memcpy(op.clipToPrevClip, ev->clip_to_prev, sizeof(op.clipToPrevClip));
+        if (!fg_mat_inv4(op.clipToPrevClip, op.prevClipToClip)) {
+            fg_mat_ident(op.clipToPrevClip);
+            fg_mat_ident(op.prevClipToClip);
+        }
+        op.jitterOffset[0] = ev->jitter_x;
+        op.jitterOffset[1] = ev->jitter_y;
+    } else {
+        fg_mat_ident(op.clipToPrevClip);
+        fg_mat_ident(op.prevClipToClip);
+    }
     op.mvecScale[0] = ev->mv_scale_x != 0.0f ? ev->mv_scale_x : 1.0f;
     op.mvecScale[1] = ev->mv_scale_y != 0.0f ? ev->mv_scale_y : 1.0f;
     op.cameraUp[1] = 1.0f;
