@@ -39,7 +39,7 @@ bool         g_enabled = false;
  * override it, and the settings page says so. */
 const char* const kEnvNames[] = {
     "RSX_SHADER_COMPILER",
-    "GT5P_RESOLUTION", "RSX_MSAA", "RSX_AA", "RSX_PRESENT_SYNC", "RSX_SHADER_CACHE", "GT5P_SHADER_INDICATOR", "GT5P_PRELOAD_INDICATOR",
+    "GT5P_RESOLUTION", "RSX_MSAA", "RSX_AA", "RSX_FG", "RSX_PRESENT_SYNC", "RSX_SHADER_CACHE", "GT5P_SHADER_INDICATOR", "GT5P_PRELOAD_INDICATOR",
     "PAD_MODERN_CONTROLS", "PAD_TRIGGER_DEADZONE", "PAD_TRIGGER_CURVE", "PAD_ADAPTIVE_TRIGGERS", "PAD_TRIGGER_RUMBLE", "PAD_SDL_RUMBLE",
     "PAD_NO_SDL", "PAD_NO_KEYBOARD", "PS3_VERBOSE",
     "GT5P_VBLANK_HZ", "SPURS_LANE_PIN", "SPURS_JL_SPU3", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_STARTUP", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "PAD_SKIP_MOVIE", "RSX_SHADER_INTERP",
@@ -225,7 +225,7 @@ bool gt5p_player_name_ok(const std::string& v)
 bool known_key(std::string_view section, std::string_view key)
 {
     static const struct { const char* section; const char* key; } kKnown[] = {
-        {"video", "resolution"},     {"video", "msaa"},           {"video", "dlss"}, {"video", "aspect"},
+        {"video", "resolution"},     {"video", "msaa"},           {"video", "dlss"}, {"video", "frame_gen"}, {"video", "aspect"},
         {"video", "window"}, {"video", "shader_compiler"},
         {"video", "vsync"},          {"video", "shader_cache"},
         {"video", "shader_indicator"}, {"video", "preload_indicator"}, {"video", "shader_precompile"}, {"video", "shader_warmup"}, {"video", "shader_warmup_before_start"}, {"video", "pipeline_async"}, {"video", "race_preload"}, {"video", "shader_interp"},
@@ -308,6 +308,17 @@ int dlss_code(const char* v)
     return -1;
 }
 
+const char* const kFgNames[] = { "off", "2x", "3x", "4x" };
+int fg_code(const char* v)
+{
+    if (!v || !*v) return -1;
+    if (!_stricmp(v, "off") || !strcmp(v, "0")) return 0;
+    if (!_stricmp(v, "2x") || !strcmp(v, "1") || !strcmp(v, "2")) return 1;
+    if (!_stricmp(v, "3x") || !strcmp(v, "3")) return 2;
+    if (!_stricmp(v, "4x") || !strcmp(v, "4")) return 3;
+    return -1;
+}
+
 void parse_into(const toml::table& tbl, Gt5pSettings& s)
 {
     report_unknown_keys(tbl);
@@ -323,6 +334,12 @@ void parse_into(const toml::table& tbl, Gt5pSettings& s)
         const int c = v ? dlss_code(v->c_str()) : -1;
         if (c >= 0) s.dlss_mode = c;
         else warn("video.dlss must be \"off\", \"dlaa\", \"quality\", \"balanced\", \"performance\" or \"ultra\"; keeping the default");
+    }
+    if (auto n = tbl["video"]["frame_gen"]) {
+        const auto v = n.value<std::string>();
+        const int c = v ? fg_code(v->c_str()) : -1;
+        if (c >= 0) s.frame_gen = c;
+        else warn("video.frame_gen must be \"off\", \"2x\", \"3x\" or \"4x\"; keeping the default");
     }
     if (auto n = tbl["video"]["aspect"]) {
         const auto v = n.value<std::string>();
@@ -420,6 +437,7 @@ void apply_env(const Gt5pSettings& s)
     snprintf(buf, sizeof buf, "%d", s.msaa);
     set_default_env("RSX_MSAA", buf);
     if (s.dlss_mode > 0 && s.dlss_mode < 6) set_default_env("RSX_AA", kDlssEnv[s.dlss_mode]);
+    if (s.frame_gen > 0 && s.frame_gen < 4) set_default_env("RSX_FG", kFgNames[s.frame_gen]);
     if (s.ultrawide) set_default_env("GT5P_ULTRAWIDE", "1");
     if (s.borderless) set_default_env("RSX_WINDOW_MODE", "borderless");
     set_default_env("RSX_PRESENT_SYNC", s.vsync ? "1" : "0");
@@ -497,6 +515,10 @@ void reflect_env(Gt5pSettings& s)
         if (c >= 0) s.dlss_mode = c;
     } else if (const char* d = getenv("RSX_DLAA"); d && d[0] == '1') {
         s.dlss_mode = 1;
+    }
+    if (const char* e = getenv("RSX_FG")) {
+        const int c = fg_code(e);
+        if (c >= 0) s.frame_gen = c;
     }
     if (const char* e = getenv("RSX_PRESENT_SYNC")) s.vsync = atoi(e) != 0;   /* as the backend reads it */
     { const char* e = getenv("GT5P_ULTRAWIDE"); s.ultrawide = e && e[0] && e[0] != '0'; }
@@ -640,6 +662,9 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "# NVIDIA DLAA / DLSS Super Resolution (RTX GPU + pt5_upscale_dlss.dll + nvngx_dlss.dll):\n"
          "# \"off\", \"dlaa\", \"quality\", \"balanced\", \"performance\" or \"ultra\". [RSX_AA]\n"
          "dlss = \"" << kDlssNames[s.dlss_mode >= 0 && s.dlss_mode < 6 ? s.dlss_mode : 0] << "\"\n"
+         "# NVIDIA DLSS Frame Generation (RTX 40/50 + nvngx_dlssg.dll + HAGS):\n"
+         "# \"off\", \"2x\", \"3x\" or \"4x\". [RSX_FG]\n"
+         "frame_gen = \"" << kFgNames[s.frame_gen >= 0 && s.frame_gen < 4 ? s.frame_gen : 0] << "\"\n"
          "# Wait for the monitor's refresh when showing a frame. false can tear,\n"
          "# but never holds the game back. [RSX_PRESENT_SYNC]\n"
          "vsync = " << (s.vsync ? "true" : "false") << "\n"

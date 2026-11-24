@@ -77,6 +77,7 @@ void wheel_host_set_ffb(int gain, int invert, int spring, int min_force);   /* w
 void wheel_host_set_map(const char* steer, const char* pedals, const char* buttons); /* wheel_host_win.c */
 void rsx_d3d12_set_present_sync(int interval);  /* rsx_d3d12_backend.c */
 void rsx_d3d12_set_dlss_mode(int mode);         /* rsx_d3d12_backend.c */
+void rsx_d3d12_set_fg_mode(int mode);           /* rsx_d3d12_backend.c */
 void gt5p_shader_indicator_enable(int on);      /* gt5p_shaderbusy.cpp */
 void gt5p_preload_indicator_enable(int on);
 extern void (*g_pad_screen_hook)(const char*);  /* cellPad.c: every file the title opens */
@@ -345,6 +346,14 @@ const std::vector<Item>& items()
           [](const UiSettings& s) { return s.dlss_mode; },
           [](UiSettings& s, int v) { s.dlss_mode = v; },
           [](int v) { rsx_d3d12_set_dlss_mode(v); } },
+        { L"VIDEO", L"NVIDIA Frame Generation",
+          L"AI frame generation on NVIDIA RTX 40/50 GPUs (requires pt5_upscale_dlss.dll, "
+          L"nvngx_dlssg.dll, and Windows Hardware-Accelerated GPU Scheduling). 2x works on RTX 40+; "
+          L"3x/4x clamp to your GPU's limit. Applies live.",
+          "RSX_FG", { {0, L"Off"}, {1, L"2x"}, {2, L"3x"}, {3, L"4x"} },
+          [](const UiSettings& s) { return s.frame_gen; },
+          [](UiSettings& s, int v) { s.frame_gen = v; },
+          [](int v) { rsx_d3d12_set_fg_mode(v); } },
         { L"VIDEO", L"Vsync",
           L"Wait for the monitor's refresh when showing a frame. Off can tear, but never holds "
           L"the game back.",

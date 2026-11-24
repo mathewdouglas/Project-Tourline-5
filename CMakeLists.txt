@@ -651,12 +651,18 @@ if(WIN32)
         target_compile_options(pt5_upscale_dlss PRIVATE /EHsc /utf-8)
         target_link_libraries(pt5_upscale_dlss PRIVATE
             "${GT5P_DLSS_DIR}/lib/Windows_x86_64/x64/nvsdk_ngx_d.lib"
-            d3d12)
+            d3d12 gdi32)
         if(EXISTS "${GT5P_DLSS_DIR}/lib/Windows_x86_64/rel/nvngx_dlss.dll")
             add_custom_command(TARGET pt5_upscale_dlss POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${GT5P_DLSS_DIR}/lib/Windows_x86_64/rel/nvngx_dlss.dll"
                     "$<TARGET_FILE_DIR:pt5_upscale_dlss>/nvngx_dlss.dll")
+        endif()
+        if(EXISTS "${GT5P_DLSS_DIR}/lib/Windows_x86_64/rel/nvngx_dlssg.dll")
+            add_custom_command(TARGET pt5_upscale_dlss POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${GT5P_DLSS_DIR}/lib/Windows_x86_64/rel/nvngx_dlssg.dll"
+                    "$<TARGET_FILE_DIR:pt5_upscale_dlss>/nvngx_dlssg.dll")
         endif()
     endif()
     # SDL2.dll is loaded at run time, if present, to read controllers XInput
