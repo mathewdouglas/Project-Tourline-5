@@ -76,6 +76,7 @@ int  wheel_host_raw(WheelRawUi* out);           /* wheel_host_win.c */
 void wheel_host_set_ffb(int gain, int invert, int spring, int min_force);   /* wheel_host_win.c */
 void wheel_host_set_map(const char* steer, const char* pedals, const char* buttons); /* wheel_host_win.c */
 void rsx_d3d12_set_present_sync(int interval);  /* rsx_d3d12_backend.c */
+void rsx_d3d12_set_dlss_mode(int mode);         /* rsx_d3d12_backend.c */
 void gt5p_shader_indicator_enable(int on);      /* gt5p_shaderbusy.cpp */
 void gt5p_preload_indicator_enable(int on);
 extern void (*g_pad_screen_hook)(const char*);  /* cellPad.c: every file the title opens */
@@ -339,10 +340,11 @@ const std::vector<Item>& items()
         { L"VIDEO", L"NVIDIA DLSS / DLAA",
           L"AI anti-aliasing (DLAA) or Super Resolution upscaling on NVIDIA RTX GPUs (requires "
           L"pt5_upscale_dlss.dll and nvngx_dlss.dll; falls back cleanly otherwise). Replaces MSAA "
-          L"on the 3D scene while keeping the HUD at full resolution. Takes effect after a restart.",
+          L"on the 3D scene while keeping the HUD at full resolution. Applies live.",
           "RSX_AA", { {0, L"Off"}, {1, L"DLAA (native)"}, {2, L"DLSS Quality"}, {3, L"DLSS Balanced"}, {4, L"DLSS Performance"}, {5, L"DLSS Ultra Perf"} },
           [](const UiSettings& s) { return s.dlss_mode; },
-          [](UiSettings& s, int v) { s.dlss_mode = v; }, nullptr },
+          [](UiSettings& s, int v) { s.dlss_mode = v; },
+          [](int v) { rsx_d3d12_set_dlss_mode(v); } },
         { L"VIDEO", L"Vsync",
           L"Wait for the monitor's refresh when showing a frame. Off can tear, but never holds "
           L"the game back.",
