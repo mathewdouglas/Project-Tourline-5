@@ -114,3 +114,30 @@ subprocess.run(['cmake','-DPT5_ENGINE='+str(secondary/'gt5_211.exe'),'-DPT5_TARG
 metadata=(cmake_stage/'pt5-release.ini').read_text()
 assert '[BCUS98114-v104]' in metadata and '[BCUS98114-v211]' in metadata
 print('PASS: source staging preserves declarations for both engines')
+
+# Optional DLSS/DLSS-G plug-in: packages rel/ DLLs + license, refuses mismatched (e.g. dev/) DLLs.
+dlss_build = work/'dlss-build'; dlss_build.mkdir()
+dlss_deps  = work/'dlss-deps'
+dlss_rel   = dlss_deps/'dlss/lib/Windows_x86_64/rel'; dlss_rel.mkdir(parents=True)
+(dlss_deps/'dlss/LICENSE.txt').write_text('NVIDIA RTX SDKs LICENSE (synthetic)\n', encoding='utf-8')
+pe_sr = bytes(pe) + b'SR-REL'; pe_fg = bytes(pe) + b'FG-REL'; pe_pl = bytes(pe) + b'PLUGIN'
+(dlss_build/'pt5_upscale_dlss.dll').write_bytes(pe_pl)
+(dlss_build/'nvngx_dlss.dll').write_bytes(pe_sr); (dlss_rel/'nvngx_dlss.dll').write_bytes(pe_sr)
+(dlss_build/'nvngx_dlssg.dll').write_bytes(pe_fg); (dlss_rel/'nvngx_dlssg.dll').write_bytes(pe_fg)
+dfiles, dgen = {}, {}
+package.collect_dlss(dlss_build, dlss_deps, dfiles, dgen)
+assert set(dfiles) == {'pt5_upscale_dlss.dll', 'nvngx_dlss.dll', 'nvngx_dlssg.dll', 'licenses/NVIDIA-DLSS-LICENSE.txt'}
+assert 'licenses/NVIDIA-DLSS-NOTICE.txt' in dgen and 'nvngx_dlssg.dll' in dgen['licenses/NVIDIA-DLSS-NOTICE.txt']
+# Mismatched nvngx_dlss.dll (e.g. dev/ DLL) must be refused.
+(dlss_build/'nvngx_dlss.dll').write_bytes(bytes(pe) + b'SR-DEV')
+try:
+    package.collect_dlss(dlss_build, dlss_deps, {}, {})
+    raise AssertionError('Expected mismatch refusal for nvngx_dlss.dll')
+except ValueError:
+    pass
+# Absent plug-in is cleanly skipped.
+empty_build = work/'no-dlss'; empty_build.mkdir()
+efiles, egen = {}, {}
+package.collect_dlss(empty_build, dlss_deps, efiles, egen)
+assert not efiles and not egen
+print('PASS: optional DLSS/DLSS-G plug-in packaging, rel/ hash verification, and clean skip when absent')

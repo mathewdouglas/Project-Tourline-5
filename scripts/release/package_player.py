@@ -71,6 +71,17 @@ you can modify the library and rebuild the program (README, "Building from
 source").
 '''
 
+DLSS_NOTICE = '''NVIDIA DLSS / DLSS Frame Generation
+===================================
+
+pt5_upscale_dlss.dll is an optional dynamic plug-in built from this port's
+source (src/pt5_upscale_dlss.cpp) that bridges the renderer to NVIDIA NGX.
+{dlss_bins} from the NVIDIA RTX / DLSS SDK, distributed under the NVIDIA RTX
+SDKs License (NVIDIA-DLSS-LICENSE.txt). They are NVIDIA's and are not covered
+by this port's licence. Removing them disables DLSS/DLAA/Frame Generation
+cleanly; the port continues to run with native MSAA.
+'''
+
 
 def sha(path):
     h = hashlib.sha256()
@@ -132,6 +143,31 @@ def recomplauncher_manifest():
     return path
 
 
+def collect_dlss(build, deps, files, generated):
+    """Add the optional NVIDIA DLSS/DLSS-G plug-in and release DLLs when built."""
+    plugin = build / 'pt5_upscale_dlss.dll'
+    if not plugin.is_file():
+        return
+    dlss_rel = deps / 'dlss/lib/Windows_x86_64/rel'
+    files['pt5_upscale_dlss.dll'] = pe_x64(plugin)
+    sr = pe_x64(build / 'nvngx_dlss.dll')
+    if sha(sr) != sha(regular(dlss_rel / 'nvngx_dlss.dll')):
+        raise ValueError(f'nvngx_dlss.dll beside the engine differs from {dlss_rel / "nvngx_dlss.dll"}')
+    files['nvngx_dlss.dll'] = sr
+    has_fg = False
+    fg_path = build / 'nvngx_dlssg.dll'
+    if fg_path.is_file():
+        fg = pe_x64(fg_path)
+        if sha(fg) != sha(regular(dlss_rel / 'nvngx_dlssg.dll')):
+            raise ValueError(f'nvngx_dlssg.dll beside the engine differs from {dlss_rel / "nvngx_dlssg.dll"}')
+        files['nvngx_dlssg.dll'] = fg
+        has_fg = True
+    files['licenses/NVIDIA-DLSS-LICENSE.txt'] = text(deps / 'dlss/LICENSE.txt')
+    generated['licenses/NVIDIA-DLSS-NOTICE.txt'] = DLSS_NOTICE.format(
+        dlss_bins=('nvngx_dlss.dll and nvngx_dlssg.dll are unmodified release redistributable binaries'
+                   if has_fg else 'nvngx_dlss.dll is an unmodified release redistributable binary'))
+
+
 def collect(args, version):
     build = args.build_dir.resolve()
     cache = regular(build / 'CMakeCache.txt').read_text(encoding='utf-8', errors='replace')
@@ -181,6 +217,7 @@ def collect(args, version):
     generated = {lic + 'FFmpeg-SOURCE.txt': FFMPEG_SOURCE.format(**ffmpeg_pin()),
                  lic + 'MSVC-NOTICE.txt': MSVC_NOTICE.format(folder=vc.name if vc.name else str(vc)),
                  lic + 'at3_standalone-NOTICE.txt': AT3_NOTICE.format(version=version)}
+    collect_dlss(build, deps, files, generated)
     # Glyph art (Kenney, CC0) and its manifest: explicit extensions only.
     glyphs = ROOT / 'assets/glyphs'
     for p in sorted(glyphs.rglob('*')):
@@ -259,6 +296,8 @@ def main():
                f'elf_sha256={sha(elf)}\nengine_sha256={sha(files[ENGINE])}\n')
     if args.pgo_profile:
         release += f'pgo_profile_sha256={sha(regular(args.pgo_profile))}\n'
+    if 'pt5_upscale_dlss.dll' in files:
+        release += f'dlss_plugin_sha256={sha(files["pt5_upscale_dlss.dll"])}\n'
     # volmap=1: the engine serves virtual-install records (launcher/volmap.h).
     generated['pt5-release.ini'] = f'[game]\ntarget={TARGET}\nengine_sha256={sha(files[ENGINE])}\nvolmap=1\n\n[{TARGET}]\nengine_sha256={sha(files[ENGINE])}\nvolmap=1\n' + additional
     release += additional

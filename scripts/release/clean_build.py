@@ -87,6 +87,10 @@ def main():
     profile_choice.add_argument('--profile', type=Path,
                     help='a merged PGO profile (.profdata); defaults to the private checkout profile for 01.04')
     profile_choice.add_argument('--no-profile', action='store_true', help='explicitly build without PGO')
+    dlss_choice = ap.add_mutually_exclusive_group()
+    dlss_choice.add_argument('--dlss-sdk', type=Path,
+                    help='optional NVIDIA DLSS SDK folder (defaults to <private>/third_party/dlss when present)')
+    dlss_choice.add_argument('--no-dlss', action='store_true', help='explicitly build without the DLSS/FG plug-in')
     ap.add_argument('--profile-max-stale', type=int, default=0,
                     help='functions whose profile counts may be lost to a changed body (default 0)')
     ap.add_argument('--profile-max-missing', type=int, default=2000,
@@ -170,6 +174,26 @@ def main():
     run(py, 'scripts/get_dxc.py', cwd=src, env=env)
     for script in ('get_ffmpeg.ps1', 'get_sdl2.ps1'):
         run('powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', f'scripts/{script}', cwd=src, env=env)
+    dlss_sdk = None
+    if not args.no_dlss:
+        cand = args.dlss_sdk.resolve() if args.dlss_sdk else (private / 'third_party/dlss')
+        if (cand / 'include/nvsdk_ngx.h').is_file() and (cand / 'lib/Windows_x86_64/x64/nvsdk_ngx_d.lib').is_file():
+            dlss_sdk = cand
+        elif args.dlss_sdk:
+            raise ValueError(f'--dlss-sdk is missing NGX headers or nvsdk_ngx_d.lib: {cand}')
+    if dlss_sdk:
+        dlss_dst = src / 'third_party/dlss'
+        for hdr in sorted((dlss_sdk / 'include').glob('*.h')):
+            copy(hdr, dlss_dst / 'include' / hdr.name)
+        copy(dlss_sdk / 'lib/Windows_x86_64/x64/nvsdk_ngx_d.lib', dlss_dst / 'lib/Windows_x86_64/x64/nvsdk_ngx_d.lib')
+        copy(dlss_sdk / 'lib/Windows_x86_64/rel/nvngx_dlss.dll', dlss_dst / 'lib/Windows_x86_64/rel/nvngx_dlss.dll')
+        has_fg = (dlss_sdk / 'lib/Windows_x86_64/rel/nvngx_dlssg.dll').is_file()
+        if has_fg:
+            copy(dlss_sdk / 'lib/Windows_x86_64/rel/nvngx_dlssg.dll', dlss_dst / 'lib/Windows_x86_64/rel/nvngx_dlssg.dll')
+        copy(dlss_sdk / 'LICENSE.txt', dlss_dst / 'LICENSE.txt')
+        print(f'DLSS SDK: {dlss_sdk} (SR{" + FG" if has_fg else ""})', flush=True)
+    else:
+        print('DLSS SDK: none (building without pt5_upscale_dlss.dll)', flush=True)
 
     tools = work / 'ps3recomp/tools'
     target_config = json.loads((src / 'config/targets.json').read_text())[args.target]
