@@ -4,6 +4,23 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.3.0 DLSS steps 5 & 6: DLAA, DLSS Super Resolution, mip-bias & F1 settings (`release/v0.3.0`, 2026-11-24)
+
+- **Plug-in ABI & standalone NGX D3D12 plug-in (`libs/video/rsx_upscale_plugin.h`, `src/pt5_upscale_dlss.cpp`, `CMakeLists.txt`):**
+  - Defined a pure-C versioned ABI (`PT5_UPSCALE_ABI_VERSION = 1`) loaded dynamically by `rsx_d3d12_backend.c` via `LoadLibraryW` (`pt5_upscale_dlss.dll`), keeping `gt5.exe` free of any compile-time or link-time dependency on NVIDIA's SDK.
+  - Built `pt5_upscale_dlss.dll` (~54 KB) against NVIDIA DLSS SDK `v310.9.16` (`third_party/dlss`, gitignored) using `NVSDK_NGX_D3D12_Init_with_ProjectID` (`NGX_ENGINE_TYPE_CUSTOM`), capability/driver checks, `NGX_D3D12_CREATE_DLSS_EXT`, and `NGX_D3D12_EVALUATE_DLSS_EXT`.
+  - Reviewed `NVIDIA/DLSS` `LICENSE.txt`: §1(c)/§2(a)/§2(c)/§4(e) forbid committing SDK files to an open-source repo; Option 1 (ship our small `pt5_upscale_dlss.dll` + notice, have the launcher fetch `nvngx_dlss.dll` on demand from pinned NVIDIA release with SHA-256 + Authenticode check, or user-supplied) is documented in [plan-dlss.md](plan-dlss.md).
+- **Step 5 (DLAA, `RSX_AA=dlaa` / `RSX_DLAA=1`, off by default) & Step 6 (DLSS Super Resolution, `RSX_AA=dlss_q|dlss_b|dlss_p|dlss_u|dlss_c`, `RSX_DLSS_SCALE`, `RSX_DLSS_PRESET`, `RSX_DLSS_MIP_BIAS`):**
+  - Auto-enables `RSX_MV=2`, Halton(2,3) jitter (`ceil(8 / scale^2)` phases: 8 for DLAA, 18 for Quality, 24 for Balanced, 32 for Perf, 72 for Ultra Perf), and single-sampled scene targets (`rsx_msaa_samples() = 1`) when active.
+  - Evaluates NGX DLSS on scene color (`r->res`), captured depth (`s_depth_copy` or own-depth `s_mv_depth` for scaled DLSS targets), and per-object+camera motion vectors (`s_mv_tex`) at the scene/HUD boundary draw (`d == FR->mv.disp`), writing to a UAV output target (`s_dlss.out_res`) and substituting it into unit 0 so GT5's resolve/bloom/HUD composite runs at full native display resolution.
+  - Applies `log2(render / output)` `MipLODBias` on filtered static samplers (`s8..s15`) when rendering below output size; restores `SetDescriptorHeaps`, root signature, and `D3D_SD_RESET()` after NGX evaluate.
+  - Clean automatic fallback (`s_dlss_disabled = 1`) when `pt5_upscale_dlss.dll` or `nvngx_dlss.dll` is absent, GPU is non-RTX, driver is too old, or after 3 consecutive eval failures.
+  - Exposed **NVIDIA DLSS / DLAA** in `F1 > VIDEO` (`src/gt5p_settings*`, `[video] dlss` in `gt5p_settings.toml`, off by default).
+- **Live verification (`BCUS98114-v104`, RTX 4060, unprofiled non-PGO `gt5.exe`, `RSX_CMD_CHECK=1`):**
+  - **720p Native (4x MSAA, 30 s HSR):** `55.3 FPS`, median `17.5 ms`, p99 `25.9 ms`, max `39.2 ms`, late `18.4%`.
+  - **720p DLAA (`RSX_AA=dlaa`, 30 s HSR):** **`56.9 FPS`**, median `17.0 ms`, p99 `24.9 ms`, max `33.8 ms`, late `12.5%`, `0` `RSX_CMD_CHECK` reports, `0` `PSO FAIL`. `RSX_CAP` backbuffers (`1280x720`) verified artifact-free with crisp HUD and rear mirror.
+  - **1080p DLSS Quality (`GT5P_RESOLUTION=1080 RSX_AA=dlss_q`, `1280x720 -> 1920x1080`, 18 Halton phases, `-0.585` mip bias, 20 s HSR):** **`56.0 FPS`**, median `17.0 ms`, late `10.5%`, `0` `RSX_CMD_CHECK` reports, `0` `PSO FAIL`. `RSX_CAP` backbuffer (`1920x1080`) verified crisp upscaled 3D scene and native 1080p HUD.
+
 ## Release 0.2.1 built & verified (2026-11-24)
 
 Tag `v0.2.1` = `06bc587` (branch `fix/v0.2.1`): bug fixes (`#76` cockpit near-plane clipping, `#74` long-session PPU TLS recycling, `#70` 32K pipeline cache, `#80` Moza R3 256-button / aux USB shifter / button D-pad, `#79` 2.11 Options hint), RPCS3 game-patch support (`#77` live Looser Chase Camera on 01.04 & 02.11, `#53` live Unlock FPS on 02.11), and RSX/SPU fast paths (`GetWriteWatch`, `GCM_FIFO_BURST`, SSE2 `shlqbii`/`rotqbii`, `GCM_FAST_BLIT`, PSO reserve).

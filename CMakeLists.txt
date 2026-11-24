@@ -637,6 +637,28 @@ if(WIN32)
                 "$<TARGET_FILE_DIR:gt5p>/licenses/dxc")
         add_dependencies(gt5p gt5p_dxc)
     endif()
+    # Optional NVIDIA DLSS/DLAA plug-in (pt5_upscale_dlss.dll). Built only when
+    # the NVIDIA DLSS SDK is present under third_party/dlss (gitignored); gt5.exe
+    # itself has zero compile-time or link-time dependency on the SDK and loads
+    # the plug-in dynamically at run time when RSX_AA is enabled.
+    set(GT5P_DLSS_DIR "${CMAKE_SOURCE_DIR}/third_party/dlss")
+    if(EXISTS "${GT5P_DLSS_DIR}/include/nvsdk_ngx.h" AND EXISTS "${GT5P_DLSS_DIR}/lib/Windows_x86_64/x64/nvsdk_ngx_d.lib")
+        add_library(pt5_upscale_dlss SHARED src/pt5_upscale_dlss.cpp)
+        target_include_directories(pt5_upscale_dlss PRIVATE
+            "${GT5P_DLSS_DIR}/include"
+            "${PS3RECOMP_DIR}/libs/video")
+        target_compile_definitions(pt5_upscale_dlss PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_compile_options(pt5_upscale_dlss PRIVATE /EHsc /utf-8)
+        target_link_libraries(pt5_upscale_dlss PRIVATE
+            "${GT5P_DLSS_DIR}/lib/Windows_x86_64/x64/nvsdk_ngx_d.lib"
+            d3d12)
+        if(EXISTS "${GT5P_DLSS_DIR}/lib/Windows_x86_64/rel/nvngx_dlss.dll")
+            add_custom_command(TARGET pt5_upscale_dlss POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${GT5P_DLSS_DIR}/lib/Windows_x86_64/rel/nvngx_dlss.dll"
+                    "$<TARGET_FILE_DIR:pt5_upscale_dlss>/nvngx_dlss.dll")
+        endif()
+    endif()
     # SDL2.dll is loaded at run time, if present, to read controllers XInput
     # does not know. scripts/get_sdl2.ps1 fetches it into third_party/.
     if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/SDL2.dll")

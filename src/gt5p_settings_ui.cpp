@@ -336,6 +336,13 @@ const std::vector<Item>& items()
           "RSX_MSAA", { {1, L"Off"}, {2, L"2x"}, {4, L"4x"}, {8, L"8x"} },
           [](const UiSettings& s) { return s.msaa; },
           [](UiSettings& s, int v) { s.msaa = v; }, nullptr },
+        { L"VIDEO", L"NVIDIA DLSS / DLAA",
+          L"AI anti-aliasing (DLAA) or Super Resolution upscaling on NVIDIA RTX GPUs (requires "
+          L"pt5_upscale_dlss.dll and nvngx_dlss.dll; falls back cleanly otherwise). Replaces MSAA "
+          L"on the 3D scene while keeping the HUD at full resolution. Takes effect after a restart.",
+          "RSX_AA", { {0, L"Off"}, {1, L"DLAA (native)"}, {2, L"DLSS Quality"}, {3, L"DLSS Balanced"}, {4, L"DLSS Performance"}, {5, L"DLSS Ultra Perf"} },
+          [](const UiSettings& s) { return s.dlss_mode; },
+          [](UiSettings& s, int v) { s.dlss_mode = v; }, nullptr },
         { L"VIDEO", L"Vsync",
           L"Wait for the monitor's refresh when showing a frame. Off can tear, but never holds "
           L"the game back.",

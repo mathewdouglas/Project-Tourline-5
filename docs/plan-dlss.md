@@ -1,21 +1,30 @@
 # Plan: NVIDIA DLSS / DLAA (0.2.0), frame generation later
 
-Status (2026-11-18): step 1 is done for 01.04 races at 720p and 1080p, and
-step 2's measurement too: `c[0..3] * inverse(c[4..6])` is one view-projection
-per viewport for about 97% of scene draws, the rear mirror is a second
-viewport in the scene target, and world matrices are in world space
-(progress-gt5.md, "DLSS step 2 groundwork"). Step 2's camera motion vectors
-work for the main view (`RSX_MV`; the check view's error is lowest at the
-vectors' own scale); the rear mirror is open and left to step 3. Step 3's
-per-object vectors work too (`RSX_MV=2`: no bad frames in 122 checked, no
-measurable frame-time cost; progress-gt5.md, "DLSS step 3"). Step 4's
-jitter works (`RSX_JITTER=<n>`; +x right, +y down, checked by shot shifts;
-progress-gt5.md, "DLSS step 4"); the LOD bias moved to step 6. Step 1 detail
-(`RSX_SCENE_LOG`, see "0.2.0 DLSS step 1" in [progress-gt5.md](progress-gt5.md)).
-GT5's boundary is its own resolve draw: unit 0 is the multisampled scene
-(4 samples at 720p, 2 across at 1080p), units 1-3 the bloom chain. Every
-other statement about GT5's rendering below is a hypothesis until a step that
-measures it says otherwise.
+Status (2026-11-24): steps 1–6 are implemented and verified live on 01.04
+(`BCUS98114-v104`) on an NVIDIA GeForce RTX 4060:
+- Step 1 (`RSX_SCENE_LOG`), step 2 (`RSX_MV=1`), step 3 (`RSX_MV=2`), and step 4
+  (`RSX_JITTER=<n>`) are complete and merged on `release/v0.3.0`.
+- Step 5 (**DLAA**, `RSX_AA=dlaa` / `RSX_DLAA=1`) is complete: pure-C versioned
+  plug-in ABI (`libs/video/rsx_upscale_plugin.h`), standalone NGX/DLSS D3D12
+  plug-in (`src/pt5_upscale_dlss.cpp` -> `pt5_upscale_dlss.dll`, optional when
+  `third_party/dlss` is present, zero link dependency in `gt5.exe`), single-sample
+  scene target when DLAA/DLSS is active, evaluation at the scene/HUD boundary
+  draw before HUD composite, automatic fallback after missing DLL / non-RTX /
+  3 consecutive eval failures. Live HSR 720p (same non-PGO exe, `RSX_CMD_CHECK=1`):
+  DLAA `56.9 FPS` (12.5% late, median `17.0 ms`) vs native 4x MSAA `55.3 FPS`
+  (18.4% late, median `17.5 ms`), `0` `RSX_CMD_CHECK` reports, crisp HUD.
+- Step 6 (**DLSS Super Resolution**, `RSX_AA=dlss_q|dlss_b|dlss_p|dlss_u|dlss_c`,
+  `RSX_DLSS_SCALE`, `RSX_DLSS_PRESET`, `RSX_DLSS_MIP_BIAS`) is complete: renders
+  the 3D scene and its own `R24G8_TYPELESS` depth buffer (`s_mv_depth`) and
+  motion vectors at the scaled render resolution, scales Halton phases to
+  `ceil(8 / scale^2)`, applies `log2(render / output)` `MipLODBias` on filtered
+  static samplers (`s8..s15`), upscales to full display resolution before the
+  HUD composite, and exposes **NVIDIA DLSS / DLAA** in F1 > VIDEO (`[video] dlss`
+  in `gt5p_settings.toml`). Live HSR 1080p Quality (`1280x720 -> 1920x1080`):
+  `56.0 FPS` (10.5% late, median `17.0 ms`), `0` `RSX_CMD_CHECK` reports, crisp
+  native 1080p HUD.
+- Remaining: Step 7 (launcher fetch of `nvngx_dlss.dll`, packaging, VirusTotal)
+  and Step 8 (full 01.04/2.11 parity acceptance).
 
 ## Goal
 
@@ -137,11 +146,26 @@ and is not committed. Options:
    with the notices it asks for.
 
 The other port builds the plug-in on the player's PC; our players have no
-compiler, so that does not fit. **Read NVIDIA's DLSS SDK licence before
-choosing** (not done yet). Whatever ships goes through the VirusTotal check
-(`docs/release-av.md`). The game must run unchanged with no plug-in: it is
-loaded at run time and every DLSS choice is greyed out with the reason when
-it is missing, the GPU is not RTX, or the driver is too old.
+compiler, so that does not fit. **NVIDIA DLSS SDK licence review (2026-11-24,
+`NVIDIA/DLSS` `v310.9.16` `LICENSE.txt`):**
+- §1(c) permits distributing SDK materials only as incorporated in object code
+  format into a software application that provides material additional
+  functionality (§2(a)), subject to terms at least as protective (§2(c)) and
+  attribution (§7.1(b)).
+- §4(e) prohibits causing the SDK to become subject to an open-source licence,
+  so SDK headers, `nvsdk_ngx_*.lib`, and `nvngx_dlss.dll` must **never** be
+  committed to the git repository (kept in gitignored `third_party/dlss`).
+- Supplement §4 notification applies only to *commercial* releases.
+- **Recommended path (Option 1):** ship our small prebuilt `pt5_upscale_dlss.dll`
+  (~54 KB, linked with `nvsdk_ngx_d.lib`, accompanied by
+  `NVIDIA-DLSS-LICENSE.txt` notice) and have the launcher fetch
+  `nvngx_dlss.dll` (~59 MB) from the pinned `NVIDIA/DLSS` GitHub release tag on
+  demand, verifying SHA-256 and NVIDIA Authenticode signature (or allow the user
+  to drop `nvngx_dlss.dll` beside the executable). This avoids bloating the base
+  release ZIP by ~59 MB and avoids hosting NVIDIA's standalone runtime DLL on
+  our GitHub Releases. Whatever ships goes through the VirusTotal check
+  (`docs/release-av.md`). The game runs unchanged with no plug-in: it is loaded
+  at run time and falls back cleanly when missing, non-RTX, or driver too old.
 
 ## Steps
 
