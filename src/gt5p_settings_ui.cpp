@@ -1747,6 +1747,7 @@ bool hint_enabled()
 
 volatile int s_in_options;     /* the title's Options screen is up */
 volatile int s_in_race;        /* a race is loaded (RaceRoot until another screen) */
+int s_race_lb_seen;            /* race pause mListBox observed at least once since s_in_race=1 */
 bool s_hint_shown;
 
 /* Which screen the title is on, from the screen scripts (.gpb) it reads.
@@ -1772,7 +1773,12 @@ int screen_role_seen(const char* b)
             const char* role = p + n + 1; const size_t rl = len - n - 1;
             const int race = rl == 4 && !strncmp(role, "race", 4);
             const int options = rl == 7 && !strncmp(role, "options", 7);
+            if (race && !s_in_race) {
+                s_race_lb_seen = 0;
+                fprintf(stderr, "[settings-ui] screen %s -> in_race=1\n", b);
+            }
             s_in_race = race; s_in_options = options;
+            if (!race) s_race_lb_seen = 0;
             if (options) s_opt_word_seen = 0;
             if (s_dbg_screens > 0) fprintf(stderr, "[settings-ui] %llu ms screen label %s (%.*s)%c",
                                            GetTickCount64(), b, (int)rl, role, 10);
@@ -1812,9 +1818,13 @@ void top_menu_poll()
                 const ULONGLONG now = GetTickCount64();
                 if (now >= next_race_check) {
                     next_race_check = now + 1000;
-                    if (race_menu_state() == kRaceUnknown) {
-                        if (s_dbg_screens > 0) fprintf(stderr, "[settings-ui] %llu ms top menu ended race (word %08X)%c", now, addr, 10);
+                    const int st = race_menu_state();
+                    if (st != kRaceUnknown) {
+                        s_race_lb_seen = 1;
+                    } else if (s_race_lb_seen) {
+                        fprintf(stderr, "[settings-ui] top menu ended race (word %08X=%X)\n", addr, value);
                         s_in_race = 0;
+                        s_race_lb_seen = 0;
                     }
                 }
             }
