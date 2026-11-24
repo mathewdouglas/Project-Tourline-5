@@ -4,6 +4,16 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.3.0 built & verified (2026-11-25)
+
+Tag `v0.3.0` = `5bb29d4` (branch `release/v0.3.0`): NVIDIA DLSS Super Resolution & DLAA (`pt5_upscale_dlss.dll` + `rel/nvngx_dlss.dll`, Preset K), direct-NGX NVIDIA DLSS Frame Generation (`Off/2x/3x/4x`, `rel/nvngx_dlssg.dll`, triple buffering, effective FG FPS in F3), Arcade menu / 2D vector font text fix (`#83`), compact 9-tab F1 PC Settings UI with dedicated **PATCHES** tab and live **Accurate Throttle Linearity** (`01.04` & `02.11`), F1 race-pause fix, and upstream `ps3recomp` v0.19.0/v0.20.0 runtime ports.
+Built cleanly under `C:\pt5-release\0.3.0` (refreshed 4-route PGO `be2b822e5443`: `0` stale hash mismatches, `913` without a record). Unified `01.04 + 02.11` ZIP `134` files, SHA-256 `91ebe6ff365462af3325aafa282f2aeabc884e566170990f4ea5b4a7decfda33`.
+
+Packaged 01.04 engine (`gt5.exe`), High Speed Ring 60 s frame test (`RSX_CMD_CHECK=1`):
+- **58.5 FPS** (`5.9%` late, median `16.7 ms`, p99 `24.5 ms`, max `56.3 ms`, `walk 6.43 ms/frame`; steady `299–301` frames/5 s on track).
+
+Antivirus: local Defender `MpCmdRun -Scan -ScanType 3` found `0` threats on the ZIP and extracted folder. VirusTotal scan pending user API key (`scripts/release/vt.py scan C:\pt5-release\0.3.0\final\out\project-tourline-5-v0.3.0-windows-x64.zip`).
+
 ## 0.3.0 upstream `ps3recomp` v0.19.0 / v0.20.0 runtime cherry-picks (`release/v0.3.0`, 2026-11-25)
 
 Ported selected stability, performance, and input improvements from `sp00nznet/ps3recomp` v0.19.0–v0.20.0 into the isolated `release/v0.3.0` runtime (`ps3recomp-dlss`, folded into `patches/ps3recomp-5244db9-local.patch`, single-shot `git apply --check` verified on fresh `5244db9`):
