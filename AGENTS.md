@@ -317,6 +317,17 @@ now populates `vp_ps_hold` and skips PSO creation for `VS_PENDING` when `vp_inte
 genuine `vs_idx == -1` fallback matches the active compiler (`RSX_VP_FALLBACK_DXC=0` old). Test:
 `scripts/test/vp_fallback_pso.py` (WARP). See progress-gt5.md.
 
+**v0.3.0 upstream `ps3recomp` v0.19.0/v0.20.0 runtime ports (`release/v0.3.0`, 2026-11-25).**
+Cherry-picked into the isolated runtime and folded into `patches/ps3recomp-5244db9-local.patch`:
+fair FIFO `lwmutex` handoff (`PR #822`, `ppu_sysprx.cpp`, preserving `PS3_LWM_SLOT_FREE` and `PS3_LWM_FUTEX=0`),
+slotted-VS FP PSOs surviving `vp_gen` bumps (`PR #774`, `rsx_d3d12_backend.c`),
+`rsx_gpu_wait_alive()` so GPU fence waits only give up on `DEVICE_REMOVED` (`PR #764`, `rsx_gpu_wait.h` + `rsx_d3d12_backend.c`),
+SSSE3 16-byte `SPU_LS_VEC` quadword LS load/store (`PR #637`, `spu_context.h`, `-DSPU_LS_VEC=0` rollback),
+Windows host-boot QPC timebase/system time (`PR #788`, `sys_timer.c` + `ppu_sysprx.cpp`),
+positional Nintendo face buttons (`PR #810`, `cellPad.c`, `SDL_GAMECONTROLLER_USE_BUTTON_LABELS=0` in both static and dynamic SDL paths),
+and opt-in `RSX_FP_SAFE_DIV=1` (`PR #601`) and `PS3RECOMP_GCM_SPU_PUT_KICK=1` (`PR #816`).
+Verified with `setup_runtime.py --check`, fresh-`5244db9` `git apply --check`, `sync_slots.py`, `spu_helpers_sse.py`, `tls_reuse.py`, and live HSR smoke test.
+
 **v0.2.1 renderer fixes (`fix/v0.2.1`, 2026-11-24, runtime).** `#76` (cockpit/rear-of-car
 overdraw): `vp_get_fp_pso` and `interp_get_pso` left `DepthClipEnable = FALSE` (`pd = {0}`),
 clamping behind-camera geometry to `z = 0.0`. `rsx_commands` now decodes `NV4097_SET_ZMIN_MAX_CONTROL`

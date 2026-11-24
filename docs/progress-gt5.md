@@ -4,6 +4,21 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.3.0 upstream `ps3recomp` v0.19.0 / v0.20.0 runtime cherry-picks (`release/v0.3.0`, 2026-11-25)
+
+Ported selected stability, performance, and input improvements from `sp00nznet/ps3recomp` v0.19.0–v0.20.0 into the isolated `release/v0.3.0` runtime (`ps3recomp-dlss`, folded into `patches/ps3recomp-5244db9-local.patch`, single-shot `git apply --check` verified on fresh `5244db9`):
+
+- **Fair FIFO `lwmutex` handoff (`PR #822`, `runtime/ppu/ppu_sysprx.cpp`):** Replaced contended `WaitOnAddress` wakeup with a per-slot FIFO waiter queue (`LwmWaiter` + thread-local auto-reset event) that hands ownership directly to the oldest waiter on release without dropping `st` to `0`, preventing unlock/relock starvation while preserving `PS3_LWM_SLOT_FREE` slot reclamation (`lwm_release_slot`) and `PS3_LWM_FUTEX=0` semaphore rollback.
+- **Slotted-VS FP PSO survives `vp_gen` bumps (`PR #774`, `libs/video/rsx_d3d12_backend.c`):** Keyed `VPFPEntry.gen` as `vs_idx < 0 ? s_d3d.vp_gen : 0` across hash lookup (`s_fpi`), `s_fp_pend`, `fplk_key`, linear fallback, `PSOMISSDBG`, and cache store so vertex-program recompiles no longer invalidate slotted-VS fragment pipelines.
+- **GPU fence waits only give up on `DEVICE_REMOVED` (`PR #764`, `libs/video/rsx_gpu_wait.h`, `libs/video/rsx_d3d12_backend.c`):** Added `rsx_gpu_wait_alive()` and wired `fence_wait_alive()` in `wait_for_gpu()` and `move_to_next_frame()`, keeping slow-but-alive GPUs from resetting command allocators/rings prematurely while still invoking `renderer_fail()` immediately on TDR (`GetDeviceRemovedReason != S_OK`).
+- **SSSE3 16-byte quadword LS load/store (`PR #637`, `runtime/spu/spu_context.h`):** Enabled `SPU_LS_VEC` (`_mm_loadu_si128`/`_mm_storeu_si128` + `pshufb` word-swap, `-DSPU_LS_VEC=0` rollback) in `spu_ls_read128`/`spu_ls_write128`, eliminating 4×32-bit store-forwarding stalls on lifted SPU `lqd`/`lqx`/`stqd`/`stqx`.
+- **Windows timebase & system time from host boot (`PR #788`, `runtime/ppu/ppu_sysprx.cpp`, `runtime/syscalls/sys_timer.c`):** Removed per-process QPC anchors from `ps3_system_time_us()` and `ppu_timebase_now()` (overflow-safe split multiply), matching PS3 console-boot uptime and POSIX `CLOCK_MONOTONIC` so boot-time RNG seeds vary across launches.
+- **Positional face buttons on Nintendo pads (`PR #810`, `libs/input/cellPad.c`):** Set `SDL_GAMECONTROLLER_USE_BUTTON_LABELS=0` before `SDL_INIT_GAMECONTROLLER` in both static SDL and dynamic `s_sdl` Windows init paths (`SDL_GAMECONTROLLER_USE_BUTTON_LABELS=1` env var still overrides).
+- **Opt-in FP safe division (`PR #601`, `libs/video/rsx_fp_decompiler.c`):** Added `RSX_FP_SAFE_DIV=1` (default off) guarding `OP_RCP` and `OP_DIV` against zero-division NaNs.
+- **Opt-in SPU `put`-word FIFO kick (`PR #816`, `libs/video/cellGcmSys.c`):** Added `PS3RECOMP_GCM_SPU_PUT_KICK=1` (default off) in `gcm_note_spu_put()` to wake the FIFO walker immediately on SPU DMA writes covering `GCM_CONTROL_GUEST_ADDR`.
+- **Already covered / skipped:** `PR #672` (GT5's `spu_coherency.c` already uses the faster `s_coh_line[32]` mirror array), `PR #811` (unified `rsx_draw_engine.c` only), `PR #817` (requires PPU re-lift; GT5 already has `GCM_FIFO_BURST`/`GCM_WALK_WAKE`).
+- **Verification:** `setup_runtime.py --check`, single-shot `git apply --check` on fresh `5244db9`, `scripts/test/sync_slots.py`, `scripts/test/spu_helpers_sse.py`, `scripts/test/tls_reuse.py`, clean `gt5.exe` + `tourline5.exe` build, and live 30 s HSR race smoke test (`v1920smoke`, unprofiled `gt5.exe`, `RSX_CMD_CHECK=1`: `52.8 FPS`, `1589` frames, `0` errors).
+
 ## 0.3.0 DLSS steps 5 & 6: DLAA, DLSS Super Resolution, mip-bias & F1 settings (`release/v0.3.0`, 2026-11-24)
 
 - **Plug-in ABI & standalone NGX D3D12 plug-in (`libs/video/rsx_upscale_plugin.h`, `src/pt5_upscale_dlss.cpp`, `CMakeLists.txt`):**
