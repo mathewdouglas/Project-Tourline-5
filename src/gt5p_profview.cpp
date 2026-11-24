@@ -28,8 +28,10 @@
 #include "ppu_context.h"
 #include "sys_ppu_thread.h"
 
-/* The GPU's own time for the last frame (rsx_d3d12_backend.c, RSX_GPU_TIME). */
+/* The GPU's own time for the last frame (rsx_d3d12_backend.c, RSX_GPU_TIME)
+ * and active DLSS Frame Generation extra frames per real frame (0 = off). */
 extern "C" volatile double g_rsx_gpu_ms_last;
+extern "C" volatile LONG g_rsx_fg_active_gen;
 
 namespace {
 
@@ -190,8 +192,16 @@ void paint(HDC dc)
         fifo += a.fifo; pres += a.pres; pump += a.pump;
     }
     double avg = cnt ? sum / cnt : 0;
-    text(dc, 8, 6, RGB(255, 255, 255), "%5.1f fps  frame %5.1f avg %5.1f worst  gpu %4.1f ms",
-         cnt ? cnt / (sum > 0 ? sum : 1) : 0.0, avg * 1e3, worst * 1e3, (double)g_rsx_gpu_ms_last);
+    double base_fps = cnt ? cnt / (sum > 0 ? sum : 1) : 0.0;
+    LONG fg_gen = g_rsx_fg_active_gen;
+    if (fg_gen > 0) {
+        double eff_fps = base_fps * (double)(1 + fg_gen);
+        text(dc, 8, 6, RGB(120, 235, 160), "%5.1f fps (%5.1f FG %ldx)  %5.1f avg  gpu %4.1f ms",
+             base_fps, eff_fps, (long)(1 + fg_gen), avg * 1e3, (double)g_rsx_gpu_ms_last);
+    } else {
+        text(dc, 8, 6, RGB(255, 255, 255), "%5.1f fps  frame %5.1f avg %5.1f worst  gpu %4.1f ms",
+             base_fps, avg * 1e3, worst * 1e3, (double)g_rsx_gpu_ms_last);
+    }
     text(dc, 8, 22, RGB(200, 200, 200), "present thread per frame: fifo %4.1f  present %4.1f  pump %4.1f ms",
          cnt ? fifo / cnt * 1e3 : 0, cnt ? pres / cnt * 1e3 : 0, cnt ? pump / cnt * 1e3 : 0);
 
