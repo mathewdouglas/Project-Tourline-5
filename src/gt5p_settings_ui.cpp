@@ -1788,6 +1788,8 @@ int screen_role_seen(const char* b)
  * it returns to the top menu (from Options or a race's exit), so no label
  * can end those screens; this word does (top_menu_word in targets.json,
  * found by GT5P_MEMSNAP and confirmed with GT5P_WATCH). Checked each UI tick. */
+enum { kRaceUnknown = -1, kRaceRunning = 0, kRaceInMenu = 1 };
+int race_menu_state();
 extern "C" uint8_t* vm_base;
 void top_menu_poll()
 {
@@ -1801,8 +1803,21 @@ void top_menu_poll()
     if (on && (s_in_options || s_in_race)) {
         uint32_t w; memcpy(&w, vm_base + addr, 4);
         if (_byteswap_ulong(w) == value) {
-            if (s_dbg_screens > 0) fprintf(stderr, "[settings-ui] %llu ms top menu (word %08X)%c", GetTickCount64(), addr, 10);
-            s_in_options = 0; s_in_race = 0; s_opt_word_seen = 0;
+            if (s_in_options) {
+                if (s_dbg_screens > 0) fprintf(stderr, "[settings-ui] %llu ms top menu (word %08X)%c", GetTickCount64(), addr, 10);
+                s_in_options = 0; s_opt_word_seen = 0;
+            }
+            if (s_in_race) {
+                static ULONGLONG next_race_check = 0;
+                const ULONGLONG now = GetTickCount64();
+                if (now >= next_race_check) {
+                    next_race_check = now + 1000;
+                    if (race_menu_state() == kRaceUnknown) {
+                        if (s_dbg_screens > 0) fprintf(stderr, "[settings-ui] %llu ms top menu ended race (word %08X)%c", now, addr, 10);
+                        s_in_race = 0;
+                    }
+                }
+            }
         }
     }
     /* GT5P_OPTIONS_WORD=<addr>=<value> (hex): a guest word that holds <value>
@@ -2127,7 +2142,6 @@ bool s_release_wait;     /* closed; the title's input waits for all buttons up *
  * 20000000-40000000 when unset. Gran Turismo 5's objects have the same
  * layout and sit near 0x4F000000 (measured with GT5P_MEMSNAP).
  * GT5P_SETTINGS_PAUSE=0: never press Start. */
-enum { kRaceUnknown = -1, kRaceRunning = 0, kRaceInMenu = 1 };
 int race_menu_state()
 {
     static uint32_t vt = 1;
