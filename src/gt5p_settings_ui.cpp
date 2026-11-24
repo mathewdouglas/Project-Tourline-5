@@ -2167,11 +2167,16 @@ void pause_race_if_running()
 {
     static int on = -1;
     if (on < 0) { const char* e = getenv("GT5P_SETTINGS_PAUSE"); on = !(e && e[0] == '0'); }
-    if (!on || !s_in_race) return;
-    if (race_menu_state() != kRaceRunning) return;
+    if (!on) return;
+    if (!s_in_race) {
+        fprintf(stderr, "[settings-ui] F1 open: not in race (s_in_race=0)\n");
+        return;
+    }
+    const int st = race_menu_state();
+    fprintf(stderr, "[settings-ui] F1 open: in_race=1 menu_state=%d (0=running 1=in_menu -1=unknown)\n", st);
+    if (st != kRaceRunning) return;
     s_inject_until = GetTickCount64() + 250;
     g_pad_inject_buttons = kStart;
-    if (s_dbg_screens > 0) fprintf(stderr, "[settings-ui] race running: Start pressed to pause it%c", 10);
 }
 
 void set_open(bool open)
