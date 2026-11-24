@@ -100,6 +100,7 @@ float vp_dot3(float4 a, float4 b) { float4 m = vp_mul(a, b); return m.x + m.y + 
 float vp_dot4(float4 a, float4 b) { float4 m = vp_mul(a, b); return m.x + m.y + m.z + m.w; }
 
 float4 vp_swiz(float4 b, uint src) {
+    [branch] if (((src >> 8) & 0xFFu) == 0x1Bu) return b;
     uint sw = (src >> 8) & 3u, sz = (src >> 10) & 3u, sy = (src >> 12) & 3u, sx = (src >> 14) & 3u;
     return float4(b[sx], b[sy], b[sz], b[sw]);
 }
@@ -168,10 +169,8 @@ VSOutput main(VSInput input) {
     [unroll] for (int s = 0; s < 8; s++) cs[s] = 0;
     [loop] for (int it = 0; it < RSX_VP_INTERP_STEPS && pc >= 0 && (uint)pc < count; it++) {
         uint at = ioff + (uint)pc * 16u;
-        uint d0 = rsx_vprog.Load(at);
-        uint d1 = rsx_vprog.Load(at + 4u);
-        uint d2 = rsx_vprog.Load(at + 8u);
-        uint d3 = rsx_vprog.Load(at + 12u);
+        uint4 dw = rsx_vprog.Load4(at);
+        uint d0 = dw.x, d1 = dw.y, d2 = dw.z, d3 = dw.w;
         uint vec_op = (d1 >> 22) & 0x1Fu;
         uint sca_op = (d1 >> 27) & 0x1Fu;
         uint input_src = (d1 >> 8) & 0xFu;
@@ -195,13 +194,24 @@ VSOutput main(VSInput input) {
         uint sat_bit = (d0 >> 26) & 1u;
         uint addr_sel = (d0 >> 24) & 1u;
         uint addr_swz = d0 & 3u;
-        float4 A, B, C;
-        VP_SRC(A, src0, (d0 >> 21) & 1u)
-        VP_SRC(B, src1, (d0 >> 22) & 1u)
-        VP_SRC(C, src2, (d0 >> 23) & 1u)
+        uint flow = (sca_op == 0x08u || sca_op == 0x09u || sca_op == 0x0Au || sca_op == 0x0Bu ||
+                     sca_op == 0x0Cu || sca_op == 0x11u || sca_op == 0x12u) ? 1u : 0u;
+        bool do_vec = (vmask != 0u && vec_op != 0u);
+        bool do_sca = (smask != 0u && sca_op != 0u && flow == 0u && sca_op <= 0x10u && sca_op != 0x08u);
+        float4 A = (float4)0, B = (float4)0, C = (float4)0;
+        [branch] if (do_vec && vec_op != 0x11u && vec_op != 0x15u) {
+            VP_SRC(A, src0, (d0 >> 21) & 1u)
+        }
+        [branch] if (do_vec && (vec_op == 0x02u || (vec_op >= 0x04u && vec_op <= 0x0Cu) ||
+                                vec_op == 0x10u || (vec_op >= 0x12u && vec_op <= 0x14u))) {
+            VP_SRC(B, src1, (d0 >> 22) & 1u)
+        }
+        [branch] if ((do_vec && (vec_op == 0x03u || vec_op == 0x04u)) || do_sca) {
+            VP_SRC(C, src2, (d0 >> 23) & 1u)
+        }
         int branched = 0;
         int next = pc + 1;
-        if (vmask != 0u && vec_op != 0u) {
+        if (do_vec) {
             if (vec_op == 0x0Du) {
                 int4 ar = (int4)floor(A);
                 [unroll] for (uint c = 0u; c < 4u; c++) if (vmask & (1u << c)) {
@@ -209,28 +219,30 @@ VSOutput main(VSInput input) {
                 }
             } else if (vec_op <= 0x16u || vec_op == 0x19u) {
                 float4 val = (float4)0;
-                if (vec_op == 0x01u) val = A;
-                else if (vec_op == 0x02u) val = vp_mul(A, B);
-                else if (vec_op == 0x03u) val = A + C;
-                else if (vec_op == 0x04u) val = vp_mul(A, B) + C;
-                else if (vec_op == 0x05u) val = (float4)vp_dot3(A, B);
-                else if (vec_op == 0x06u) val = (float4)(vp_dot3(A, B) + B.w);
-                else if (vec_op == 0x07u) val = (float4)vp_dot4(A, B);
-                else if (vec_op == 0x08u) val = float4(1, A.y * B.y, A.z, B.w);
-                else if (vec_op == 0x09u) val = min(A, B);
-                else if (vec_op == 0x0Au) val = max(A, B);
-                else if (vec_op == 0x0Bu) val = float4(A.x < B.x, A.y < B.y, A.z < B.z, A.w < B.w);
-                else if (vec_op == 0x0Cu) val = float4(A.x >= B.x, A.y >= B.y, A.z >= B.z, A.w >= B.w);
-                else if (vec_op == 0x0Eu) val = frac(A);
-                else if (vec_op == 0x0Fu) val = floor(A);
-                else if (vec_op == 0x10u) val = float4(A.x == B.x, A.y == B.y, A.z == B.z, A.w == B.w);
-                else if (vec_op == 0x11u) val = (float4)0;
-                else if (vec_op == 0x12u) val = float4(A.x > B.x, A.y > B.y, A.z > B.z, A.w > B.w);
-                else if (vec_op == 0x13u) val = float4(A.x <= B.x, A.y <= B.y, A.z <= B.z, A.w <= B.w);
-                else if (vec_op == 0x14u) val = float4(A.x != B.x, A.y != B.y, A.z != B.z, A.w != B.w);
-                else if (vec_op == 0x15u) val = float4(1, 1, 1, 1);
-                else if (vec_op == 0x16u) val = sign(A);
-                else val = (float4)0;
+                switch (vec_op) {
+                case 0x01u: val = A; break;
+                case 0x02u: val = vp_mul(A, B); break;
+                case 0x03u: val = A + C; break;
+                case 0x04u: val = vp_mul(A, B) + C; break;
+                case 0x05u: val = (float4)vp_dot3(A, B); break;
+                case 0x06u: val = (float4)(vp_dot3(A, B) + B.w); break;
+                case 0x07u: val = (float4)vp_dot4(A, B); break;
+                case 0x08u: val = float4(1, A.y * B.y, A.z, B.w); break;
+                case 0x09u: val = min(A, B); break;
+                case 0x0Au: val = max(A, B); break;
+                case 0x0Bu: val = float4(A.x < B.x, A.y < B.y, A.z < B.z, A.w < B.w); break;
+                case 0x0Cu: val = float4(A.x >= B.x, A.y >= B.y, A.z >= B.z, A.w >= B.w); break;
+                case 0x0Eu: val = frac(A); break;
+                case 0x0Fu: val = floor(A); break;
+                case 0x10u: val = float4(A.x == B.x, A.y == B.y, A.z == B.z, A.w == B.w); break;
+                case 0x11u: val = (float4)0; break;
+                case 0x12u: val = float4(A.x > B.x, A.y > B.y, A.z > B.z, A.w > B.w); break;
+                case 0x13u: val = float4(A.x <= B.x, A.y <= B.y, A.z <= B.z, A.w <= B.w); break;
+                case 0x14u: val = float4(A.x != B.x, A.y != B.y, A.z != B.z, A.w != B.w); break;
+                case 0x15u: val = float4(1, 1, 1, 1); break;
+                case 0x16u: val = sign(A); break;
+                default: val = (float4)0; break;
+                }
                 if (sat_bit) val = saturate(val);
                 uint cc_update = ((d0 >> 14) & 1u) && ((d0 >> 29) & 1u);
                 bool ok[4];
@@ -247,24 +259,23 @@ VSOutput main(VSInput input) {
                 }
             }
         }
-        uint flow = (sca_op == 0x08u || sca_op == 0x09u || sca_op == 0x0Au || sca_op == 0x0Bu ||
-                     sca_op == 0x0Cu || sca_op == 0x11u || sca_op == 0x12u) ? 1u : 0u;
-        if (smask != 0u && sca_op != 0u && flow == 0u && sca_op <= 0x10u && sca_op != 0x08u) {
-            float4 C2;
-            VP_SRC(C2, src2, (d0 >> 23) & 1u)
+        if (do_sca) {
             float4 val = (float4)0;
-            float x = C2.x;
-            if (sca_op == 0x01u) val = C2;
-            else if (sca_op == 0x02u) val = (float4)(1.0 / x);
-            else if (sca_op == 0x03u) val = (float4)clamp(1.0 / x, 5.42101e-20, 1.884467e19);
-            else if (sca_op == 0x04u) val = (float4)rsqrt(max(abs(x), 1e-10));
-            else if (sca_op == 0x05u || sca_op == 0x0Eu) val = (float4)exp2(x);
-            else if (sca_op == 0x06u || sca_op == 0x0Du) val = (float4)log2(max(abs(x), 1e-10));
-            else if (sca_op == 0x0Fu) val = (float4)sin(x);
-            else if (sca_op == 0x10u) val = (float4)cos(x);
-            else if (sca_op == 0x07u) {
-                float lit = (C2.x > 0.0) ? exp2(clamp(C2.w, -127.996, 127.996) * log2(max(C2.y, 1e-10))) : 0.0;
-                val = float4(1.0, max(C2.x, 0.0), lit, 1.0);
+            float x = C.x;
+            switch (sca_op) {
+            case 0x01u: val = C; break;
+            case 0x02u: val = (float4)(1.0 / x); break;
+            case 0x03u: val = (float4)clamp(1.0 / x, 5.42101e-20, 1.884467e19); break;
+            case 0x04u: val = (float4)rsqrt(max(abs(x), 1e-10)); break;
+            case 0x05u: case 0x0Eu: val = (float4)exp2(x); break;
+            case 0x06u: case 0x0Du: val = (float4)log2(max(abs(x), 1e-10)); break;
+            case 0x0Fu: val = (float4)sin(x); break;
+            case 0x10u: val = (float4)cos(x); break;
+            case 0x07u: {
+                float lit = (C.x > 0.0) ? exp2(clamp(C.w, -127.996, 127.996) * log2(max(C.y, 1e-10))) : 0.0;
+                val = float4(1.0, max(C.x, 0.0), lit, 1.0);
+                break; }
+            default: break;
             }
             if (sat_bit) val = saturate(val);
             [unroll] for (uint c = 0u; c < 4u; c++) if ((smask & (1u << c)) != 0u &&

@@ -32,17 +32,34 @@ def texture_block():
         "#ifndef RSX_INTERP_SHORT",
         "#define RSX_INTERP_SHORT 1",
         "#endif",
+        "#ifndef RSX_INTERP_DYN_SAMP",
+        "#define RSX_INTERP_DYN_SAMP 1",
+        "#endif",
         "Texture2D rsx_i2d[16] : register(t0);",
         "TextureCube rsx_icu[16] : register(t32);",
         "Texture3D rsx_i3d[16] : register(t48);",
+        "#if RSX_INTERP_DYN_SAMP",
+        "SamplerState rsx_is[16] : register(s0);",
+        "#else",
     ]
     for i in range(16):
         lines.append(f"SamplerState rsx_is{i} : register(s{i});")
+    lines.append("#endif")
     lines.append("")
 
     def emit_fn(name, tex, coord_type):
         lines.append(f"float4 {name}(uint unit, uint samp, {coord_type} uv, uint kind, float lod) {{")
         lines.append("    unit &= 15u;")
+        lines.append("#if RSX_INTERP_DYN_SAMP")
+        lines.append("    samp &= 15u;")
+        lines.append("#if RSX_INTERP_SHORT")
+        lines.append(f"    if (kind != 2u) return {tex}[unit].SampleBias(rsx_is[samp], uv, kind == 1u ? lod : 0.0);")
+        lines.append("#else")
+        lines.append(f"    if (kind == 0u) return {tex}[unit].Sample(rsx_is[samp], uv);")
+        lines.append(f"    if (kind == 1u) return {tex}[unit].SampleBias(rsx_is[samp], uv, lod);")
+        lines.append("#endif")
+        lines.append(f"    return {tex}[unit].SampleLevel(rsx_is[samp], uv, lod);")
+        lines.append("#else")
         lines.append("    switch (samp) {")
         for s in range(16):
             lines.append(f"    case {s}u:")
@@ -55,6 +72,7 @@ def texture_block():
             lines.append(f"        return {tex}[unit].SampleLevel(rsx_is{s}, uv, lod);")
         lines.append("    default: break; }")
         lines.append("    return (float4)0;")
+        lines.append("#endif")
         lines.append("}")
 
     emit_fn("rsx_i_s2d", "rsx_i2d", "float2")
@@ -93,6 +111,10 @@ BODY = r'''
  * so a vertex shader that does not write them still links. */
 #ifndef RSX_INTERP_FULLIN
 #define RSX_INTERP_FULLIN 1
+#endif
+/* FACING sign: the port's SV_IsFrontFace is the reverse of the RSX's front (RSX_FP_FACING). */
+#ifndef RSX_INTERP_FACE_SIGN
+#define RSX_INTERP_FACE_SIGN (-1.0)
 #endif
 #ifndef RSX_INTERP_TARGETS
 #define RSX_INTERP_TARGETS 4
@@ -494,6 +516,8 @@ float4 main(RSXInterpIn input) : SV_TARGET {
     uint samp1 = rsx_iprog.Load(hdr + 32u);
     uint dzword = rsx_iprog.Load(hdr + 36u);   // bits 0-3 depth-copy units, 8-19 crossbar
     uint mipmask = rsx_iprog.Load(hdr + 40u);   // bits 0-3 stacked-mip units
+    uint bmask = rsx_iprog.Load(hdr + 48u);     // bits 0-15 S-border, 16-31 T-border
+    uint bcol_off = rsx_iprog.Load(hdr + 52u);  // arena byte offset of 16 border colours (0 if none)
     uint half = flags & 1u;
     uint lg2abs = (flags & 256u) != 0u;
     // RSX_SHADER_INTERP_PROBE (measurement only, renders wrong): 1 = texture fetches return 0.5,
@@ -536,7 +560,7 @@ float4 main(RSXInterpIn input) : SV_TARGET {
 #if RSX_INTERP_FULLIN
     float4 tc8v = input.tc8;
     float4 tc9v = input.tc9;
-    float4 face = input.front ? (float4)1 : (float4)(-1);
+    float4 face = (input.front ? (float4)1 : (float4)(-1)) * RSX_INTERP_FACE_SIGN;
 #else
     float4 tc8v = 0;
     float4 tc9v = 0;
@@ -638,7 +662,7 @@ float4 main(RSXInterpIn input) : SV_TARGET {
 #if RSX_INTERP_FULLIN
         float4 tc8v = input.tc8;
         float4 tc9v = input.tc9;
-        float4 face = input.front ? (float4)1 : (float4)(-1);
+        float4 face = (input.front ? (float4)1 : (float4)(-1)) * RSX_INTERP_FACE_SIGN;
 #else
         float4 tc8v = 0;
         float4 tc9v = 0;
@@ -811,7 +835,17 @@ float4 main(RSXInterpIn input) : SV_TARGET {
                     if (shp == 1u) v = rsx_i_scu(texu, sm, coord.xyz, kind, lod);
                     else if (shp == 2u) v = rsx_i_s3d(texu, sm, coord.xyz, kind, lod);
                     else if (mpu != 0u) v = rsx_i_mip(texu, sm, a.xy, lod, (srgb >> texu) & 1u);
-                    else v = rsx_i_s2d(texu, sm, coord.xy, kind, lod);
+                    else {
+                        v = rsx_i_s2d(texu, sm, coord.xy, kind, lod);
+                        [branch] if (bmask != 0u && ((bmask & (0x10001u << texu)) != 0u)) {
+                            bool ob = (((bmask >> texu) & 1u) != 0u && (coord.x < 0.0 || coord.x > 1.0)) ||
+                                      (((bmask >> (16u + texu)) & 1u) != 0u && (coord.y < 0.0 || coord.y > 1.0));
+                            if (ob) {
+                                uint bc = rsx_iprog.Load(bcol_off + texu * 4u);
+                                v = float4((bc >> 16) & 255u, (bc >> 8) & 255u, bc & 255u, bc >> 24) / 255.0;
+                            }
+                        }
+                    }
                     if (dzu != 0u) v = rsx_i_dz(v, (dzword >> 8) & 0xFFFu);
                     else if (mpu == 0u && (srgb & (1u << texu)) != 0u) v = rsx_i_s2l(v);
                     if (bx2 != 0u) v = v * 2.0 - 1.0;

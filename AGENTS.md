@@ -317,6 +317,8 @@ now populates `vp_ps_hold` and skips PSO creation for `VS_PENDING` when `vp_inte
 genuine `vs_idx == -1` fallback matches the active compiler (`RSX_VP_FALLBACK_DXC=0` old). Test:
 `scripts/test/vp_fallback_pso.py` (WARP). See progress-gt5.md.
 
+**v0.3.1 shader interpreter overhaul (`0.3.1`, 2026-11-25).** Dynamic 16-sampler heap (`RSX_SHADER_INTERP_DYN_SAMP=0` rollback) replacing 3×16-way static-sampler switches in `gen_fp_interp_hlsl.py`, parallel background variant compile (`RSX_SHADER_INTERP_BG_WORKERS=2`, `targets=1` first; `6,735 -> 2,250 ms`), 2-worker demand PSO pool (`RSX_SHADER_INTERP_PSO_WORKERS=2`) + `pso_wait_notify()`, border-addressed 2D textures (`RSX_SHADER_INTERP_BORDER=0`), `nodisc` prewarm parity (`INTERP_PREP_MAX=2048`), VP interpreter `Load4`/guarded `VP_SRC`/`switch` overhaul (`vp_interp.hlsl`), persistent FP encode cache (`RSX_SHADER_INTERP_ENC_CACHE=0`), `VpSeen.input_mask` caching, `tex_mask`-filtered descriptor copies (`RSX_SHADER_INTERP_BIND_MASK=0`), and O(1) `s_interp_pso_ht[8192]`. Same-exe HSR A/B: cold dropped draws `33,957 -> 900` (-97.3%), interpreter PSO max `4,818 -> 606 ms` (-87.4%), forced-interpreter `31.5 -> 37.3 FPS` (+18.4%), p99 `110.4 -> 43.8 ms` (-60.3%), max `682.9 -> 80.1 ms` (-88.3%).
+
 **v0.3.0 upstream `ps3recomp` v0.19.0/v0.20.0 runtime ports (`release/v0.3.0`, 2026-11-25).**
 Cherry-picked into the isolated runtime and folded into `patches/ps3recomp-5244db9-local.patch`:
 fair FIFO `lwmutex` handoff (`PR #822`, `ppu_sysprx.cpp`, preserving `PS3_LWM_SLOT_FREE` and `PS3_LWM_FUTEX=0`),

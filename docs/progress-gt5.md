@@ -4,6 +4,26 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.3.1 shader interpreter overhaul (`0.3.1`, 2026-11-25)
+
+Implemented all 8 shader-interpreter improvements in the isolated `0.3.1` runtime (`ps3recomp-v031`, folded into `patches/ps3recomp-5244db9-local.patch`, single-shot `git apply --check` verified on fresh `5244db9`):
+
+- **Dynamic 16-entry `SamplerState` descriptor table (`RSX_SHADER_INTERP_DYN_SAMP=0` rollback):** Replaced the 3×16-way static-sampler `switch (samp)` blocks in `scripts/test/gen_fp_interp_hlsl.py` with a shader-visible 16-sampler heap (`s_interp_samp_heap`, `SamplerState rsx_is[16] : register(s0)` bound at root parameter 9 via `rsx_set_desc_heaps()`).
+- **Parallel background variant compilation (`RSX_SHADER_INTERP_BG_WORKERS`, default 2, max 4, `=1` old):** Thread-safe per-worker source buffer in `fp_interp_blob_v()`, prioritized `targets == 1` first, cutting cold 16-variant compile wall time from **`6,735 ms -> 2,250 ms` (`3.0x` faster, `-66.6%`)** with `0` draws dropped during variant startup.
+- **Multi-threaded demand PSO workers (`RSX_SHADER_INTERP_PSO_WORKERS`, default 2, max 4, `=1` old) + `pso_wait_notify()`:** Scaled `interp_job_main` to 2 workers and signaled `s_pso_wait_cv` on interpreter PSO completion in both `interp_job_main` and `interp_prep_run`.
+- **Border-addressed 2D texture support (`RSX_SHADER_INTERP_BORDER=0` rollback):** Passed `tex_border` and `tex_border_col[16]` in FP header words 12–13 so border-wrapped draws (including GT5's offscreen car-damage scratches) can use the interpreter instead of blocking.
+- **`nodisc` prewarm parity (`INTERP_PREP_MAX` `1024 -> 2048`):** `interp_prewarm()` now prepares `nodisc=1` alongside base variants so non-discarding draws keep early-Z rejection without demand-compiling a new PSO.
+- **Vertex interpreter HLSL overhaul (`scripts/test/vp_interp.hlsl`):** Switched to `Load4`, added identity-swizzle fast path (`0x1B`), guarded `VP_SRC` operand decoding, reused `C` for co-issued scalar ops, and replaced `if/else` chains with `switch (vec_op)` / `switch (sca_op)`.
+- **Replay-thread CPU optimizations:** Persistent FP microcode encode cache (`RSX_SHADER_INTERP_ENC_CACHE=0` rollback), `VpSeen.input_mask` cached once in `vp_interp_see()`, `tex_mask`-filtered descriptor copies in `fp_interp_bind()` (`RSX_SHADER_INTERP_BIND_MASK=0` rollback), and O(1) open-addressed hash table (`s_interp_pso_ht[8192]`) for `s_interp_pso`.
+- **Same-exe A/B verification (`BCUS98114-v104`, unprofiled `gt5.exe`, High Speed Ring):**
+  - **Cold cache (brand-new empty cache, `RSX_CMD_CHECK=1`, `0` reports / `0` `PSO FAIL`):**
+    - Variant compile wall time: **`6,735 ms -> 2,250 ms` (`-66.6%`)**; cold boot to `MusicDecode`: **`34.9 s -> 28.8 s` (`-6.1 s`)**.
+    - Dropped draws (pop-in): **`33,957 -> 900` (`-97.3%`, `37.7x` fewer)** — `replay_fp` `25,866 -> 138` (`-99.5%`), `replay_vp` `8,091 -> 762` (`-90.6%`).
+    - Interpreter fallbacks: **`5,406 -> 829` (`-84.7%`)**; PSO wait draws: **`5,572 -> 975` (`-82.5%`)**; interpreter PSO build time: **`7,874 ms (max 4,818 ms) -> 2,774 ms (max 606 ms)` (`-64.8%` total, `-87.4%` max)**.
+  - **Forced interpreter (`RSX_SHADER_INTERP=f RSX_SHADER_INTERP_VP=f`, 100% interpreted draws):**
+    - Race FPS: **`31.5 -> 37.3 FPS` (`+18.4%`)**; median `28.6 -> 26.1 ms`; **p99 `110.4 -> 43.8 ms` (`-60.3%`)**; **max hitch `682.9 -> 80.1 ms` (`-88.3%`)**.
+    - FIFO walk CPU: **`10.71 -> 9.06 ms/frame` (`-15.4%`)**; per-draw `prepare` **`2.04 -> 1.29 us` (`-36.8%`)**, `encode` **`1.77 -> 1.02 us` (`-42.4%`)**, `bind` **`0.35 -> 0.28 us` (`-20.0%`)**.
+
 ## 0.3.0 upstream `ps3recomp` v0.19.0 / v0.20.0 runtime cherry-picks (`release/v0.3.0`, 2026-11-25)
 
 Ported selected stability, performance, and input improvements from `sp00nznet/ps3recomp` v0.19.0–v0.20.0 into the isolated `release/v0.3.0` runtime (`ps3recomp-dlss`, folded into `patches/ps3recomp-5244db9-local.patch`, single-shot `git apply --check` verified on fresh `5244db9`):
