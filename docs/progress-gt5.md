@@ -4,6 +4,18 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.3.1 bug fixes: #85, #86, #87, #88 (`0.3.1`, 2026-11-25)
+
+- **#86 Rear-view mirror white/chrome streaks on two-sided cars (`libs/video/rsx_d3d12_backend.c`, `RSX_CULL_FRONT_FACE_ALWAYS=0` rollback):**
+  - `rsx_cull_key()` previously returned `dc` early whenever `cull_face_enable == 0` (or `CULL_OFF_FP` matched), dropping bit 2 (`front_face == 0x0901`, CCW). Two-sided car shaders reading `FACING` (`SV_IsFrontFace`, e.g. Ford GT40 Mk.IV) kept `FrontCounterClockwise = FALSE` in the horizontally mirrored rear-view mirror, inverting their normals. `rsx_cull_key()` now preserves bit 2 even when culling is off.
+- **#88 Missing car body panels in generated thumbnails (`libs/video/rsx_d3d12_backend.c`, `RSX_PSO_WAIT_OFFSCREEN_FRAME_MS=500` rollback):**
+  - One-shot car thumbnail renders (`rt 0x1980000`, `384x216` -> `1536x864`) compile 10+ unseen shaders in one frame and previously exhausted the 500 ms per-frame `RSX_PSO_WAIT_OFFSCREEN_MS` cap, permanently omitting late draws (`still pending, left out`) from the saved PNG. Kept `RSX_PSO_WAIT_OFFSCREEN_MS` (default `500`) as the per-draw timeout and added `RSX_PSO_WAIT_OFFSCREEN_FRAME_MS` (default `4000`) as the per-frame budget; `gave_up[]` now records only draws that exhaust their own `wait_ms`.
+- **#85 11 s freeze after changing settings in F1 menu (`libs/video/cellGcmSys.c`, `GCM_BAD_BRANCH_RETRY_MS=0` rollback):**
+  - An unmapped `JUMP` (`io=0x012A8344`, `0x2C000000`) observed mid-DMA inside an SPU display list immediately called `gcm_fifo_resync_why("unmapped-JUMP", &s_fifo_getoff, put)`, jumping `get` to PPU `put` and dropping the rest of the SPU list and its backend label write, permanently stalling `gFKsE` at `0x00B95248`. Both `unmapped-JUMP` and `unmapped-CALL` now park and re-read for up to `GCM_BAD_BRANCH_RETRY_MS` (default `50` ms) before logging and resyncing.
+- **#87 2.11 boot crash `ADHOC(read error at 2044938)` in `GlobalStatus.ad:155` (`scripts/guest_eh_patch.py`, `config/targets.json`):**
+  - `func_009F67A4` (`bl 0x00A5CF54` at `0x009F683C`) has a real `catch (...) { return false; }` landing pad at `0x009F6850` that was not emitted in `func_009F67A4` because the lifter stopped at `b 0x009F6870`. Added optional `pad_body` support to `scripts/guest_eh_patch.py` (with `--check`/`--restore` round-trip) and registered `0x009F67A4` (`call: 0x009F683C`, `pad: 0x009F6850`) in `BCUS98114-v211`'s `guest_eh.catch_sites`. Re-run `guest_eh_patch.py` after any 2.11 re-lift.
+- **Verification:** `scripts/test/issues_85_88.py` (all 4 fixes, including compiled `rsx_cull_key` default + rollback and real 2.11 `func_009F67A4` round-trip), `scripts/test/vp_fallback_pso.py` (WARP), production-flag `clang-cl` compile of `rsx_d3d12_backend.c` & `cellGcmSys.c`, `setup_runtime.py --check`, and single-shot `git apply --check` on a fresh `5244db9` export.
+
 ## 0.3.1 DLSS-G quality, DLSS stutter, replay depth & GT Life Options hint fixes (`0.3.1`, 2026-11-25)
 
 - **DLSS-G Frame Generation hudless color & real camera projection (`src/pt5_upscale_dlss.cpp`, `libs/video/rsx_upscale_plugin.h`, `libs/video/rsx_d3d12_backend.c`; rollbacks `RSX_FG_HUDLESS=0`, `RSX_FG_REAL_PROJ=0`):**

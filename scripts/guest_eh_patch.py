@@ -32,6 +32,7 @@ import target
 from spin_patch import find_function
 
 MARK = "/* guest_eh_patch */"
+MARK_END = "/* guest_eh_patch end */"
 DECL = ("#include <setjmp.h>\n"
         "struct gt5p_eh_site; "
         'extern "C" gt5p_eh_site* gt5p_eh_arm(ppu_context*, uint32_t); '
@@ -76,18 +77,27 @@ def patch_site(body, site):
         raise SystemExit(f"site 0x{func:08X}: call at 0x{call:08X} not found")
     ind, line = m.group(1), m.group(2)
     rest = body[m.end():]
-    k = rest.find(site["pad_after"] + "\n")
-    if k < 0:
-        raise SystemExit(f"site 0x{func:08X}: '{site['pad_after']}' not found after the call")
-    k += len(site["pad_after"]) + 1
-    nxt = rest[k:rest.find("\n", k)]
-    if site["pad_check"] not in nxt:
-        raise SystemExit(f"site 0x{func:08X}: line after '{site['pad_after']}' is '{nxt.strip()}', "
-                         f"expected '{site['pad_check']}'")
     label = "loc_%08X" % pad
     if label + ":" in body:
         raise SystemExit(f"site 0x{func:08X}: {label} already exists")
-    rest = rest[:k] + f"{label}: {MARK}\n" + rest[k:]
+    if "pad_body" in site:
+        # Cold landing pad was not emitted in this lifted function (the lifter
+        # stopped at an unconditional branch before it); append it before '}'.
+        close = rest.rfind("\n}")
+        if close < 0:
+            raise SystemExit(f"site 0x{func:08X}: closing brace not found for pad_body")
+        pad_lines = [f"{label}: {MARK}"] + [f"{ind}{ln}" for ln in site["pad_body"]] + [MARK_END]
+        rest = rest[:close + 1] + "\n".join(pad_lines) + "\n" + rest[close + 1:]
+    else:
+        k = rest.find(site["pad_after"] + "\n")
+        if k < 0:
+            raise SystemExit(f"site 0x{func:08X}: '{site['pad_after']}' not found after the call")
+        k += len(site["pad_after"]) + 1
+        nxt = rest[k:rest.find("\n", k)]
+        if site["pad_check"] not in nxt:
+            raise SystemExit(f"site 0x{func:08X}: line after '{site['pad_after']}' is '{nxt.strip()}', "
+                             f"expected '{site['pad_check']}'")
+        rest = rest[:k] + f"{label}: {MARK}\n" + rest[k:]
     wrapped = (f"{ind}{{ gt5p_eh_site* _eh = gt5p_eh_arm(ctx, 0x{func:08X}u); {MARK}\n"
                f"{ind}  if (setjmp(*gt5p_eh_host(_eh)) != 0) goto {label};\n"
                f"{ind}  {line}\n"
@@ -97,7 +107,11 @@ def patch_site(body, site):
 
 def unpatch_site(body, site):
     func, pad = hexaddr(site["func"]), hexaddr(site["pad"])
-    body = body.replace("loc_%08X: %s\n" % (pad, MARK), "")
+    if "pad_body" in site:
+        body = re.sub(r"loc_%08X: %s\n.*?%s\n" % (pad, re.escape(MARK), re.escape(MARK_END)),
+                      "", body, flags=re.S)
+    else:
+        body = body.replace("loc_%08X: %s\n" % (pad, MARK), "")
     m = re.search(r"^( *)\{ gt5p_eh_site\* _eh = gt5p_eh_arm\(ctx, 0x%08Xu\); [^\n]*\n"
                   r" *if \(setjmp[^\n]*\n *([^\n]*)\n *gt5p_eh_disarm\(_eh\); \}\n" % func, body, re.M)
     if m:
