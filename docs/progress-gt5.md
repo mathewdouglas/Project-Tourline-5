@@ -4,6 +4,16 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.3.1 built & verified (2026-11-26)
+
+Tag `v0.3.1` = `d1b9a8f` (branch `0.3.1`): shader interpreter overhaul (dynamic 16-sampler table, parallel background variant & demand PSO workers, border-wrap support, `nodisc` prewarm parity, vertex interpreter & replay CPU opts), DLSS-G hudless color + real camera projection, per-object MV un-jittering, DLSS-scaled scene RT stutter fix (`rt_is_small_offscreen()`), post-race replay depth preservation, 01.04 GT Life Options hint fix, and fixes for `#85`, `#86`, `#87`, and `#88`.
+Built cleanly under `C:\pt5-release\0.3.1\final` (refreshed 4-route PGO `664cecdb71c0`: `0` stale hash mismatches, `914` without a record). Unified `01.04 + 02.11` ZIP `134` files, SHA-256 `36aa1e7edad1e7799a139ecab78827e79c0e06fc4da0827b8a744374c0a63d6b`.
+
+Packaged 01.04 engine (`gt5.exe`), High Speed Ring 60 s frame test (`RSX_CMD_CHECK=1`, `0` reports / `0` `PSO FAIL`):
+- **59.9 FPS** (`0.1%` late, median `16.6 ms`, p99 `18.9 ms`, max `25.6 ms`, `walk 5.82 ms/frame`; steady `300–301` frames/5 s on track).
+
+Antivirus: local Defender `MpCmdRun -Scan -ScanType 3` found `0` threats on both the ZIP and extracted folder. VirusTotal scan pending API key.
+
 ## 0.3.1 bug fixes: #85, #86, #87, #88 (`0.3.1`, 2026-11-25)
 
 - **#86 Rear-view mirror white/chrome streaks on two-sided cars (`libs/video/rsx_d3d12_backend.c`, `RSX_CULL_FRONT_FACE_ALWAYS=0` rollback):**
