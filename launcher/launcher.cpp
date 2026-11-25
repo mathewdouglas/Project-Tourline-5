@@ -483,7 +483,7 @@ static fs::path managed_rpcs3() {
     const auto dir = tools_root() / L"rpcs3", exe = dir / L"rpcs3.exe", stamp = dir / L"pt5-rpcs3.txt";
     if (fs::is_regular_file(exe) && fs::is_regular_file(stamp)) {
         std::wifstream in(stamp); std::wstring pinned; std::getline(in, pinned);
-        if (pinned == PT5_RPCS3_SHA256) return exe;
+        if (pinned == PT5_RPCS3_SHA256) { fs::create_directories(dir / L"log"); return exe; }
     }
     setup_progress(0.03, "Downloading RPCS3 (used only to unpack your disc's update)");
     if (fs::exists(dir)) remove_tools();
@@ -506,7 +506,9 @@ static fs::path managed_rpcs3() {
     std::error_code ignored;
     if (archive == tools_root() / L"rpcs3.7z") fs::remove(archive, ignored);
     // Nothing but the install dialog setup answers: no welcome or notice boxes.
+    // Pre-create log/ so headless RPCS3 can open log/RPCS3.log before any GUI run (#91).
     fs::create_directories(dir / L"GuiConfigs");
+    fs::create_directories(dir / L"log");
     std::ofstream(dir / L"GuiConfigs/CurrentSettings.ini", std::ios::binary)
         << "[main_window]\r\ninfoBoxEnabledWelcome=false\r\ninfoBoxEnabledInstallPUP=false\r\ninfoBoxEnabledInstallPKG=false\r\n";
     std::wofstream(stamp) << PT5_RPCS3_SHA256 << L'\n';
@@ -587,13 +589,21 @@ static DWORD install_package(const fs::path& rpcs3, const std::wstring& args, co
         // Pinned RPCS3 0.0.43-20583 extracts successfully, then its headless
         // manual_typemap destructor aborts. Accept only this exact teardown
         // signature, with the complete measured output; other failures stop.
-        if (code == 0xc0000409 && package_installed(game, expected_files, expected_bytes)) {
+        const bool installed = package_installed(game, expected_files, expected_bytes);
+        if (code == 0xc0000409 && installed) {
             std::ifstream f(data/L"logs/install-package.err", std::ios::binary);
             std::string error((std::istreambuf_iterator<char>(f)), {});
             if (error.find("Emulation object is unavailable (process teardown)") != std::string::npos &&
                 error.find("fixed_typemap.hpp:220") != std::string::npos) code = 0;
         }
-        return code == 0 && package_installed(game, expected_files, expected_bytes) ? 0 : (code ? code : 1);
+        if (code != 0 || !installed) {
+            std::ofstream f(data/L"logs/install-package.err", std::ios::binary | std::ios::app);
+            char diag[128];
+            snprintf(diag, sizeof diag, "\n[pt5-launcher] headless RPCS3 exited with code 0x%08lX (installed=%d)\n",
+                     (unsigned long)code, installed ? 1 : 0);
+            f << diag;
+        }
+        return code == 0 && installed ? 0 : (code ? code : 1);
     }
     Com<IUIAutomation> uia;
     if (env(L"PT5_RPCS3_AUTOCLICK") != L"0")

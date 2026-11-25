@@ -59,6 +59,8 @@ extern volatile int g_pad_input_blocked;        /* cellPad.c */
 extern volatile uint32_t g_pad_menu_buttons;    /* cellPad.c: bit 16 = PS button */
 extern volatile uint32_t g_pad_inject_buttons;  /* cellPad.c: pressed for the title on port 0 */
 void pad_set_keyboard_enabled(int on);          /* cellPad.c */
+void cellPad_set_rs_dpad(int mode);             /* cellPad.c (#90) */
+void cellPad_set_in_race(int in_race);          /* cellPad.c (#90) */
 struct WheelRawUi {
     int connected;
     char name[128];
@@ -89,6 +91,10 @@ extern int (*rsx_d3d12_on_escape)(void);      /* Escape in the game window */
 }
 
 namespace {
+
+/* Live speed-toggle bindings (#90), initialized from gt5p_settings(). */
+volatile LONG s_speed_pad = -1;
+volatile LONG s_speed_key = -1;
 
 /* CELL_PAD_CTRL_* (cellPad.h) */
 const uint32_t kSelect = 1u << 0, kStart = 1u << 3, kUp = 1u << 4, kRight = 1u << 5, kDown = 1u << 6, kLeft = 1u << 7,
@@ -459,6 +465,27 @@ const std::vector<Item>& items()
           "PAD_SDL_RUMBLE", kOnOff,
           [](const UiSettings& s) { return (int)s.sdl_rumble; },
           [](UiSettings& s, int v) { s.sdl_rumble = v; }, nullptr },
+        { L"CONTROLLERS", L"Right stick as D-Pad (RA)",
+          L"Maps right-stick deflections to the D-Pad so you can adjust in-race RA functions (TCS, torque split, brake balance) without taking your thumb off the left stick. In race keeps normal right-stick look/camera in menus and Photo Mode. Applies live.",
+          "PAD_RS_DPAD", { {0, L"Off"}, {1, L"In race (RA)"}, {2, L"Always"} },
+          [](const UiSettings& s) { return s.right_stick_dpad; },
+          [](UiSettings& s, int v) { s.right_stick_dpad = v; },
+          [](int v) { cellPad_set_rs_dpad(v); } },
+        { L"CONTROLLERS", L"Speed toggle (controller)",
+          L"Controller button that cycles game speed (1x / 2x / 3x) while playing, like F2 on the keyboard. Handy for speeding through menus without reaching for the keyboard. Applies live.",
+          "GT5P_SPEED_PAD", { {0, L"Off"}, {1 << 1, L"L3"}, {1 << 2, L"R3"}, {1 << 0, L"Select"},
+                              {1 << 10, L"L1"}, {1 << 11, L"R1"}, {1 << 8, L"L2"}, {1 << 9, L"R2"},
+                              {1 << 12, L"Triangle"}, {1 << 13, L"Circle"}, {1 << 14, L"Cross"}, {1 << 15, L"Square"} },
+          [](const UiSettings& s) { return s.speed_hotkey_pad; },
+          [](UiSettings& s, int v) { s.speed_hotkey_pad = v; },
+          [](int v) { InterlockedExchange(&s_speed_pad, v); } },
+        { L"CONTROLLERS", L"Speed toggle (keyboard)",
+          L"Keyboard key that cycles game speed (1x / 2x / 3x) in the game window. Default F2; any key name can also be set in gt5p_settings.toml (speed_hotkey_key). Applies live.",
+          "GT5P_SPEED_KEY", { {VK_F2, L"F2"}, {VK_F4, L"F4"}, {VK_F5, L"F5"}, {VK_F6, L"F6"},
+                              {VK_F7, L"F7"}, {VK_TAB, L"Tab"}, {VK_OEM_3, L"Backquote"}, {0, L"Off"} },
+          [](const UiSettings& s) { return s.speed_hotkey_key; },
+          [](UiSettings& s, int v) { s.speed_hotkey_key = v; },
+          [](int v) { InterlockedExchange(&s_speed_key, v); } },
         { L"WHEEL", L"Steering wheel",
           L"A steering wheel (Logitech, Thrustmaster, Fanatec and others) is shown to the game as a "
           L"Logitech G27, with force feedback. Plug it in before starting; a controller or the keyboard "
@@ -1998,14 +2025,16 @@ static void set_game_speed(LONG speed)
     InterlockedExchange(&g_gt5p_game_speed, speed);
     fprintf(stderr, "[game-speed] %ldx\n", (long)speed);
 }
-void game_speed_poll(bool game_fg)
+void game_speed_poll(bool game_fg, uint32_t pad_down)
 {
-    static int on = -1, f2_was = 0;
+    static int on = -1, key_was = 0;
     struct At { std::string ms; long long after; LONG speed; bool done; };
     static std::vector<At> at;
     if (on < 0) {
         const char* e = getenv("GT5P_GAME_SPEED");
         on = !(e && e[0] == '0');
+        if (s_speed_pad < 0) InterlockedExchange(&s_speed_pad, gt5p_settings().speed_hotkey_pad);
+        if (s_speed_key < 0) InterlockedExchange(&s_speed_key, gt5p_settings().speed_hotkey_key);
         const char* a = getenv("GT5P_GAME_SPEED_AT");
         for (std::string sv = a ? a : ""; !sv.empty();) {
             size_t j = sv.find(','); std::string tok = sv.substr(0, j);
@@ -2019,9 +2048,13 @@ void game_speed_poll(bool game_fg)
     for (auto& t : at)
         if (!t.done && pad_milestone_age_ms(t.ms.c_str()) >= t.after) { t.done = true; set_game_speed(t.speed); }
     if (!on) return;
-    const int f2 = (GetAsyncKeyState(VK_F2) & 0x8000) != 0;
-    if (f2 && !f2_was && game_fg && !s_open && !s_quit) set_game_speed(g_gt5p_game_speed % 3 + 1);
-    f2_was = f2;
+    const int vk = (int)s_speed_key;
+    const int key_now = (vk > 0) ? ((GetAsyncKeyState(vk) & 0x8000) != 0) : 0;
+    const uint32_t pad_mask = (uint32_t)(s_speed_pad > 0 ? s_speed_pad : 0);
+    const bool hit_key = key_now && !key_was;
+    const bool hit_pad = pad_mask != 0 && (pad_down & pad_mask) != 0;
+    if ((hit_key || hit_pad) && game_fg && !s_open && !s_quit) set_game_speed(g_gt5p_game_speed % 3 + 1);
+    key_was = key_now;
 }
 
 /* GT5P_WATCH=addr[,addr...]: print each guest word there whenever it
@@ -2669,7 +2702,8 @@ DWORD WINAPI ui_thread(LPVOID)
         watch_poll();
         poke_poll();
         toggle_poll();
-        game_speed_poll(GetForegroundWindow() == s_game);
+        cellPad_set_in_race(s_in_race);
+        game_speed_poll(GetForegroundWindow() == s_game, down);
         top_menu_poll();
         if (s_open && !s_overlay) place();
         Sleep(16);

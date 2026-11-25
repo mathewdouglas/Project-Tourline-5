@@ -47,6 +47,9 @@ struct Gt5pSettings {
     bool adaptive_triggers = false; /* fixed DualSense resistance, experimental hardware */
     bool trigger_rumble = false;    /* supported Xbox triggers: existing game motor signals */
     bool sdl_rumble = false;        /* forward game body motors through dynamic SDL2 */
+    int right_stick_dpad = 0;       /* 0 off, 1 in_race (RA), 2 always (PAD_RS_DPAD, #90) */
+    int speed_hotkey_pad = 0;       /* controller button bitmask (CELL_PAD_CTRL_*) for speed toggle, 0 off (#90) */
+    int speed_hotkey_key = 0x71;    /* keyboard VK for speed toggle (default VK_F2 = 0x71; 0 off, #90) */
     int button_prompts   = 0;       /* 0 auto, 1 PlayStation, 2 Xbox, 3 Nintendo, 4 keyboard (gt5p_glyphs.h) */
 
     /* [keyboard]: the key (Windows virtual-key code, 0 none) for each button,

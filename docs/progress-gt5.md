@@ -4,6 +4,17 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.3.2 fixes & controller features: #89, #90, #91 (`0.3.2`, 2026-11-26)
+
+- **#89 Stale texture / `[tex-ww-miss]` in `RSX_TEX_WRITE_WATCH` (`libs/video/rsx_d3d12_backend.c`, `RSX_TEX_WW_DENSE_DIRTY=0` rollback):**
+  - When `GetWriteWatch` reported that a held texture's pages were written (`!ww_clean`) but the 1024-sample sparse checksum `tex_csum` missed the change, `tex_slot_unchanged()` advanced `c->ww_gen = ww_now` without running `tex_dense_sum()`, swallowing the dirty signal for 128 frames (`[tex-ww-miss]`). `tex_slot_unchanged()` now sets `force_dense = 1` whenever `ww_now && c->ww_gen && !ww_clean` so write-watch-dirty textures are always densely verified before being stamped clean.
+- **#90 Remappable speed-toggle hotkey (controller & keyboard) + Right-Stick RA Functions (`libs/input/cellPad.{h,c}`, `src/gt5p_settings.{h,cpp}`, `src/gt5p_settings_ui.cpp`):**
+  - Added `[input] right_stick_dpad` (`PAD_RS_DPAD`, `off` / `in_race` / `always`, default `off`) via `cellPad_set_rs_dpad()` + `cellPad_set_in_race()`, mapping right-stick deflections (`< 64` / `> 192`) to D-Pad Up/Down/Left/Right and centering the right stick so players can adjust in-race RA functions without using the D-Pad.
+  - Added `[input] speed_hotkey_pad` (`GT5P_SPEED_PAD`, default `off`, any PS3 button) and `[input] speed_hotkey_key` (`GT5P_SPEED_KEY`, default `F2`, or `Off` / any key name) to cycle game speed (`1x`/`2x`/`3x`) live from either controller or keyboard. All three options are exposed live in `F1 > CONTROLLERS`.
+- **#91 Headless RPCS3 2.11 PKG installer `Log file open failed` (`launcher/launcher.cpp`):**
+  - `managed_rpcs3()` now pre-creates `tools-v211/rpcs3/log/` (and `tools/rpcs3/log/`) on both fresh unpack and cached reuse so headless RPCS3 can open `log/RPCS3.log` before any GUI run. `install_package()` also appends the headless RPCS3 exit code and `package_installed` state to `logs/install-package.err` on failure.
+- **Verification:** `scripts/test/issues_89_91.py`, production-flag `clang-cl` compile of `rsx_d3d12_backend.c`, `cellPad.c`, `gt5p_settings.cpp`, `gt5p_settings_ui.cpp`, and `launcher.cpp`, `setup_runtime.py --check`, and single-shot `git apply --check` on a fresh `5244db9` export.
+
 ## Release 0.3.1 built & verified (2026-11-26)
 
 Tag `v0.3.1` = `d1b9a8f` (branch `0.3.1`): shader interpreter overhaul (dynamic 16-sampler table, parallel background variant & demand PSO workers, border-wrap support, `nodisc` prewarm parity, vertex interpreter & replay CPU opts), DLSS-G hudless color + real camera projection, per-object MV un-jittering, DLSS-scaled scene RT stutter fix (`rt_is_small_offscreen()`), post-race replay depth preservation, 01.04 GT Life Options hint fix, and fixes for `#85`, `#86`, `#87`, and `#88`.

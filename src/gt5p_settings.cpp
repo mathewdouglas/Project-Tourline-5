@@ -41,6 +41,7 @@ const char* const kEnvNames[] = {
     "RSX_SHADER_COMPILER",
     "GT5P_RESOLUTION", "RSX_MSAA", "RSX_AA", "RSX_FG", "RSX_PRESENT_SYNC", "RSX_SHADER_CACHE", "GT5P_SHADER_INDICATOR", "GT5P_PRELOAD_INDICATOR",
     "PAD_MODERN_CONTROLS", "PAD_TRIGGER_DEADZONE", "PAD_TRIGGER_CURVE", "PAD_ADAPTIVE_TRIGGERS", "PAD_TRIGGER_RUMBLE", "PAD_SDL_RUMBLE",
+    "PAD_RS_DPAD", "GT5P_SPEED_PAD", "GT5P_SPEED_KEY",
     "PAD_NO_SDL", "PAD_NO_KEYBOARD", "PS3_VERBOSE",
     "GT5P_VBLANK_HZ", "SPURS_LANE_PIN", "SPURS_JL_SPU3", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_STARTUP", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "PAD_SKIP_MOVIE", "RSX_SHADER_INTERP",
     "AUDIO_OUTPUT_CHANNELS", "PS3_USER_NAME",
@@ -236,6 +237,9 @@ bool known_key(std::string_view section, std::string_view key)
         {"input", "adaptive_triggers"},
         {"input", "trigger_rumble"},
         {"input", "sdl_rumble"},
+        {"input", "right_stick_dpad"},
+        {"input", "speed_hotkey_pad"},
+        {"input", "speed_hotkey_key"},
         {"wheel", "enabled"}, {"wheel", "rotation"}, {"wheel", "ffb_strength"}, {"wheel", "ffb_invert"},
         {"wheel", "ffb_springs"}, {"wheel", "ffb_min_force"}, {"wheel", "ffb_pause"},
         {"wheel", "preset"}, {"wheel", "steer"}, {"wheel", "pedals"}, {"wheel", "buttons"},
@@ -294,6 +298,58 @@ void read_prompts(toml::node_view<const toml::node> n, int& out)
 }
 
 /* DLSS / DLAA modes: index matches Gt5pSettings::dlss_mode and Pt5UpscaleMode. */
+const char* const kRsDpadNames[] = { "off", "in_race", "always" };
+
+int rs_dpad_code(const char* v)
+{
+    if (!v || !*v) return -1;
+    if (!_stricmp(v, "off") || !strcmp(v, "0")) return 0;
+    if (!_stricmp(v, "in_race") || !_stricmp(v, "race") || !strcmp(v, "1")) return 1;
+    if (!_stricmp(v, "always") || !strcmp(v, "2")) return 2;
+    return -1;
+}
+
+const struct { const char* name; int bit; } kPadBtnMap[] = {
+    { "off", 0 }, { "none", 0 },
+    { "select", 1 << 0 }, { "l3", 1 << 1 }, { "r3", 1 << 2 }, { "start", 1 << 3 },
+    { "up", 1 << 4 }, { "right", 1 << 5 }, { "down", 1 << 6 }, { "left", 1 << 7 },
+    { "l2", 1 << 8 }, { "r2", 1 << 9 }, { "l1", 1 << 10 }, { "r1", 1 << 11 },
+    { "triangle", 1 << 12 }, { "circle", 1 << 13 }, { "cross", 1 << 14 }, { "square", 1 << 15 },
+};
+
+int pad_btn_code(const char* v)
+{
+    if (!v || !*v) return -1;
+    for (const auto& e : kPadBtnMap) if (!_stricmp(v, e.name)) return e.bit;
+    return -1;
+}
+
+const char* pad_btn_name(int bit)
+{
+    for (const auto& e : kPadBtnMap) if (e.bit == bit) return e.name;
+    return "off";
+}
+
+int speed_key_code(const char* v)
+{
+    if (!v || !*v) return -1;
+    if (!_stricmp(v, "off") || !_stricmp(v, "none") || !strcmp(v, "0")) return 0;
+    if ((v[0] == 'F' || v[0] == 'f') && v[1] >= '1' && v[1] <= '9') {
+        char* end = nullptr;
+        long n = strtol(v + 1, &end, 10);
+        if (end && !*end && n >= 1 && n <= 12) return 0x6F + (int)n;  /* VK_F1..VK_F12 */
+    }
+    return gt5p_key_from_name(v);
+}
+
+std::string speed_key_name(int vk)
+{
+    if (vk <= 0) return "Off";
+    if (vk >= 0x70 && vk <= 0x7B) return "F" + std::to_string(vk - 0x6F);
+    const char* n = gt5p_key_name(vk);
+    return n ? std::string(n) : "F2";
+}
+
 const char* const kDlssNames[] = { "off", "dlaa", "quality", "balanced", "performance", "ultra" };
 const char* const kDlssEnv[]   = { "off", "dlaa", "dlss_q",  "dlss_b",   "dlss_p",      "dlss_u" };
 int dlss_code(const char* v)
@@ -377,6 +433,28 @@ void parse_into(const toml::table& tbl, Gt5pSettings& s)
     read_bool(tbl["input"]["adaptive_triggers"], "input.adaptive_triggers", s.adaptive_triggers);
     read_bool(tbl["input"]["trigger_rumble"], "input.trigger_rumble", s.trigger_rumble);
     read_bool(tbl["input"]["sdl_rumble"], "input.sdl_rumble", s.sdl_rumble);
+    if (auto n = tbl["input"]["right_stick_dpad"]) {
+        if (auto v = n.value<std::string>()) {
+            int c = rs_dpad_code(v->c_str());
+            if (c >= 0) s.right_stick_dpad = c;
+            else warn("input.right_stick_dpad must be \"off\", \"in_race\" or \"always\"; keeping the default");
+        } else if (auto v = n.value_exact<int64_t>()) {
+            if (*v >= 0 && *v <= 2) s.right_stick_dpad = (int)*v;
+            else warn("input.right_stick_dpad must be 0..2; keeping the default");
+        }
+    }
+    if (auto n = tbl["input"]["speed_hotkey_pad"]) {
+        auto v = n.value<std::string>();
+        int c = v ? pad_btn_code(v->c_str()) : -1;
+        if (c >= 0) s.speed_hotkey_pad = c;
+        else warn("input.speed_hotkey_pad: unknown controller button; keeping the default");
+    }
+    if (auto n = tbl["input"]["speed_hotkey_key"]) {
+        auto v = n.value<std::string>();
+        int vk = v ? speed_key_code(v->c_str()) : -1;
+        if (vk >= 0) s.speed_hotkey_key = vk;
+        else warn("input.speed_hotkey_key: unknown key; keeping the default");
+    }
     read_prompts(tbl["input"]["button_prompts"], s.button_prompts);
     for (int i = 0; i < GT5P_KEY_BUTTONS; i++) {
         const char* k = gt5p_key_button(i).key;
@@ -464,6 +542,9 @@ void apply_env(const Gt5pSettings& s)
     snprintf(buf, sizeof buf, "%d", (int)s.adaptive_triggers); set_default_env("PAD_ADAPTIVE_TRIGGERS", buf);
     snprintf(buf, sizeof buf, "%d", (int)s.trigger_rumble); set_default_env("PAD_TRIGGER_RUMBLE", buf);
     snprintf(buf, sizeof buf, "%d", (int)s.sdl_rumble); set_default_env("PAD_SDL_RUMBLE", buf);
+    set_default_env("PAD_RS_DPAD", kRsDpadNames[s.right_stick_dpad >= 0 && s.right_stick_dpad < 3 ? s.right_stick_dpad : 0]);
+    set_default_env("GT5P_SPEED_PAD", pad_btn_name(s.speed_hotkey_pad));
+    set_default_env("GT5P_SPEED_KEY", speed_key_name(s.speed_hotkey_key).c_str());
     set_default_env("PAD_KEYMAP", gt5p_keymap_format(s.keys).c_str());
     set_default_env("GT5P_GLYPHS", kPromptNames[s.button_prompts >= 0 && s.button_prompts < 5 ? s.button_prompts : 0]);
     /* The steering wheel (ps3recomp libs/hardware/wheel_host_win.c). */
@@ -558,6 +639,9 @@ void reflect_env(Gt5pSettings& s)
         char* end; long n = strtol(e, &end, 10);
         s.sdl_rumble = *e && !*end && n >= 0 && n <= 1 ? (int)n : 0;
     }
+    if (const char* e = getenv("PAD_RS_DPAD")) { int c = rs_dpad_code(e); if (c >= 0) s.right_stick_dpad = c; }
+    if (const char* e = getenv("GT5P_SPEED_PAD")) { int c = pad_btn_code(e); if (c >= 0) s.speed_hotkey_pad = c; }
+    if (const char* e = getenv("GT5P_SPEED_KEY")) { int vk = speed_key_code(e); if (vk >= 0) s.speed_hotkey_key = vk; }
     if (const char* e = getenv("PAD_KEYMAP")) gt5p_keymap_parse(e, s.keys);
     if (const char* e = getenv("PS3_WHEEL"))
         s.wheel = !(!strcmp(e, "off") || !strcmp(e, "0") || !strcmp(e, "no") || !strcmp(e, "OFF"));
@@ -732,6 +816,12 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "trigger_rumble = " << (s.trigger_rumble ? "true" : "false") << "\n"
          "# Opt-in feedback; unsupported controllers ignore it. [PAD_SDL_RUMBLE] Restart to apply.\n"
          "sdl_rumble = " << (s.sdl_rumble ? "true" : "false") << "\n"
+         "# Map the right stick to the D-Pad for in-race RA functions (\"off\", \"in_race\" or \"always\"). [PAD_RS_DPAD]\n"
+         "right_stick_dpad = \"" << kRsDpadNames[s.right_stick_dpad >= 0 && s.right_stick_dpad < 3 ? s.right_stick_dpad : 0] << "\"\n"
+         "# Controller button that cycles game speed 1x/2x/3x (\"off\", \"l3\", \"r3\", \"select\", ...). [GT5P_SPEED_PAD]\n"
+         "speed_hotkey_pad = \"" << pad_btn_name(s.speed_hotkey_pad) << "\"\n"
+         "# Keyboard key that cycles game speed 1x/2x/3x (default \"F2\", or \"Off\"). [GT5P_SPEED_KEY]\n"
+         "speed_hotkey_key = \"" << speed_key_name(s.speed_hotkey_key) << "\"\n"
          "\n"
          "[keyboard]\n"
          "# The key for each button when playing with the keyboard (also the F1 page's\n"
