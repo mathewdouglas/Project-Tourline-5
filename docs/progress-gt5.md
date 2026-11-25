@@ -4,6 +4,17 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## FSR 3.1 / 4 and XeSS research (`research/fsr3-xess`, 2026-11-26)
+
+Research only, no code: [plan-fsr3-xess.md](plan-fsr3-xess.md). FSR and XeSS
+super resolution reuse our DLSS inputs unchanged (motion vectors, depth,
+jitter, scene/HUD boundary) and need an ABI v2 plus one plug-in each. FSR
+frame generation needs the plug-in to own the swap chain (a startup choice).
+XeSS-FG is deferred (XeLL markers, conflicting hardware statements). The
+current AMD SDK licence is a binary-redistribution grant, not plain MIT.
+Hypotheses to measure first: the scene target's colour space, the jitter
+sign per vendor, and FSR's acceptance of R24 depth.
+
 ## Release 0.3.1 built & verified (2026-11-26)
 
 Tag `v0.3.1` = `d1b9a8f` (branch `0.3.1`): shader interpreter overhaul (dynamic 16-sampler table, parallel background variant & demand PSO workers, border-wrap support, `nodisc` prewarm parity, vertex interpreter & replay CPU opts), DLSS-G hudless color + real camera projection, per-object MV un-jittering, DLSS-scaled scene RT stutter fix (`rt_is_small_offscreen()`), post-race replay depth preservation, 01.04 GT Life Options hint fix, and fixes for `#85`, `#86`, `#87`, and `#88`.
