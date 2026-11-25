@@ -29,7 +29,7 @@ typedef LONG NTSTATUS;
 
 /* Custom Project ID GUID for Project Tourline 5 (NGX_ENGINE_TYPE_CUSTOM). */
 static const char* const kProjectId    = "8F3A4D61-7B2C-4E19-9A5F-0D4C1E72B501";
-static const char* const kEngineVer    = "0.3.1";
+static const char* const kEngineVer    = "0.3.2";
 
 static bool                 s_inited   = false;
 static ID3D12Device*        s_device   = nullptr;
