@@ -122,7 +122,18 @@ def test_91_launcher_rpcs3_log_dir():
     print("[PASS] #91 launcher pre-creates rpcs3/log and logs headless exit code on failure")
 
 
+def test_92_93_cull_polarity_and_cube_mips():
+    backend = (RUNTIME / "libs/video/rsx_d3d12_backend.c").read_text(encoding="utf-8")
+    assert "no_cull_ff = (st && st->front_face == 0x0900u) ? 4u : 0u;" in backend, "missing #92 CW-only mirror bit2"
+    assert "RSX_TEX_CUBE_MIPS" in backend, "missing #93 RSX_TEX_CUBE_MIPS rollback"
+    assert "sv.TextureCube.MipLevels = levels;" in backend, "cube SRV must expose full mip chain"
+    assert "D3D12_PLACED_SUBRESOURCE_FOOTPRINT mip_fp[96]" in backend, "mip_fp must fit 6 faces * 16 mips"
+    assert "bpp == 8 ? 16u : 8u" not in backend, "broken DXT3/DXT5 cube face-stride bug must be removed"
+    print("[PASS] #92/#93 no-cull CW mirror polarity + static cubemap mip pyramid & DXT3/5 face stride")
+
+
 if __name__ == "__main__":
     test_89_tex_ww_dense_dirty()
     test_90_rs_dpad_and_speed_hotkeys()
     test_91_launcher_rpcs3_log_dir()
+    test_92_93_cull_polarity_and_cube_mips()

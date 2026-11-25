@@ -4,8 +4,12 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
-## 0.3.2 fixes & controller features: #89, #90, #91 (`0.3.2`, 2026-11-26)
+## 0.3.2 fixes & controller features: #89-#93 (`0.3.2`, 2026-11-26)
 
+- **#92 Ford GT40 Mk.IV inverted in main view on 0.3.1 (`libs/video/rsx_d3d12_backend.c`):**
+  - `0.3.1`'s `#86` change preserved `front_face == 0x0901` (CCW -> `FrontCounterClockwise = TRUE`) when `cull_face_enable == 0`, which flipped `SV_IsFrontFace` in the normal CCW main view because `#30` had inverted `RSX_FP_FACING` against `FrontCounterClockwise = FALSE`. `rsx_cull_key()` now sets bit 2 for `cull_face_enable == 0` only when `front_face == 0x0900` (explicit CW, i.e. the horizontally mirrored rear-view mirror), so both the main view (`#92`) and rear-view mirror (`#86`) keep the right `FACING` sign with zero shader-cache invalidation.
+- **#93 Harsh/banded car reflections on Standard & dealership cars (`libs/video/rsx_d3d12_backend.c`, `RSX_TEX_CUBE_MIPS=0` rollback):**
+  - `vp_upload_tex_slot()` previously skipped mip levels `1..N-1` for all static cubemaps (`levels = 1`, `sv.TextureCube.MipLevels = 1`), clamping every rough metallic `SampleLevel`/`SampleBias` reflection lookup to razor-sharp mip 0. Its `_face_bytes` loop also checked `bpp == 8 ? 16u : 8u` when `bpp` is `1` for compressed formats, halving the face stride of DXT3/DXT5 cubemaps. `vp_upload_tex_slot()` now uploads the full cubemap mip pyramid (`6 * levels` subresources via `mip_fp[96]`, `sv.TextureCube.MipLevels = levels`) and computes `_face_bytes` via `rsx_texture_layout()`.
 - **#89 Stale texture / `[tex-ww-miss]` in `RSX_TEX_WRITE_WATCH` (`libs/video/rsx_d3d12_backend.c`, `RSX_TEX_WW_DENSE_DIRTY=0` rollback):**
   - When `GetWriteWatch` reported that a held texture's pages were written (`!ww_clean`) but the 1024-sample sparse checksum `tex_csum` missed the change, `tex_slot_unchanged()` advanced `c->ww_gen = ww_now` without running `tex_dense_sum()`, swallowing the dirty signal for 128 frames (`[tex-ww-miss]`). `tex_slot_unchanged()` now sets `force_dense = 1` whenever `ww_now && c->ww_gen && !ww_clean` so write-watch-dirty textures are always densely verified before being stamped clean.
 - **#90 Remappable speed-toggle hotkey (controller & keyboard) + Right-Stick RA Functions (`libs/input/cellPad.{h,c}`, `src/gt5p_settings.{h,cpp}`, `src/gt5p_settings_ui.cpp`):**

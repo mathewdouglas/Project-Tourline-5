@@ -43,17 +43,19 @@ int main(void) {
     st.zmin_max_control = 1u;
     st.depth_test_enable = 1;
 
-    /* 1. Two-sided draw (cull off), CCW front face (mirror) */
+    /* 1. Two-sided draw (cull off), CCW front face (normal main view, #92):
+     * #30's inverted SV_IsFrontFace expects FrontCounterClockwise=FALSE (bit2=0). */
     st.cull_face_enable = 0;
     st.front_face = 0x0901u;
     u32 k = rsx_cull_key(&st);
-    u32 exp = want_ff ? 4u : 0u;
-    if (k != exp) { fprintf(stderr, "FAIL 1: got 0x%X expected 0x%X\n", k, exp); return 1; }
+    if (k != 0u) { fprintf(stderr, "FAIL 1: got 0x%X expected 0\n", k); return 1; }
 
-    /* 2. Two-sided draw (cull off), CW front face */
+    /* 2. Two-sided draw (cull off), CW front face (mirrored rear-view mirror, #86):
+     * bit2=4 flips FrontCounterClockwise=TRUE to match X-mirroring. */
     st.front_face = 0x0900u;
     k = rsx_cull_key(&st);
-    if (k != 0u) { fprintf(stderr, "FAIL 2: got 0x%X expected 0\n", k); return 1; }
+    u32 exp = want_ff ? 4u : 0u;
+    if (k != exp) { fprintf(stderr, "FAIL 2: got 0x%X expected 0x%X\n", k, exp); return 1; }
 
     /* 3. Culled draw (cull on), BACK + CCW */
     st.cull_face_enable = 1;
@@ -62,13 +64,14 @@ int main(void) {
     k = rsx_cull_key(&st);
     if (k != 5u) { fprintf(stderr, "FAIL 3: got 0x%X expected 5\n", k); return 1; }
 
-    /* 4. CULL_OFF_FP match still preserves bit 2 when enabled */
+    /* 4. CULL_OFF_FP match with CW mirror front_face preserves bit 2 when enabled */
+    st.front_face = 0x0900u;
     st.shader_program = 0x12345678u;
     k = rsx_cull_key(&st);
     exp = want_ff ? 4u : 0u;
     if (k != exp) { fprintf(stderr, "FAIL 4: got 0x%X expected 0x%X\n", k, exp); return 1; }
 
-    /* 5. Depth clip disabled + two-sided CCW */
+    /* 5. Depth clip disabled + two-sided CW mirror */
     st.cull_face_enable = 0;
     st.depth_test_enable = 0;
     k = rsx_cull_key(&st);
