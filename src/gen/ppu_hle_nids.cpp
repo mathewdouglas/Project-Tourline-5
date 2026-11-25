@@ -510,6 +510,8 @@ extern "C" {
     void cellOvisInvalidateOverlay(void);
     void cellPadInit(void);
     void cellPadEnd(void);
+    void cellPad_set_rs_dpad(void);
+    void cellPad_set_in_race(void);
     void cellPad_poll(void);
     void cellPadGetData(void);
     void cellPadGetInfo(void);
@@ -1760,6 +1762,8 @@ extern "C" void ppu_hle_register_all(void) {
     ps3_hle_register(0xE863D53Fu, "cellOvisInvalidateOverlay", (void*)cellOvisInvalidateOverlay);
     ps3_hle_register(0x1CF98800u, "cellPadInit", (void*)cellPadInit);
     ps3_hle_register(0x4D9B75D5u, "cellPadEnd", (void*)cellPadEnd);
+    ps3_hle_register(0xA9D95671u, "cellPad_set_rs_dpad", (void*)cellPad_set_rs_dpad);
+    ps3_hle_register(0x00D6445Au, "cellPad_set_in_race", (void*)cellPad_set_in_race);
     ps3_hle_register(0xCBF99EEAu, "cellPad_poll", (void*)cellPad_poll);
     ps3_hle_register(0x8B72CDA1u, "cellPadGetData", (void*)cellPadGetData);
     ps3_hle_register(0x3AAAD464u, "cellPadGetInfo", (void*)cellPadGetInfo);
