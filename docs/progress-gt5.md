@@ -4,6 +4,16 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.3.2 built & verified (2026-11-26)
+
+Tag `v0.3.2` = `c9d0eef` (branch `0.3.2`): fixes `#92` (Ford GT40 Mk.IV inverted in main view on 0.3.1 — no-cull bit 2 only on explicit CW `0x0900` mirror pass), `#93` (static cubemap full mip pyramid upload + `rsx_texture_layout()` DXT3/DXT5 face stride), `#89` (`RSX_TEX_WW_DENSE_DIRTY` dense check on write-watch-dirty held textures), `#91` (pre-create `rpcs3/log/` + log headless RPCS3 exit code in 2.11 PKG installer), and adds `#90` (Right-Stick-to-D-Pad RA mode + remappable controller/keyboard speed-toggle hotkeys in `F1 > CONTROLLERS`).
+Built cleanly under `C:\pt5-release\0.3.2\final` (refreshed 4-route PGO `12e4484c7c4f`: `0` stale hash mismatches, `926` without a record; 2.11 engine built cleanly under `C:\pt5-release\0.3.2\v211`). Unified `01.04 + 02.11` ZIP `134` files, SHA-256 `667eefdfa8aefb6cc3e6a4c1487ccb8fac8ece76c2874f3f8b60058ec36c3466`.
+
+Packaged 01.04 engine (`gt5.exe`), High Speed Ring 60 s frame test (`RSX_CMD_CHECK=1`, `0` reports / `0` `PSO FAIL`):
+- **59.7 FPS** (`1.0%` late, median `16.6 ms`, p99 `20.0 ms`, max `27.3 ms`, `walk 6.14 ms/frame`; steady `300–301` frames/5 s on track).
+
+Antivirus: local Defender `MpCmdRun -Scan -ScanType 3` found `0` threats on both the ZIP and extracted folder. VirusTotal scan pending before publishing.
+
 ## 0.3.2 fixes & controller features: #89-#93 (`0.3.2`, 2026-11-26)
 
 - **#92 Ford GT40 Mk.IV inverted in main view on 0.3.1 (`libs/video/rsx_d3d12_backend.c`):**
