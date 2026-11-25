@@ -4,6 +4,22 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.3.1 DLSS-G quality, DLSS stutter, replay depth & GT Life Options hint fixes (`0.3.1`, 2026-11-25)
+
+- **DLSS-G Frame Generation hudless color & real camera projection (`src/pt5_upscale_dlss.cpp`, `libs/video/rsx_upscale_plugin.h`, `libs/video/rsx_d3d12_backend.c`; rollbacks `RSX_FG_HUDLESS=0`, `RSX_FG_REAL_PROJ=0`):**
+  - Extended `Pt5FgEval` (backward-compatible) with `hudless` texture, `has_camera`, `view_to_clip[16]`, camera basis (`pos/up/right/fwd`), `near/far/fov/aspect`, and `pinhole`.
+  - Captured the hudless backbuffer immediately after the scene/HUD boundary draw (`d == FR->mv.disp`, `cur_rt < 0`) and extracted real camera matrices/FOV/near/far from `FrameSet.mv.vp` (`fg_extract_camera()`), passing `pHudless` + `hudLessSubrectSize` and real `cameraViewToClip`/`clipToCameraView` to NGX DLSS-G. Verified on `3440x1440` `RSX_AA=dlss_q RSX_FG=2x`: crisp HUD text and clean background interpolation behind HUD, `0` NGX errors.
+- **Per-object motion-vector un-jittering (`libs/video/rsx_d3d12_backend.c`, `RSX_MV_OBJ_UNJIT=0` rollback):**
+  - Folded `-jit` into `rsx_mvt` (`T[0..11]`) on the CPU in `vp_record_cb()` (zero HLSL/PSO cache changes) via `jit_cur_px()`. Also verified `RSX_DLSS_JITTER_SIGN=+1.0f` objectively via 8-frame static MAE (`0.124` for `+1` vs `0.385` for `-1`, pre-DLSS `6.947`).
+- **DLSS Quality / Car Select / 3D menu stutter fix (`libs/video/rsx_d3d12_backend.c`):**
+  - Added `rt_is_small_offscreen(int rt)` so DLSS-scaled 3D scene targets (`dlss_is_scene_rt(r->off) || rs_host_scaled(r->w, r->h)`, e.g. `2292x960` on `3440x1440` DLSS-Q) are no longer misclassified as small offscreen RTs and no longer trigger the `500 ms` synchronous `RSX_PSO_WAIT_OFFSCREEN_MS` stall on new shaders.
+- **Post-race replay depth preservation (`libs/video/rsx_d3d12_backend.c`, `RSX_DEPTH_KEEP_ZETA=0` rollback):**
+  - Prevented depth-less full-screen passes (`!dr_wants_depth(dr)`) from clearing `dsv_main` or stealing `depth_owner_z`, and preserved depth across color-RT switches when `dr->zeta_off == depth_owner_z[depth_ms]`, fixing replay cars drawing over trackside walls/guardrails.
+- **01.04 "PC settings" hint stuck after leaving Options to GT Life (`config/targets.json`):**
+  - Added `GTLife=9/UC/F0` to `BCUS98114-v104`'s `screen_files` and `GTLife:screen` to `screen_roles` so returning from Options to GT Life clears `s_in_options` immediately when `9/UC/F0` is re-read.
+- **Patch hygiene (`patches/ps3recomp-5244db9-local.patch`):**
+  - Cleanly 3-way merged the above runtime edits with `0.3.1`'s shader interpreter overhaul (restoring all 25 new runtime files that were untracked in `db2505e`'s patch) and verified single-shot `git apply --check` on fresh `5244db9`.
+
 ## 0.3.1 shader interpreter overhaul (`0.3.1`, 2026-11-25)
 
 Implemented all 8 shader-interpreter improvements in the isolated `0.3.1` runtime (`ps3recomp-v031`, folded into `patches/ps3recomp-5244db9-local.patch`, single-shot `git apply --check` verified on fresh `5244db9`):

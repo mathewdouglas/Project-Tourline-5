@@ -550,21 +550,48 @@ PT5_EXPORT int pt5_fg_eval(void* d3d12_cmd_list, const Pt5FgEval* ev,
     const uint32_t oh = ev->out_h ? ev->out_h : s_fg_out_h;
 
     NVSDK_NGX_DLSSG_Opt_Eval_Params op = {};
-    const float aspect = rh ? (float)rw / (float)rh : 16.0f / 9.0f;
-    const float fov = 0.9f, zn = 0.1f, zf = 1000.0f;
-    const float ys = 1.0f / tanf(fov * 0.5f), xs = ys / aspect, zq = zf / (zf - zn);
-    op.cameraViewToClip[0][0] = xs;
-    op.cameraViewToClip[1][1] = ys;
-    op.cameraViewToClip[2][2] = zq;
-    op.cameraViewToClip[2][3] = 1.0f;
-    op.cameraViewToClip[3][2] = -zn * zq;
-    op.clipToCameraView[0][0] = 1.0f / xs;
-    op.clipToCameraView[1][1] = 1.0f / ys;
-    op.clipToCameraView[2][3] = -1.0f / (zn * zq);
-    op.clipToCameraView[3][2] = 1.0f;
-    op.clipToCameraView[3][3] = 1.0f / zn;
+    const bool has_ext = ev->struct_size >= sizeof(Pt5FgEval);
+    bool used_real_cam = false;
+    if (has_ext && ev->has_camera) {
+        memcpy(op.cameraViewToClip, ev->view_to_clip, sizeof(op.cameraViewToClip));
+        if (fg_mat_inv4(op.cameraViewToClip, op.clipToCameraView)) {
+            memcpy(op.cameraPos, ev->cam_pos, sizeof(op.cameraPos));
+            memcpy(op.cameraUp, ev->cam_up, sizeof(op.cameraUp));
+            memcpy(op.cameraRight, ev->cam_right, sizeof(op.cameraRight));
+            memcpy(op.cameraFwd, ev->cam_fwd, sizeof(op.cameraFwd));
+            op.cameraNear = ev->cam_near;
+            op.cameraFar = ev->cam_far;
+            op.cameraFOV = ev->cam_fov;
+            op.cameraAspectRatio = ev->cam_aspect;
+            op.cameraPinholeOffset[0] = ev->cam_pinhole[0];
+            op.cameraPinholeOffset[1] = ev->cam_pinhole[1];
+            used_real_cam = true;
+        }
+    }
+    if (!used_real_cam) {
+        const float aspect = rh ? (float)rw / (float)rh : 16.0f / 9.0f;
+        const float fov = 0.9f, zn = 0.1f, zf = 1000.0f;
+        const float ys = 1.0f / tanf(fov * 0.5f), xs = ys / aspect, zq = zf / (zf - zn);
+        op.cameraViewToClip[0][0] = xs;
+        op.cameraViewToClip[1][1] = ys;
+        op.cameraViewToClip[2][2] = zq;
+        op.cameraViewToClip[2][3] = 1.0f;
+        op.cameraViewToClip[3][2] = -zn * zq;
+        op.clipToCameraView[0][0] = 1.0f / xs;
+        op.clipToCameraView[1][1] = 1.0f / ys;
+        op.clipToCameraView[2][3] = -1.0f / (zn * zq);
+        op.clipToCameraView[3][2] = 1.0f;
+        op.clipToCameraView[3][3] = 1.0f / zn;
+        op.cameraUp[1] = 1.0f;
+        op.cameraRight[0] = 1.0f;
+        op.cameraFwd[2] = 1.0f;
+        op.cameraNear = zn;
+        op.cameraFar = zf;
+        op.cameraFOV = fov;
+        op.cameraAspectRatio = aspect;
+    }
     fg_mat_ident(op.clipToLensClip);
-    if (ev->struct_size >= sizeof(Pt5FgEval) && ev->has_clip_to_prev) {
+    if (ev->has_clip_to_prev) {
         memcpy(op.clipToPrevClip, ev->clip_to_prev, sizeof(op.clipToPrevClip));
         if (!fg_mat_inv4(op.clipToPrevClip, op.prevClipToClip)) {
             fg_mat_ident(op.clipToPrevClip);
@@ -578,13 +605,6 @@ PT5_EXPORT int pt5_fg_eval(void* d3d12_cmd_list, const Pt5FgEval* ev,
     }
     op.mvecScale[0] = ev->mv_scale_x != 0.0f ? ev->mv_scale_x : 1.0f;
     op.mvecScale[1] = ev->mv_scale_y != 0.0f ? ev->mv_scale_y : 1.0f;
-    op.cameraUp[1] = 1.0f;
-    op.cameraRight[0] = 1.0f;
-    op.cameraFwd[2] = 1.0f;
-    op.cameraNear = zn;
-    op.cameraFar = zf;
-    op.cameraFOV = fov;
-    op.cameraAspectRatio = aspect;
     op.colorBuffersHDR = s_fg_hdr != 0;
     op.depthInverted = s_fg_dinv != 0;
     op.cameraMotionIncluded = true;
@@ -603,6 +623,11 @@ PT5_EXPORT int pt5_fg_eval(void* d3d12_cmd_list, const Pt5FgEval* ev,
     op.backbufferSubrectSize.Height = oh;
     op.outputInterpSubrectSize.Width = ow;
     op.outputInterpSubrectSize.Height = oh;
+    ID3D12Resource* hudless = (has_ext && ev->hudless) ? static_cast<ID3D12Resource*>(ev->hudless) : nullptr;
+    if (hudless) {
+        op.hudLessSubrectSize.Width = ow;
+        op.hudLessSubrectSize.Height = oh;
+    }
 
     NVSDK_NGX_Parameter_SetULL(s_fg_pars, NVSDK_NGX_DLSSG_Parameter_BackbufferFrameID, ev->frame_id);
     NVSDK_NGX_Parameter_SetUI(s_fg_pars, NVSDK_NGX_DLSSG_Parameter_EvalFlags, 0);
@@ -616,6 +641,7 @@ PT5_EXPORT int pt5_fg_eval(void* d3d12_cmd_list, const Pt5FgEval* ev,
         ep.pBackbuffer = static_cast<ID3D12Resource*>(ev->color);
         ep.pDepth = static_cast<ID3D12Resource*>(ev->depth);
         ep.pMVecs = static_cast<ID3D12Resource*>(ev->mv);
+        ep.pHudless = hudless;
         ep.pOutputInterpFrame = static_cast<ID3D12Resource*>(ev->output[k]);
         op.multiFrameCount = gen;
         op.multiFrameIndex = k + 1u;
