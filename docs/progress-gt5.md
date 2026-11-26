@@ -4,6 +4,29 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Full-field race frame drops: walker no longer waits for the replay on guest copies (`perf/v0.3.3-field-gpu`, 2026-11-26)
+
+Follow-up reports (`gt5p-debug-20261126-15131{0,5}-*-69908-*.zip`, frame generation paused by the guard below):
+the same drop at Monza's start with the field in view. Frame history: FIFO walk 11-28 ms a frame (one CPU
+thread, budget 16.7), GPU ~19.5 ms, 1 GB of RAM free. Route: `gt5boot.ps1 -Route race -Tab 1 -Track 2`
+(World Circuits, third entry; `-Track 0` is a different circuit), 16 cars, we start last.
+
+- **Measured.** `RSX_DRAWPROF=1`: at the start the recording stages are ~10 ms of a 17 ms walk (index/vertex
+  upload ~3.5 ms, index finish + GPU vertex setup ~2.7 ms, constants ~2.5 ms). A sampled run (`/MAP` relink,
+  `GT5P_SAMPLE=2 GT5P_SAMPLE_PRESENT=1`) put 5.8% of the walker's samples blocked inside
+  `rsx_d3d12_before_guest_copy`: a guest copy (NV0039) into memory a texture of the frame *being replayed* binds
+  made the walker spin up to 30 ms (`RSX_COPY_SNAP_WAIT_MS`) for that replay, serialising walker and replay.
+  New `[present-thread]` field `copy waits N (M ms)`: 0.2-0.5 waits, **1.7-5 ms a frame** in the race.
+- **Fix (`libs/video/rsx_d3d12_backend.c`, `RSX_COPY_SNAP_REPLAY=0` rollback):** keep the bytes for the
+  replaying frame as for the recording one: append a snapshot to its table (`tex_src` reads it) instead of
+  waiting. Append-only, published after the copy with a barrier; cubes, a full table (128) or a shorter
+  existing copy still wait. `rt_submit` resets a frame set's table when it is taken for recording, so a copy
+  kept after its `tex_snap_frame_done()` cannot serve a later frame.
+- **Result** (Monza, user's settings, 51 s from the race start, one run each): **41.9 -> 46.6 FPS**, walk
+  15.2 -> 11.6 ms a frame, late 68.9% -> 54.1%; copy waits 3-4 ms -> ~0.2 ms a frame. Race shots unchanged.
+- **Still open:** draw recording itself (~10 ms at the start) and replay (10-14 ms) with 2,000-3,000 draws;
+  premium cars add draws. Test: `scripts/test/copy_snap_replay.py` (source wiring).
+
 ## Full-field race frame drops: frame generation refresh guard (`perf/v0.3.3-field-gpu`, 2026-11-26)
 
 User report (`gt5p-debug-20261126-135336-919-82284-1.zip`, v0.3.2, Monza with a full grid, premium cars worst):
