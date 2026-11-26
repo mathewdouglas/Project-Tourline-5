@@ -12,7 +12,7 @@ Built cleanly under `C:\pt5-release\0.3.2\final` (refreshed 4-route PGO `12e4484
 Packaged 01.04 engine (`gt5.exe`), High Speed Ring 60 s frame test (`RSX_CMD_CHECK=1`, `0` reports / `0` `PSO FAIL`):
 - **59.7 FPS** (`1.0%` late, median `16.6 ms`, p99 `20.0 ms`, max `27.3 ms`, `walk 6.14 ms/frame`; steady `300–301` frames/5 s on track).
 
-Antivirus: local Defender `MpCmdRun -Scan -ScanType 3` found `0` threats on both the ZIP and extracted folder. VirusTotal scan pending before publishing.
+Antivirus: local Defender `MpCmdRun -Scan -ScanType 3` found `0` threats on both the ZIP and extracted folder. VirusTotal (`C:\pt5-release\0.3.2\vt.log`): ZIP `1/64`, `gt5.exe` `1/61`, and `gt5_211.exe` `1/68` (`Webroot=W32.Malware.gen` only; `0` on Bitdefender, Microsoft Defender, and all other engines), `tourline5.exe` `2/68` (`APEX=Malicious`, `Trapmine=suspicious.low.ml.score` allowed; `0` on Bitdefender, Microsoft Defender, and all other engines), `pt5_upscale_dlss.dll` `0/68`, `nvngx_dlss.dll` `0/67`, `nvngx_dlssg.dll` `0/70`, all 9 other DLLs `0/63–72`.
 
 ## 0.3.2 fixes & controller features: #89-#93 (`0.3.2`, 2026-11-26)
 
