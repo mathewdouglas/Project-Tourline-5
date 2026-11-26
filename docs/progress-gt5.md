@@ -4,6 +4,31 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Full-field race frame drops: what is left after the copy fixes (`perf/v0.3.3-field-gpu`, 2026-11-26)
+
+Fourth reports (`gt5p-debug-20261126-22150{2,4}-*-63984-*.zip`, build with the shared snapshots; MP4-12C
+against a premium field, Monza): self copies now 161 MiB a frame with up to 28 snapshots shared (the
+glass fix works). Still 134-208 frames per 5 s for ~25 s after the start: replay 15-25 ms a frame with
+2,900-4,077 draws, walker waiting 5-8 ms for the GPU, fifo ~22 ms a frame; four SPU lanes at 93-95%.
+
+Reproduced here with `gt5boot.ps1 -Route race -Tab 1 -Track 2 -Car 37` (a McLaren; the Arcade car list
+is one car per Right, Fiat 500 first): 25-37 FPS for ~25 s after the start, then 60. Measured in that
+stretch (`GT5P_PRESENT_PROF=1`): **GPU 7-9 ms a frame** (6.3 later), so the GPU is not the limit; the walk
+takes ~18 ms of CPU a frame (8 later) and the replay 10-13 ms of CPU. The walker's "waited for the GPU" is
+`rt_submit` waiting for the frame the replay just submitted: the whole frame was one command list sent at
+the end, so GPU time followed replay time.
+
+- **Tried, not kept:** submitting the replay's command list in pieces at render-target switches every
+  300 draws (overlapping GPU with replay). The walker's GPU wait fell from 6-8 to 1-1.6 ms but the replay
+  grew by the same amount and frames per 5 s in the stretch did not change (183 vs 187); removed.
+- **Not the cost:** the lanes' 48% in `spurs_pool_lane` is the sampler counting blocked lanes (the
+  samples sit after its `WaitForSingleObject`). First-race pipeline builds (`[pso-hitch]` 50-300 ms on the
+  helpers) happen once per new field: 12 on this machine's first McLaren run, 0-1 on later ones.
+- **Open:** per-draw CPU cost in recording (walker) and replay with the whole premium field near: the next
+  step is a profile of those two threads alone in that stretch.
+- **Test fix:** `Get-GT5RaceRoute` with large `-Car` values exceeded `PAD_HOLD`'s 256 timed presses and
+  dropped the race-start presses; the track/car selection retries now stop 60 s after their screen.
+
 ## Full-field race frame drops: headlamp-glass snapshots shared per texture-cache invalidate (`perf/v0.3.3-field-gpu`, 2026-11-26)
 
 Third set of reports (`gt5p-debug-20261126-2053{45,05,12}-*-51344-*.zip`, build with both fixes below; RTX 4060,

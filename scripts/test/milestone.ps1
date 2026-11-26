@@ -190,7 +190,7 @@ function Get-GT5RaceRoute([int]$Track = 0, [int]$Car = 0, [int]$Tab = 0) {
         $screen, $n = $step
         $tabs = if ($screen -eq "TrackList") { $Tab } else { 0 }
         if (-not $n -and -not $tabs) { continue }
-        for ($t = $t0; $t -le 150000; $t += 3000) { $s += "@$from+$t-$($t+200)!$($screen):CROSS" }
+        for ($t = $t0; $t -le $t0 + 60000; $t += 3000) { $s += "@$from+$t-$($t+200)!$($screen):CROSS" }
         $t1 = 3000
         if ($tabs) {
             $s += "@$screen+3000-3150:UP"
@@ -201,7 +201,7 @@ function Get-GT5RaceRoute([int]$Track = 0, [int]$Car = 0, [int]$Tab = 0) {
         for ($k = 0; $k -lt $n; $k++) { $t = $t1 + 700 * $k; $s += "@$screen+$t-$($t+150):RIGHT" }
         $from = $screen; $t0 = $t1 + 700 * $n + 2000
     }
-    for ($t = $t0; $t -le 150000; $t += 3000) { $s += "@$from+$t-$($t+200)!RaceLoad:CROSS" }
+    for ($t = $t0; $t -le $t0 + 60000; $t += 3000) { $s += "@$from+$t-$($t+200)!RaceLoad:CROSS" }
     for ($t = 15000; $t -le 150000; $t += 3000) { $s += "@RaceLoad+$t-$($t+200)!RaceStart:CROSS" }
     $s -join ","
 }
