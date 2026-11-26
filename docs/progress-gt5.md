@@ -4,6 +4,40 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Full-field race frame drops: headlamp-glass snapshots shared per texture-cache invalidate (`perf/v0.3.3-field-gpu`, 2026-11-26)
+
+Third set of reports (`gt5p-debug-20261126-2053{45,05,12}-*-51344-*.zip`, build with both fixes below; RTX 4060,
+3440x1440 DLAA, MSAA 4 in settings, 451 MB of RAM free): Monza with premium cars close (MP4-12C, SLS), 114-210
+frames per 5 s, the walker waiting **9-14 ms a frame for the GPU**, and `self copies` **61-81 a frame, 542-1307
+MiB**. In light scenes the same field read 50 copies, 123 MiB.
+
+- **Measured.** `RSX_SELF_TRACE=<n>` (new; logs self-read draws into targets of 1 Mpixel or more): almost all
+  the large copies are three fragment programs (`0x062CC481`, `0x062CF001`, `0x062DC581`), each sampling the
+  3440x1440 scene on unit 10 while drawing into it: three headlamp-glass layers per premium car, in the main
+  view (scissor 1280x1080, the whole target) and again in the rear-view mirror pass (scissor 512x256). Each
+  took a full 40 MB copy. A new per-draw count of texture-cache invalidates (`INVALIDATE_L2` bit 0, what
+  `cellGcmSetInvalidateTextureCache` sends) shows the game invalidates **once** before the three layers.
+- **Fix (`libs/video/rsx_d3d12_backend.c`, `rsx_commands.c`).** Draws into one target that were recorded
+  with the same invalidate count, viewport and scissor share one snapshot within a replay: the RSX could not
+  have shown a layer what the layer before it wrote either (`RSX_SELF_EPOCH=0` old). A different viewport
+  (each level of a mip chain built in one surface) always copies again. Only the targets (A, MRT 1-3) that
+  the program's sampled units alias are copied; it used to copy A and every MRT target
+  (`RSX_SELF_READ_ONLY=0` old). A multisampled target is resolved straight into the snapshot, leaving `res`
+  marked out of date (`RSX_SELF_RESOLVE=0` resolves and copies). `[present-thread]` reports `N resolved into
+  the copy, M shared`.
+- **Rejected as a default:** copying only the draw's viewport inside its scissor (`RSX_SELF_SCISSOR=1`,
+  experiment). It took the steady 50 small copies from 123 to 2 MiB, but a mip-chain draw reads the level
+  above its viewport, which that leaves stale.
+- **Result** (Monza `-Tab 1 -Track 2 -Car 1`, user's settings, busiest 5 s window after the start, same build):
+  large copies 394 -> 176 MiB a frame, 5.9-6.3 snapshots shared a frame. FPS over 52 s 57.7 (old) vs 56.9
+  (new): this car's field has about 7 glass draws a frame against the report's ~31, so this machine's run was
+  not limited by them. On the report's frames (~31 extra 40 MB copies) the expected saving is about 0.8 GB of
+  copies a frame. Race shots unchanged.
+- **Still open:** the 20-30 s slow stretch after the start (replay 12-16 ms, GPU wait 6-7 ms) is in both
+  runs and is not the copies; the reports' first-race pipeline builds (`[pso-hitch]` 50-250 ms on the helper
+  threads) and low free RAM. Tests: `scripts/test/self_read_share.py` (compiles the real rule),
+  `scripts/test/rt_self_read.py` (its end marker had gone stale after the frame-generation change; fixed).
+
 ## Full-field race frame drops: walker no longer waits for the replay on guest copies (`perf/v0.3.3-field-gpu`, 2026-11-26)
 
 Follow-up reports (`gt5p-debug-20261126-15131{0,5}-*-69908-*.zip`, frame generation paused by the guard below):

@@ -202,6 +202,6 @@ function Get-GT5RaceRoute([int]$Track = 0, [int]$Car = 0, [int]$Tab = 0) {
         $from = $screen; $t0 = $t1 + 700 * $n + 2000
     }
     for ($t = $t0; $t -le 150000; $t += 3000) { $s += "@$from+$t-$($t+200)!RaceLoad:CROSS" }
-    for ($t = 15000; $t -le 75000; $t += 3000) { $s += "@RaceLoad+$t-$($t+200)!RaceStart:CROSS" }
+    for ($t = 15000; $t -le 150000; $t += 3000) { $s += "@RaceLoad+$t-$($t+200)!RaceStart:CROSS" }
     $s -join ","
 }

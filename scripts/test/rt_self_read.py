@@ -13,7 +13,7 @@ start = source.index('                    /* Exact aliases also reach this path'
 end = source.index('                    continue;', start)
 binding = source[start:end]
 start = source.index('                /* A self-read may have resolved this target')
-end = source.index('                if (cur_rt < 0) bb_dirty = 1;', start)
+end = source.index('                if (cur_rt < 0) {', start)
 dirty = source[start:end]
 field = re.search(r'\bu\d+\s+tex_self;', source)[0]
 harness = r'''
@@ -26,7 +26,7 @@ typedef unsigned u32;
 typedef int ID3D12Resource;
 typedef int DXGI_FORMAT;
 #define D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING 0
-typedef struct { u32 stencil, rt_off, rt_mrt[3]; int tex_rt[16]; FIELD } Draw;
+typedef struct { u32 stencil, rt_off, rt_mrt[3]; int tex_rt[16]; u32 self_tgt; FIELD } Draw;
 static ID3D12Resource original, snapshot;
 static struct { struct { ID3D12Resource *res, *ms; int dxgi, ms_dirty; } off_rt[4]; } s_d3d;
 static ID3D12Resource *bound;

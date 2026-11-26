@@ -357,11 +357,16 @@ frame is a present and presents are held to the display rate, so FG 2x on a 100 
 at 50 real FPS (HSR race at 3440x1440 DLAA: 45.6 FPS, 73% late; FG off 59.4). FG now generates at most
 `floor(Hz*1.03/60)-1` frames (2x from 117 Hz) for the window's monitor, and with none skips the FG
 feature and HUD-less copy (`RSX_FG_REFRESH_GUARD=0` old; `scripts/test/fg_refresh_guard.py`). Self-read
-snapshots were measured and are not the cost (`self copies` on `[present-thread]`). Guest copies into a
+snapshots cost little at High Speed Ring but up to 1.3 GB a frame with premium cars close (below). Guest copies into a
 texture the replaying frame binds now snapshot it instead of making the walker wait for the replay
 (`RSX_COPY_SNAP_REPLAY=0` old; Monza start 41.9 -> 46.6 FPS, walk 15.2 -> 11.6 ms; `copy waits` on
 `[present-thread]`; `scripts/test/copy_snap_replay.py`). Monza route: `gt5boot.ps1 -Route race -Tab 1
--Track 2`. See progress-gt5.md.
+-Track 2`. Self-read snapshots (premium cars' headlamp glass reads the scene on unit 10, three layers
+after one texture-cache invalidate) are shared by draws with the same invalidate count, viewport and
+scissor (`RSX_SELF_EPOCH=0` old), copy only targets the program reads (`RSX_SELF_READ_ONLY=0`) and
+resolve MSAA straight into the snapshot (`RSX_SELF_RESOLVE=0`); `RSX_SELF_TRACE=<n>` logs large ones;
+`RSX_SELF_SCISSOR=1` (region copy) stays off: mip chains read outside their viewport. Test:
+`scripts/test/self_read_share.py`. See progress-gt5.md.
 
 **Steering wheels (`release/v0.2.0`).** GT5 drives Logitech wheels
 with its own `cellUsbd` driver; the runtime now shows it an emulated G27
