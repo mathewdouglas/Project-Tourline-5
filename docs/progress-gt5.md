@@ -4,6 +4,44 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Full-field race frame drops: frame generation refresh guard (`perf/v0.3.3-field-gpu`, 2026-11-26)
+
+User report (`gt5p-debug-20261126-135336-919-82284-1.zip`, v0.3.2, Monza with a full grid, premium cars worst):
+3440x1440 21:9, DLAA, **frame generation 2x**, RTX 4060, 99-100 Hz display. In the race the game produced
+92-168 frames per 5 s (18-33 FPS) with the walker waiting 17-29 ms per frame for the GPU; light scenes sat at
+exactly 251 frames per 5 s (50 FPS, the 20 ms intervals of the report's frame history).
+
+Measured on the same machine, High Speed Ring Arcade race, `gt5boot.ps1 -Route race -FrameTest -Settle 40`
+at the user's settings (41-42 s windows):
+
+| Configuration | FPS | late (>20 ms) |
+| --- | ---: | ---: |
+| DLAA + FG 2x (the report's) | 45.6 | 73.3% |
+| DLAA + FG 2x, no self-read copies (`RT_NO_SELFCOPY=1`) | 47.9 | 67.4% |
+| DLAA, FG off | 59.4 | 3.2% |
+| MSAA 4x, no DLAA/FG | 59.6 | 2.4% |
+| DLAA + FG 2x, refresh guard (new default) | 58.7-59.3 | 3.0-4.6% |
+| the same, `RSX_FG_REFRESH_GUARD=0` | 46.2 | 73.8% |
+
+- **Cause.** Every generated frame is a present; the swap chain has no tearing flag, so presents are held to the
+  display's refresh. 2x on a 100 Hz display can show at most 50 real frames a second, below the game's 60, and
+  the DLSS-G work and the HUD-less copy cost GPU time on top, which is where a full grid of premium cars drops
+  further. DLAA itself costs about nothing here (59.4 vs MSAA 59.6).
+- **Ruled out:** self-read snapshots (a draw sampling its own target, e.g. headlamp glass). The new
+  `self copies N (M MiB) per frame` field on the `[present-thread]` line counted 68 copies, ~130 MiB a frame,
+  i.e. small targets, not the 40 MB scene; removing them all gained ~1 ms (45.6 -> 47.9). Copying only the
+  sampled target instead of target A plus every MRT changed nothing (no MRT copies happen) and was dropped.
+- **Fix (`libs/video/rsx_d3d12_backend.c`, `RSX_FG_REFRESH_GUARD=0` rollback):** `fg_eval_frame()` generates at
+  most `fg_fit_for_hz(Hz)` frames, `floor(Hz * 1.03 / 60) - 1` (2x from 117 Hz, 3x 175 Hz, 4x 234 Hz), reading
+  the window's monitor rate every 2 s. With nothing to generate it returns before the FG feature is created
+  (no VRAM spent) and the HUD-less copy stops; a later resume resets the FG history. Logged once per rate:
+  `[fg] display 100 Hz: up to 0 generated frame(s) ... paused`. F1 and the settings file say so.
+- **Not addressed:** the Monza scene itself was not driven here (no scripted route); its present-thread replay
+  reached 10-23 ms a frame in the report, so a full premium grid may still dip below 60 without FG. The report
+  also showed 2.1 GB of 16 GB RAM free and 52/58 GB commit.
+- **Test:** `scripts/test/fg_refresh_guard.py` (compiles the real `fg_fit_for_hz` for 21 rates; checks the guard
+  precedes FG init and the rollback exists).
+
 ## Release 0.3.2 built & verified (2026-11-26)
 
 Tag `v0.3.2` = `c9d0eef` (branch `0.3.2`): fixes `#92` (Ford GT40 Mk.IV inverted in main view on 0.3.1 — no-cull bit 2 only on explicit CW `0x0900` mirror pass), `#93` (static cubemap full mip pyramid upload + `rsx_texture_layout()` DXT3/DXT5 face stride), `#89` (`RSX_TEX_WW_DENSE_DIRTY` dense check on write-watch-dirty held textures), `#91` (pre-create `rpcs3/log/` + log headless RPCS3 exit code in 2.11 PKG installer), and adds `#90` (Right-Stick-to-D-Pad RA mode + remappable controller/keyboard speed-toggle hotkeys in `F1 > CONTROLLERS`).

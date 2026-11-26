@@ -750,6 +750,7 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "# \"off\", \"dlaa\", \"quality\", \"balanced\", \"performance\" or \"ultra\". [RSX_AA]\n"
          "dlss = \"" << kDlssNames[s.dlss_mode >= 0 && s.dlss_mode < 6 ? s.dlss_mode : 0] << "\"\n"
          "# NVIDIA DLSS Frame Generation (RTX 40/50 + nvngx_dlssg.dll + HAGS):\n"
+         "# 2x needs a display of about 120 Hz (3x 175, 4x 240); below that it pauses.\n"
          "# \"off\", \"2x\", \"3x\" or \"4x\". [RSX_FG]\n"
          "frame_gen = \"" << kFgNames[s.frame_gen >= 0 && s.frame_gen < 4 ? s.frame_gen : 0] << "\"\n"
          "# Wait for the monitor's refresh when showing a frame. false can tear,\n"

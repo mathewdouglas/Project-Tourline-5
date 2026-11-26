@@ -355,7 +355,8 @@ const std::vector<Item>& items()
         { L"VIDEO", L"NVIDIA Frame Generation",
           L"AI frame generation on NVIDIA RTX 40/50 GPUs (requires pt5_upscale_dlss.dll, "
           L"nvngx_dlssg.dll, and Windows Hardware-Accelerated GPU Scheduling). 2x works on RTX 40+; "
-          L"3x/4x clamp to your GPU's limit. Applies live.",
+          L"3x/4x clamp to your GPU's limit. Needs a fast display: 2x from about 120 Hz, 3x 175 Hz, "
+          L"4x 240 Hz; below that it pauses, since it would hold the game under 60 FPS. Applies live.",
           "RSX_FG", { {0, L"Off"}, {1, L"2x"}, {2, L"3x"}, {3, L"4x"} },
           [](const UiSettings& s) { return s.frame_gen; },
           [](UiSettings& s, int v) { s.frame_gen = v; },

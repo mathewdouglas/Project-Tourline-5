@@ -352,6 +352,13 @@ Rome checksums `-90%`, `present-replay` `50.3% -> 44.0%` core, Car List checksum
 p99 `23.5 -> 22.5 ms`, `0` misses), `GCM_FIFO_BURST` (`=0` off; Rome `present` `55.3% -> 52.0%`
 core, walk `-0.50 ms/frame`) + 4-lane `tex_dense_sum`, and RPCS3 patch support (`ppu_lifter.py --insn-patches`, `scripts/rpcs3_patches.py`, `config/patches_bcus98114_{v104,v211}.json`, `src/gt5p_patches.{h,cpp}`) with live F1 `GAME` menu **Looser Chase Camera** (#77) on both 01.04 (`0x019AFE70`) and 02.11 (`0x017FDF40`) (`GT5_PATCH_LOOSER_CHASE_CAMERA`, `GT5_CHASE_CAM_DAMPER`, `GT5_CHASE_CAM_MAX_ANGLE`; default off; `scripts/test/rpcs3_patches.py`) and live `Unlock FPS` on 2.11 (`GT5_PATCH_UNLOCK_FPS`, `#53`). Also fixed `#79` (`GT5P_OPTIONS_WORD=0x017E0D1C=1` clears 2.11 Options hint when returning to GT Mode) and `#80` (Moza R3 wheel: 256-button `WheelRaw`, up to 4 aux USB shifters/button boxes on buttons `129..256`, `s_has_hat`-gated POV so button D-pads work, and `D-Pad Up/Down/Left/Right` in `F1 > WHEEL MAP`). See progress-gt5.md.
 
+**Frame generation refresh guard (`perf/v0.3.3-field-gpu`, 2026-11-26, runtime).** Each generated
+frame is a present and presents are held to the display rate, so FG 2x on a 100 Hz display capped GT5
+at 50 real FPS (HSR race at 3440x1440 DLAA: 45.6 FPS, 73% late; FG off 59.4). FG now generates at most
+`floor(Hz*1.03/60)-1` frames (2x from 117 Hz) for the window's monitor, and with none skips the FG
+feature and HUD-less copy (`RSX_FG_REFRESH_GUARD=0` old; `scripts/test/fg_refresh_guard.py`). Self-read
+snapshots were measured and are not the cost (`self copies` on `[present-thread]`). See progress-gt5.md.
+
 **Steering wheels (`release/v0.2.0`).** GT5 drives Logitech wheels
 with its own `cellUsbd` driver; the runtime now shows it an emulated G27
 whatever wheel the PC has (DirectInput, force feedback), plus `cellPadLdd*`.
