@@ -1,0 +1,189 @@
+diff --git a/libs/system/cellSaveData.c b/libs/system/cellSaveData.c
+index 7bea9e1..e3ef01b 100644
+--- a/libs/system/cellSaveData.c
++++ b/libs/system/cellSaveData.c
+@@ -288,7 +288,7 @@ static void marshal_statget_init(uint32_t addr, int is_new, const char* dirName,
+  * CELL_SAVEDATA_CBRESULT_ERR_FAILURE if no dispatcher is installed. */
+ static s32 dispatch_func_stat_full(uint32_t func_opd, int is_new, const char* dirName,
+                                    uint32_t* userdata_ea, const CellSaveDataStatGet* input,
+-                                   CellSaveDataStatSet* output)
++                                   CellSaveDataStatSet* output, uint32_t setbuf_ea)
+ {
+     if (!g_ps3_guest_caller) return CELL_SAVEDATA_CBRESULT_ERR_FAILURE;
+ 
+@@ -315,7 +315,23 @@ static s32 dispatch_func_stat_full(uint32_t func_opd, int is_new, const char* di
+         vm_write32(get_ea + 1624, (u32)input->sysSizeKB);
+         vm_write32(get_ea + 1628, input->fileNum);
+         vm_write32(get_ea + 1632, input->fileListNum);
+-        u32 files = input->fileListNum ? scratch_alloc(input->fileListNum * 56) : 0;
++        /* The file list goes in the game's setBuf->buf, as on a console:
++         * GT5 2.11 reads the list through statGet->fileList for GT5.0, but
++         * looks up GT5.1, GT5.2, ... (a save over 2 MiB is split in 2 MiB
++         * parts) in its own setBuf->buf. With the list in scratch it never
++         * found GT5.1, loaded 2 MiB of a larger save and stopped on a script
++         * read error (#94, #95, #99). PS3_SAVEDATA_LIST_IN_BUF=0: scratch. */
++        const u32 list_bytes = input->fileListNum * 56;
++        const u32 sb_size = setbuf_ea ? vm_read32(setbuf_ea + 32) : 0;
++        const u32 sb_buf = setbuf_ea ? vm_read32(setbuf_ea + 36) : 0;
++        const char* lib = getenv("PS3_SAVEDATA_LIST_IN_BUF");
++        u32 files = 0;
++        if (list_bytes && sb_buf && sb_size >= list_bytes && !(lib && lib[0] == '0')) {
++            vm_commit(sb_buf, list_bytes);
++            files = sb_buf;
++        } else if (list_bytes) {
++            files = scratch_alloc(list_bytes);
++        }
+         if (input->fileListNum && !files) return CELL_SAVEDATA_CBRESULT_ERR_FAILURE;
+         vm_write32(get_ea + 1636, files);
+         for (u32 i = 0; i < input->fileListNum; i++) {
+@@ -552,6 +568,31 @@ static void pfd_add(const char* save_path, const char* name)
+     if (fp) { fprintf(fp, "%s\n", name); fclose(fp); }
+ }
+ 
++#ifndef CELL_SAVEDATA_RECREATE_YES
++#define CELL_SAVEDATA_RECREATE_YES             2
++#define CELL_SAVEDATA_RECREATE_YES_RESET_OWNER 3
++#endif
++
++static void pfd_remove(const char* save_path, const char* name)
++{
++    if (!pfd_has(save_path, name)) return;
++    char path[1024], line[64];
++    pfd_path(save_path, path, sizeof(path));
++    FILE* fp = fopen(path, "rb");
++    if (!fp) return;
++    char keep[4096]; size_t n = 0;
++    while (fgets(line, sizeof(line), fp)) {
++        line[strcspn(line, "\r\n")] = 0;
++        if (!line[0] || !strcmp(line, name)) continue;
++        size_t l = strlen(line);
++        if (n + l + 2 > sizeof(keep)) break;
++        memcpy(keep + n, line, l); n += l; keep[n++] = '\n';
++    }
++    fclose(fp);
++    fp = fopen(path, "wb");
++    if (fp) { fwrite(keep, 1, n, fp); fclose(fp); }
++}
++
+ static u32 savedata_file_type(const char* save_path, const char* name)
+ {
+     u32 t = savedata_content_type(name);
+@@ -644,20 +685,26 @@ static u32 enumerate_save_files(const char* save_path,
+     return count;
+ }
+ 
+-/* Execute file callback: read/write/delete files in the save directory */
+-static s32 process_file_op(const char* save_path, CellSaveDataFileSet* set)
++/* The file a FileSet names: content files have fixed names. NULL for an
++ * unknown file type. */
++static const char* fileset_name(const CellSaveDataFileSet* set)
+ {
+-    if (!set) return CELL_SAVEDATA_ERROR_PARAM;
+-    const char* name = set->fileName;
+     switch (set->fileType) {
+-    case CELL_SAVEDATA_FILETYPE_CONTENT_ICON0: name = "ICON0.PNG"; break;
+-    case CELL_SAVEDATA_FILETYPE_CONTENT_ICON1: name = "ICON1.PAM"; break;
+-    case CELL_SAVEDATA_FILETYPE_CONTENT_PIC1: name = "PIC1.PNG"; break;
+-    case CELL_SAVEDATA_FILETYPE_CONTENT_SND0: name = "SND0.AT3"; break;
++    case CELL_SAVEDATA_FILETYPE_CONTENT_ICON0: return "ICON0.PNG";
++    case CELL_SAVEDATA_FILETYPE_CONTENT_ICON1: return "ICON1.PAM";
++    case CELL_SAVEDATA_FILETYPE_CONTENT_PIC1: return "PIC1.PNG";
++    case CELL_SAVEDATA_FILETYPE_CONTENT_SND0: return "SND0.AT3";
+     case CELL_SAVEDATA_FILETYPE_SECUREFILE:
+-    case CELL_SAVEDATA_FILETYPE_NORMALFILE: break;
+-    default: return CELL_SAVEDATA_ERROR_PARAM;
++    case CELL_SAVEDATA_FILETYPE_NORMALFILE: return set->fileName;
++    default: return NULL;
+     }
++}
++
++/* Execute file callback: read/write/delete files in the save directory */
++static s32 process_file_op(const char* save_path, CellSaveDataFileSet* set)
++{
++    if (!set) return CELL_SAVEDATA_ERROR_PARAM;
++    const char* name = fileset_name(set);
+     if (!name || !name[0] || strnlen(name, CELL_SAVEDATA_FILENAME_SIZE) == CELL_SAVEDATA_FILENAME_SIZE ||
+         strchr(name, '/') || strchr(name, '\\') || !strcmp(name, ".") || !strcmp(name, "..") ||
+         (set->fileOperation != CELL_SAVEDATA_FILEOP_DELETE && !set->fileBuf))
+@@ -839,6 +886,28 @@ static s32 savedata_execute(const char* dirName, int is_save,
+         }
+     }
+ 
++    /* reCreateMode YES (GT5 sets it on every save): a console empties the
++     * save before the new files go in. GT5 2.11 splits a save over 2 MiB
++     * into GT5.0, GT5.1, ...; when a save shrank back under 2 MiB the old
++     * GT5.1 stayed here, and the next load would read GT5.0 followed by it.
++     * The files the save does not write are removed only
++     * after it has written all of its own, so a save that fails part way
++     * keeps the old files. PS3_SAVEDATA_RECREATE=0: the old behaviour. */
++    CellSaveDataFileStat* before = NULL;
++    u32 before_num = 0;
++    unsigned char* rewritten = NULL;
++    if (is_save && !is_new) {
++        const char* e = getenv("PS3_SAVEDATA_RECREATE");
++        if (!(e && e[0] == '0')) {
++            before = (CellSaveDataFileStat*)calloc(CELL_SAVEDATA_LISTITEM_MAX, sizeof(CellSaveDataFileStat));
++            rewritten = (unsigned char*)calloc(CELL_SAVEDATA_LISTITEM_MAX, 1);
++            if (before && rewritten) {
++                before_num = enumerate_save_files(save_path, before, CELL_SAVEDATA_LISTITEM_MAX);
++                if (before_num > CELL_SAVEDATA_LISTITEM_MAX) before_num = CELL_SAVEDATA_LISTITEM_MAX;
++            }
++        }
++    }
++
+     CellSaveDataStatGet statGet;
+     memset(&statGet, 0, sizeof(statGet));
+     statGet.hddFreeSizeKB = 1024 * 1024; /* report 1GB free */
+@@ -887,11 +956,12 @@ static s32 savedata_execute(const char* dirName, int is_save,
+      * dispatcher, which builds StatGet/StatSet in guest memory. */
+     u32 callback_userdata = (u32)(uintptr_t)userdata;
+     cbResult.result = dispatch_func_stat_full((uint32_t)(uintptr_t)funcStat, is_new,
+-                         dirName, &callback_userdata, &statGet, &statSet);
++                         dirName, &callback_userdata, &statGet, &statSet,
++                         (uint32_t)(uintptr_t)setBuf);
+ 
+     if (cbResult.result < 0) {
+         printf("[cellSaveData] stat callback returned error %d\n", cbResult.result);
+-        free(fileList);
++        free(fileList); free(before); free(rewritten);
+         if (cbResult.result == CELL_SAVEDATA_CBRESULT_ERR_NODATA)
+             return CELL_SAVEDATA_ERROR_NODATA;
+         return CELL_SAVEDATA_ERROR_CBRESULT;
+@@ -920,13 +990,36 @@ static s32 savedata_execute(const char* dirName, int is_save,
+                    fileSet.fileOperation, fileSet.fileType,
+                    fileSet.fileName ? fileSet.fileName : "", fileSet.fileOffset,
+                    fileSet.fileSize, fileSet.fileBufSize, exc);
+-            if (exc < 0) { free(fileList); return exc; }
++            if (exc < 0) { free(fileList); free(before); free(rewritten); return exc; }
+             exc_size = (u32)exc;
++            const char* written = fileset_name(&fileSet);
++            if (rewritten && written && fileSet.fileOperation != CELL_SAVEDATA_FILEOP_READ)
++                for (u32 i = 0; i < before_num; i++)
++                    if (!strcmp(before[i].fileName, written)) rewritten[i] = 1;
+         }
+     }
+ 
+     free(fileList);
+ 
++    const u32 recreate = statSet.reCreateMode & 0xFFFF;
++    if (is_save)
++        printf("[cellSaveData] reCreateMode=%u (%u files before)\n", recreate, before_num);
++    if (before && rewritten && cbResult.result >= 0 &&
++        (recreate == CELL_SAVEDATA_RECREATE_YES || recreate == CELL_SAVEDATA_RECREATE_YES_RESET_OWNER)) {
++        for (u32 i = 0; i < before_num; i++) {
++            if (rewritten[i]) continue;
++            char stale[1024];
++            snprintf(stale, sizeof(stale), "%s/%s", save_path, before[i].fileName);
++#ifdef _WIN32
++            for (char* p = stale; *p; p++) if (*p == '/') *p = '\\';
++#endif
++            if (remove(stale) == 0)
++                printf("[cellSaveData] recreate: removed '%s', not part of this save\n", before[i].fileName);
++            pfd_remove(save_path, before[i].fileName);
++        }
++    }
++    free(before); free(rewritten);
++
+     if (cbResult.result < 0) {
+         if (cbResult.result == CELL_SAVEDATA_CBRESULT_ERR_NODATA)
+             return CELL_SAVEDATA_ERROR_NODATA;

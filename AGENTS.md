@@ -383,6 +383,13 @@ resolve MSAA straight into the snapshot (`RSX_SELF_RESOLVE=0`); `RSX_SELF_TRACE=
 `RSX_SELF_SCISSOR=1` (region copy) stays off: mip chains read outside their viewport. Test:
 `scripts/test/self_read_share.py`. See progress-gt5.md.
 
+**Saves over 2 MiB (#94/#95/#99, runtime, 2026-11-28).** 2.11 splits a save into 2 MiB parts
+(`GT5.0`, `GT5.1`, ...) and looks up the parts after the first in its own `setBuf->buf`; the runtime
+now puts the stat file list there, as a console does (`PS3_SAVEDATA_LIST_IN_BUF=0` old: only `GT5.0`
+loaded, script read error at boot). Saves honour `reCreateMode` YES: files the save did not write are
+removed after it succeeds (`PS3_SAVEDATA_RECREATE=0` old). Test: `scripts/test/savedata_split.py`.
+#98 (`Garage2.ad:75`) is the open #64/#73 garage class. See progress-gt5.md.
+
 **Display scaling (#97, 2026-11-28).** `gt5.exe` is per-monitor DPI aware (`src/gt5p_dpi.h`,
 `GT5P_DPI_AWARE=0` old): at 300% scaling it rendered at a third of the screen's pixels. The F3 profiler and
 shader badges run DPI-unaware threads (fixed-pixel layouts, scaled by Windows). New overlay windows with

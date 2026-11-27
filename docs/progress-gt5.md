@@ -4,6 +4,37 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Saves over 2 MiB load again (#94, #95, #99; runtime, 2026-11-28)
+
+#94/#95/#99 (one reporter, 2.11 with Master Mod 2.0.0) quit at boot with `read error at 2025482` then
+`cannot convert Bool to STType` (`UserProfile.ad:96`). The #98 report from the session before #99 shows why:
+the save had grown to 2,097,336 bytes, and 2.11 wrote it as `GT5.0` (2,097,152) plus `GT5.1` (184). The
+2.11 save code splits a save into 2 MiB parts named `<name>.<n>` (`0x008579AC`: parts = size >> 21, plus 1;
+format `%s.%d` at `0x0148ED00`). The next boot (#99) read `GT5.0` only, and the script reader ran off the end.
+
+Cause: the load's stat callback (`0x00855CF0`) finds `GT5.0` through `statGet->fileList`, but the part loop
+(`0x008574BC`, lookup at `0x008577FC`) looks up `GT5.1`, `GT5.2`, ... in the game's own `setBuf->buf`
+(request `+0x58`, count from `fileListNum` at `+0x5C`). On a console the system writes the file list into
+that buffer; the runtime put it in its scratch region, so the lookup never matched and the load stopped
+after part 0. `cellSaveData.c` now writes the list into `setBuf->buf` when it fits (GT5: 113 entries in
+98,304 bytes; scratch otherwise; `PS3_SAVEDATA_LIST_IN_BUF=0` old). The reporter's "GT5.0 turns into a 1"
+is the split; deleting `GT5.1` only let the game fall back to an older save.
+
+Also fixed: GT5's save stat callback (`0x008560F0`) sets `reCreateMode = 2` (RECREATE_YES), which on a console
+empties the save before writing. The runtime ignored it, so a save that shrank back under 2 MiB would leave
+the old `GT5.1`, and the next load would read it after the new `GT5.0`. Files that existed before a
+RECREATE_YES save and that it did not write are now removed, only after all its writes succeeded (a failed
+save keeps the old files); each save logs `reCreateMode=<n>` (`PS3_SAVEDATA_RECREATE=0` old).
+
+Test: `scripts/test/savedata_split.py` (production `cellSaveData.c`, a synthetic game callback that looks up
+parts the way 2.11 does; 7 cases including both rollbacks; `=0` reproduces #99's GT5.0-only load). Live:
+01.04 boot loads its 239 KB save and reaches the menu. Not run live: a 2.11 save over 2 MiB (none here).
+Patch section `patches/incremental/savedata-split.patch`.
+
+#98 (same reporter: Arcade, Special Stage Route 5, `Garage2.ad:75` `nil object cannot be used as HObject`
+from `CarRoot.ad`) loaded a complete single-part save, so it is not this; it is the open #64/#73 garage
+record class.
+
 ## F1 > GAME > Player name (2026-11-28)
 
 The user asked for the PSN/player name (`game.player_name`, `PS3_USER_NAME`, #60) on the F1 page. The page had
