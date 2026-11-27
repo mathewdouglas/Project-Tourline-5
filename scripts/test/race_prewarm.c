@@ -47,6 +47,8 @@ static void spack_race_begin(void){}
 static void spack_race_end(void){}
 static volatile LONG s_spack_active=1;
 static void spack_begin(int scope){(void)scope;}
+static volatile LONG s_device_lost;
+static void pso_wait_notify(void){}
 #include "backend.inc"
 
 enum {N=48,SHADERS=3};
@@ -83,6 +85,14 @@ static u32 pack_count(void){
     u32 c=0;if(n>=40)memcpy(&c,p+12,4);free(p);return c;
 }
 static int file_exists(const char* p){return GetFileAttributesA(p)!=INVALID_FILE_ATTRIBUTES;}
+/* Where a pack's tables and payload start: version 1 has the tables after the
+ * header, version 2 (RSX_RACE_PACK_STREAM) has them at the end. */
+static u32 pack_version(const unsigned char* p){u32 v=0;memcpy(&v,p+8,4);return v;}
+static size_t pack_tables(const unsigned char* p){
+    u32 count=0,codes=0;memcpy(&count,p+12,4);memcpy(&codes,p+16,4);return (size_t)count*32u+(size_t)codes*16u;
+}
+static size_t pack_tab(const unsigned char* p,size_t n){return pack_version(p)==1?40u:n-pack_tables(p);}
+static size_t pack_pay(const unsigned char* p){return pack_version(p)==1?40u+pack_tables(p):40u;}
 /* A fresh process state over the same cache directory. */
 static void session_end(void){
     pso_race_notify("TopMenuTemplate.gpb");
@@ -199,6 +209,7 @@ int main(int argc,char** argv){
     load_race();CHECK(resident_count(N)==N && s_race_loaded==N && !s_race_rejected);
     CHECK(g_rsx_race_load_done==N && g_rsx_race_load_total==N);
     wait_stored(stored);wait_released();CHECK(pack_count()==N && !s_pack_hits);
+    {size_t n=0;unsigned char* p=slurp(packp,&n);CHECK(p && pack_version(p)==2);free(p);}
     CHECK(preload_work>=N);   /* helper work is counted as preload, never as a waiting draw's */
     const LONG demand_before=demand_work;
     session_end();
@@ -241,7 +252,8 @@ int main(int argc,char** argv){
 
         /* 7. Damaged pack bytes: payload checksum rejects it, files serve the load, pack is rewritten. */
         size_t n=0;unsigned char* good=slurp(packp,&n);CHECK(good && n>4096);
-        unsigned char* bad=(unsigned char*)malloc(n);memcpy(bad,good,n);bad[n-100]^=0x40;spit(packp,bad,n);
+        unsigned char* bad=(unsigned char*)malloc(n);memcpy(bad,good,n);
+        bad[pack_pay(good)+(n-40u-pack_tables(good))-100]^=0x40;spit(packp,bad,n);   /* near the payload's end */
         stored=s_pack_stored;
         load_race();CHECK(!s_pack_hits && resident_count(N)==N && !s_race_rejected);wait_stored(stored);wait_released();
         session_end();
@@ -256,10 +268,10 @@ int main(int argc,char** argv){
          *    the member is rebuilt through the per-file cache and the pack rewritten once. */
         again=slurp(packp,&n2);CHECK(again && n2==n);
         u32 count=0,codes=0;memcpy(&count,again+12,4);memcpy(&codes,again+16,4);CHECK(count==N);
-        size_t tables=40u+(size_t)count*32u+(size_t)codes*16u;
-        u32 blob_off=0,blob_len=0;memcpy(&blob_off,again+40+7*32+24,4);memcpy(&blob_len,again+40+7*32+28,4);CHECK(blob_len>32);
-        memset(again+tables+blob_off,0xA5,blob_len);
-        u64 fnv=pso_hash_bytes(1469598103934665603ull,again+tables,n-tables);memcpy(again+32,&fnv,8);
+        size_t tables=40u+(size_t)count*32u+(size_t)codes*16u,tab=pack_tab(again,n),pay=pack_pay(again);
+        u32 blob_off=0,blob_len=0;memcpy(&blob_off,again+tab+7*32+24,4);memcpy(&blob_len,again+tab+7*32+28,4);CHECK(blob_len>32);
+        memset(again+pay+blob_off,0xA5,blob_len);
+        u64 fnv=pso_hash_bytes(1469598103934665603ull,again+pay,n-tables);memcpy(again+32,&fnv,8);
         spit(packp,again,n);free(again);
         stored=s_pack_stored;
         load_race();CHECK(s_pack_hits==1 && resident_count(N)==N && !s_race_rejected && s_pack_stale==1);
@@ -269,12 +281,24 @@ int main(int argc,char** argv){
 
         /* 9. A member the pack cannot serve (its recipe bytes damaged, table checksums valid). */
         again=slurp(packp,&n2);
-        u32 recipe_off=0;memcpy(&recipe_off,again+40+11*32+8,4);again[tables+recipe_off+64]^=1;
-        fnv=pso_hash_bytes(1469598103934665603ull,again+tables,n-tables);memcpy(again+32,&fnv,8);
+        u32 recipe_off=0;memcpy(&recipe_off,again+tab+11*32+8,4);again[pay+recipe_off+64]^=1;
+        fnv=pso_hash_bytes(1469598103934665603ull,again+pay,n-tables);memcpy(again+32,&fnv,8);
         spit(packp,again,n);free(again);
         load_race();CHECK(s_pack_hits==1 && resident_count(N)==N && !s_race_rejected && s_pack_stale==1);
         wait_released();session_end();
         puts("PASS: a pack member with a damaged recipe fails validation and is prepared from its own files");
+
+        /* 9b. RSX_RACE_PACK_STREAM=0 writes the version-1 layout from memory; it still hits,
+         *     and the streamed rewrite afterwards is the version-2 file again. */
+        _putenv_s("RSX_RACE_PACK_STREAM","0");write_index(hashes,N-1);stored=s_pack_stored;
+        load_race();CHECK(!s_pack_hits);wait_stored(stored);wait_released();session_end();
+        again=slurp(packp,&n2);CHECK(again && pack_version(again)==1 && pack_count()==N-1);free(again);
+        stored=s_pack_stored;load_race();CHECK(s_pack_hits==1 && resident_count(N)==N-1 && s_pack_stored==stored);
+        wait_released();session_end();
+        _putenv_s("RSX_RACE_PACK_STREAM","");write_index(hashes,N);stored=s_pack_stored;
+        load_race();CHECK(!s_pack_hits);wait_stored(stored);wait_released();session_end();
+        again=slurp(packp,&n2);CHECK(again && pack_version(again)==2 && n2==n && !memcmp(again,good,n));free(again);
+        puts("PASS: RSX_RACE_PACK_STREAM=0 writes and reads the version-1 layout; the streamed version 2 is rewritten byte for byte");
         free(good);free(bad);
 
         /* 10. Menu-time warmup reads the race pack; the pack is released when it is done. */

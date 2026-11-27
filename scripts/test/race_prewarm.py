@@ -47,12 +47,18 @@ assert report['matches_index'] and report['same_bytes_as_rebuild'], report
 blobs = sum(1 for record in parsed['records'] if record[6])
 print(f'PASS: Python reads the renderer pack ({len(native)} bytes, 48 recipes, 4 shared shaders, {blobs} blobs) and rebuilds it byte for byte')
 
-# The reader refuses what the renderer refuses.
+# The reader refuses what the renderer refuses. The renderer writes version 2
+# (tables at the end); the Python tool reads and rebuilds version 1 as well.
+assert parsed['version'] == 2
+tab = len(native) - (parsed['count'] * 32 + parsed['code_count'] * 16)
+v1 = pack.build_bytes(warm, version=1)
+assert len(v1) == len(native) and pack.parse_bytes(v1)['records'] == parsed['records']
+assert pack.parse_bytes(v1)['payload'] == parsed['payload']
 for label, damaged in (
         ('payload', native[:-50] + bytes([native[-50] ^ 1]) + native[-49:]),
         ('truncated', native[:len(native) // 2]),
         ('magic', b'\0' + native[1:]),
-        ('repeated member', native[:40 + 32] + native[40:40 + 8] + native[40 + 32 + 8:])):
+        ('repeated member', native[:tab + 32] + native[tab:tab + 8] + native[tab + 32 + 8:])):
     try:
         pack.parse_bytes(damaged)
     except ValueError:

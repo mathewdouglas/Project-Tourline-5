@@ -19,6 +19,12 @@ Little-endian layout:
 * Payload. Offsets are from the first payload byte. Each shader, recipe and
   driver blob starts 16-byte aligned; the pad bytes are part of the payload.
 
+That is version 1. Version 2, which the renderer writes by default
+(``RSX_RACE_PACK_STREAM``, ``=0`` writes version 1), has the same header and
+tables but puts the payload straight after the header and the tables at the
+end, so the renderer can write the payload as it reads it instead of holding
+up to 512 MB in memory. Both versions are read.
+
 ``index_fnv`` is FNV-1a 64 over the little-endian hash list in pack order
 (index order when written, each hash once). ``payload_fnv`` is the same
 function over the payload. A stored driver blob is the raw cached pipeline
@@ -36,7 +42,8 @@ import struct
 from pathlib import Path
 
 MAGIC = 0x314B434150355447  # 'GT5PACK1' little-endian
-VERSION = 1
+VERSION = 2
+VERSIONS = (1, 2)
 RECIPE_MAGIC = 0x31574D5241503547
 BLOB_MAGIC = 0x31534F5035505447
 HEADER = struct.Struct('<QIIIIQQ')
@@ -112,7 +119,7 @@ def read_blob(cache, hash_):
     return blob
 
 
-def build_bytes(warmup, index_name='race-v1.txt'):
+def build_bytes(warmup, index_name='race-v1.txt', version=VERSION):
     """The pack for one index, as the renderer would write it. ``warmup`` is ``<shadercache>/warmup-v1``."""
     warmup = Path(warmup)
     cache = warmup.parent
@@ -156,13 +163,14 @@ def build_bytes(warmup, index_name='race-v1.txt'):
             payload.extend(blob)
         records.append((hash_, recipe_off, len(recipe), vs_id, ps_id, blob_off, len(blob)))
 
-    body = bytearray(HEADER.pack(MAGIC, VERSION, len(hashes), len(code_rows), 0,
+    body = bytearray(HEADER.pack(MAGIC, version, len(hashes), len(code_rows), 0,
                                  _fnv_hashes(hashes), fnv64(payload)))
+    tables = bytearray()
     for record in records:
-        body.extend(RECORD.pack(*record))
+        tables.extend(RECORD.pack(*record))
     for row in code_rows:
-        body.extend(CODE.pack(*row))
-    body.extend(payload)
+        tables.extend(CODE.pack(*row))
+    body.extend(tables + payload if version == 1 else payload + tables)
     if not hashes or len(body) > MAX_PACK:
         raise ValueError('the index is empty or the pack would exceed its size limit')
     return bytes(body)
@@ -186,18 +194,19 @@ def parse_bytes(data):
     if len(data) < HEADER.size:
         raise ValueError('pack is shorter than its header')
     magic, version, count, code_count, flags, index_fnv, payload_fnv = HEADER.unpack_from(data, 0)
-    if magic != MAGIC or version != VERSION:
+    if magic != MAGIC or version not in VERSIONS:
         raise ValueError('pack magic or version does not match')
     if not count or count > MAX_MEMBERS or code_count > MAX_MEMBERS * 2:
         raise ValueError('pack counts are out of range')
     tables = HEADER.size + count * RECORD.size + code_count * CODE.size
     if tables > len(data):
         raise ValueError('pack tables run past the file')
-    payload = data[tables:]
+    tab = HEADER.size if version == 1 else len(data) - (tables - HEADER.size)
+    payload = data[tables:] if version == 1 else data[HEADER.size:tab]
     if fnv64(payload) != payload_fnv:
         raise ValueError('pack payload checksum does not match')
-    records = [RECORD.unpack_from(data, HEADER.size + i * RECORD.size) for i in range(count)]
-    codes = [CODE.unpack_from(data, HEADER.size + count * RECORD.size + i * CODE.size) for i in range(code_count)]
+    records = [RECORD.unpack_from(data, tab + i * RECORD.size) for i in range(count)]
+    codes = [CODE.unpack_from(data, tab + count * RECORD.size + i * CODE.size) for i in range(code_count)]
     members = [record[0] for record in records]
     if _fnv_hashes(members) != index_fnv:
         raise ValueError('pack index checksum does not match its records')
@@ -214,7 +223,7 @@ def parse_bytes(data):
         for code_id in (vs_id, ps_id):
             if code_id != NO_CODE and code_id >= code_count:
                 raise ValueError(f'pack member {hash_:016x} names a missing shader')
-    return dict(count=count, code_count=code_count, flags=flags, index_fnv=index_fnv,
+    return dict(version=version, count=count, code_count=code_count, flags=flags, index_fnv=index_fnv,
                 payload_fnv=payload_fnv, records=records, codes=codes, payload=payload, bytes=len(data))
 
 
@@ -231,7 +240,8 @@ def check(warmup, index_name='race-v1.txt'):
     complete = sum(1 for r in parsed['records'] if r[2] and r[6] and r[3] != NO_CODE and r[4] != NO_CODE)
     return dict(recipes=parsed['count'], codes=parsed['code_count'], bytes=parsed['bytes'], complete=complete,
                 index_members=len(listed), matches_index=sorted(members) == sorted(listed),
-                same_bytes_as_rebuild=build_bytes(warmup, index_name) == (warmup / 'race-pack-v1.bin').read_bytes())
+                same_bytes_as_rebuild=build_bytes(warmup, index_name, parsed['version']) ==
+                (warmup / 'race-pack-v1.bin').read_bytes())
 
 
 def main():

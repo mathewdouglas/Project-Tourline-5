@@ -170,6 +170,65 @@ std::string hitch_history() {
     return result;
 }
 
+} // namespace
+
+/* What the process heap (every malloc, and the drivers' own allocations) holds:
+ * busy bytes by block size, the largest exact sizes, and committed bytes that
+ * are free. A heap walk locks the heap, so this runs only for a report or when
+ * GT5P_HEAP_LOG=<seconds> asks for it (GT5P_HEAP_REPORT=0 leaves it out of
+ * reports). */
+void gt5p_heap_summary(FILE* f)
+{
+    const char* e = getenv("GT5P_HEAP_REPORT");
+    if (e && e[0] == '0') return;
+    HANDLE h = GetProcessHeap();
+    struct Bucket { unsigned long long n, bytes; } b[40] = {};
+    static const int kTop = 4096;
+    static unsigned exact_size[kTop]; static unsigned long long exact_n[kTop];
+    int exact_used = 0;
+    unsigned long long busy = 0, free_b = 0, uncommitted = 0, big = 0, regions = 0, overhead = 0;
+    LARGE_INTEGER t0, t1, fq; QueryPerformanceCounter(&t0); QueryPerformanceFrequency(&fq);
+    if (!HeapLock(h)) return;
+    PROCESS_HEAP_ENTRY he{};
+    while (HeapWalk(h, &he)) {
+        if (he.wFlags & PROCESS_HEAP_REGION) { regions += he.Region.dwCommittedSize; uncommitted += he.Region.dwUnCommittedSize; continue; }
+        if (he.wFlags & PROCESS_HEAP_UNCOMMITTED_RANGE) continue;
+        overhead += he.cbOverhead;
+        if (!(he.wFlags & PROCESS_HEAP_ENTRY_BUSY)) { free_b += he.cbData; continue; }
+        busy += he.cbData;
+        if (he.cbData >= (1u << 20)) big += he.cbData;
+        int k = 0; while (k < 39 && (1ull << (k + 1)) <= he.cbData) k++;
+        b[k].n++; b[k].bytes += he.cbData;
+        if (he.cbData >= 1024) {
+            int x = 0; while (x < exact_used && exact_size[x] != he.cbData) x++;
+            if (x < exact_used) exact_n[x]++;
+            else if (exact_used < kTop) { exact_size[exact_used] = (unsigned)he.cbData; exact_n[exact_used++] = 1; }
+        }
+    }
+    HeapUnlock(h);
+    QueryPerformanceCounter(&t1);
+    fprintf(f, "Process heap: busy %llu MB, free but committed %llu MB, block overhead %llu MB, "
+        "segments committed %llu MB (+%llu MB reserved), blocks >= 1 MB %llu MB; walk %.0f ms\n",
+        busy >> 20, free_b >> 20, overhead >> 20, regions >> 20, uncommitted >> 20, big >> 20,
+        1e3 * (double)(t1.QuadPart - t0.QuadPart) / (double)fq.QuadPart);
+    fprintf(f, "Process heap by block size:");
+    for (int k = 0; k < 40; k++)
+        if (b[k].bytes >= (1ull << 20))
+            fprintf(f, " %llu-%lluB x%llu=%lluMB;", 1ull << k, (2ull << k) - 1, b[k].n, b[k].bytes >> 20);
+    fprintf(f, "\nProcess heap, largest exact sizes:");
+    for (int r = 0; r < 16; r++) {
+        int best = -1; unsigned long long bb = 0;
+        for (int x = 0; x < exact_used; x++)
+            if ((unsigned long long)exact_size[x] * exact_n[x] > bb) { bb = (unsigned long long)exact_size[x] * exact_n[x]; best = x; }
+        if (best < 0 || bb < (1ull << 20)) break;
+        fprintf(f, " %u x%llu=%lluMB;", exact_size[best], exact_n[best], bb >> 20);
+        exact_n[best] = 0;
+    }
+    fprintf(f, "\n\n");
+}
+
+namespace {
+
 std::string report(HWND game) {
     FILE* f = tmpfile();
     if (!f) throw std::runtime_error("Could not create report scratch file");
@@ -203,6 +262,7 @@ std::string report(HWND game) {
             (unsigned long long)(pmc.WorkingSetSize >> 20), (unsigned long long)(pmc.PeakWorkingSetSize >> 20),
             (unsigned long long)(pmc.PrivateUsage >> 20), pmc.PageFaultCount,
             (mem.ullTotalPageFile - mem.ullAvailPageFile) >> 20, mem.ullTotalPageFile >> 20);
+    gt5p_heap_summary(f);
     const auto& s = gt5p_settings();
     fprintf(f, "Loaded settings: resolution=%d ultrawide=%d msaa=%d vsync=%d shader_cache=%d async=%d "
         "sdl=%d keyboard=%d vblank=%d lane_cores=%d warmup=%d warmup_before_start=%d audio_channels=%d\nSettings file: %s\n",

@@ -17,4 +17,7 @@ int gt5p_debug_status(char* text, size_t size);
 
 /* Independent, best-effort snapshots: never wait for the renderer or suspend it. */
 extern "C" void gt5p_debug_snapshot(FILE* out);
+/* Process-heap usage (locks the heap for the walk); in reports, and every
+ * GT5P_HEAP_LOG=<seconds> on stderr. */
+void gt5p_heap_summary(FILE* f);
 extern "C" void gt5p_pv_export(FILE* out);

@@ -987,6 +987,16 @@ int main(int argc, char* argv[])
             }, nullptr, 0, nullptr);
     }
 
+    /* GT5P_HEAP_LOG=<seconds>: the process heap's summary on stderr that often
+     * (off unless set; the walk locks the heap for tens of ms). */
+    if (const char* hl = getenv("GT5P_HEAP_LOG")) {
+        static DWORD heap_s = (DWORD)strtoul(hl, nullptr, 10);
+        if (heap_s)
+            CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
+                for (;;) { Sleep(heap_s * 1000u); fprintf(stderr, "[heap] "); gt5p_heap_summary(stderr); }
+            }, nullptr, 0, nullptr);
+    }
+
     printf("=== Gran Turismo 5 Prologue Recompiled ===\n");
     printf("Built with ps3recomp | %llu lifted functions\n\n",
            (unsigned long long)function_table_count);

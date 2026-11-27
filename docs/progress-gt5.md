@@ -4,6 +4,42 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Where the RAM goes in a race; the race pack is written as it is built (`perf/v0.3.3-field-gpu`, 2026-11-27)
+
+The user's 22:15 report: working set 4,327 MB (peak 4,764), 1,056 MB of 16 GB free, 5.9 M page faults.
+Measured here at Monza (same settings, `-Tab 1 -Track 2 -Car 37`), by working-set pages per region and a
+walk of the process heap (`GT5P_HEAP_LOG=<s>`, new; the F8 report now has the same three lines,
+`GT5P_HEAP_REPORT=0` leaves them out):
+
+| Part of a 3.2 GB race working set | MB |
+|---|---|
+| Process heap (malloc and the driver's own objects), 16 MB segments | ~1,600 |
+| NVIDIA shader cache files mapped by the driver (`*.nvph`, file-backed, trimmable) | ~725 |
+| Our D3D12 heaps/buffers in system memory (64 MB staging ring, 160/128/99/54 MB, ...) | ~550 |
+| `gt5.exe` image | ~87 |
+| Guest memory touched | ~117 |
+| Thread stacks (129 threads) | 3 |
+
+The heap is mostly pipelines. ~16,600 pipelines were alive (resident cap 12,288 plus race and demand
+builds); the driver keeps about a dozen blocks per pipeline (13,728 B x2, 1,592 B x8, 5,944, 5,048, ...),
+~60-100 KB each. With `RSX_PSO_RESIDENT_MAX=4096` the heap was 720 MB instead of 1,955 MB, frames per
+5 s the same, but 7 pipeline hitches over 50 ms against 2: not free, left at the default. In the user's
+report only 1,663 of the resident preloaded pipelines were drawn in that session.
+
+**Race pack writes held up to 768 MB.** The race pack (`race-pack-v1.bin`, 400 MB, 16,384 members) was
+built in memory and its buffer doubled to 512 MB; the last `realloc` needed 256 + 512 MB at once. Its
+membership hash changes whenever a race learns a pipeline (the index is full at 16,384, so new members
+replace old ones), so it almost never hits (`pack_hits=0` in the user's reports) and is rewritten after
+nearly every race load, below normal priority during the first 50-120 s of the race. It is now written to
+its file as it is built: version 2, payload after the header and tables at the end, checksum kept as it
+goes (`RSX_RACE_PACK_STREAM=0` builds version 1 in memory as before; both are read). Monza: heap peak
+1,643 MB during the store against 2,212 MB; 402 MB pack written in 121 s; same frames per 5 s.
+`scripts/race_preload_pack.py` reads and builds both versions; `race_prewarm.py` (WARP) covers both,
+and needed stubs for `s_device_lost` and `pso_wait_notify` (it had stopped compiling).
+
+Open: a pack that matches by member instead of by whole-index hash would skip the per-file race prewarm
+(82 s of blob reads across four helpers here) and the rewrite in most races.
+
 ## Full-field race frame drops: what is left after the copy fixes (`perf/v0.3.3-field-gpu`, 2026-11-26)
 
 Fourth reports (`gt5p-debug-20261126-22150{2,4}-*-63984-*.zip`, build with the shared snapshots; MP4-12C
