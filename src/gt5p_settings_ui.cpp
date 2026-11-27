@@ -121,6 +121,7 @@ struct Item {
     void (*apply)(int);                      /* live; nullptr: after a restart */
     int key = -1;                            /* a keyboard binding: its button (gt5p_keymap.h) */
     int wmap = -1;                           /* a wheel mapping slot (0..3 axes, 4..15 buttons) */
+    bool text = false;                       /* typed text (the player name), not a list */
 };
 
 /* Whether an item is overridden by variable `name`. Some items have no
@@ -314,6 +315,15 @@ const wchar_t* const kWheelBtnHelp =
     [](const UiSettings&) { return 0; }, [](UiSettings&, int) {}, [](int) {}, -1, slot }
 #define WMAP_BTN(slot, label) { L"WHEEL MAP", label, kWheelBtnHelp, "PS3_WHEEL_BUTTONS", {}, \
     [](const UiSettings&) { return 0; }, [](UiSettings&, int) {}, [](int) {}, -1, slot }
+
+/* A text item's value for the page's int comparisons ("after restart"):
+ * equal names give equal values. */
+int name_value(const std::string& s)
+{
+    unsigned h = 2166136261u;
+    for (unsigned char c : s) h = (h ^ c) * 16777619u;
+    return (int)(h & 0x7FFFFFFF);
+}
 
 const std::vector<Item>& items()
 {
@@ -566,6 +576,13 @@ const std::vector<Item>& items()
           [](const UiSettings& s) { return s.launcher_mod; },
           [](UiSettings& s, int v) { s.launcher_mod = v; }, nullptr },
 
+        { L"GAME", L"Player name",
+          L"The PS3 user name the game shows (GT Life, profile). Cross or Enter, then type: 1 to 16 "
+          L"letters, digits, spaces or . - _ '. Enter keeps it, Escape cancels. Empty is \"User\". "
+          L"Takes effect after a restart.",
+          "PS3_USER_NAME", {},
+          [](const UiSettings& s) { return name_value(s.player_name); },
+          [](UiSettings&, int) {}, nullptr, -1, -1, true },
         { L"GAME", L"Skip opening movie",
           L"Press through the opening movie as soon as it starts. It only plays when the TV "
           L"content is installed.",
@@ -714,6 +731,9 @@ volatile LONG s_quit_req;       /* Escape pressed in the game window */
 int s_capture = -1;             /* a key item waiting for its new key */
 uint8_t s_cap_was[256];         /* keys held when the wait began */
 int s_wcap = -1;                /* a wheel-map item waiting for an axis or button */
+int s_text = -1;                /* a text item being typed into */
+bool ui_dbg() { static int d = -1; if (d < 0) { const char* e = getenv("GT5P_SETTINGS_UI_DBG"); d = e && e[0] == '1'; } return d != 0; }
+std::string s_text_buf;         /* what has been typed */
 WheelRawUi s_wcap_base = {};    /* wheel axes/buttons when wheel capture began */
 
 enum { kRowRestart = -1, kRowClose = -2, kRowHead = -3, kRowDefaults = -4, kRowSetup211 = -5, kRowMods = -6 };
@@ -879,7 +899,7 @@ void change(int id, int dir)
     }
     if (id == kRowDefaults) { if (wheel_map_page()) reset_wheel_map(); else reset_keys(); return; }
     const Item& it = items()[id];
-    if (it.key >= 0 || it.wmap >= 0) return;
+    if (it.key >= 0 || it.wmap >= 0 || it.text || it.choices.empty()) return;
     const int n = (int)it.choices.size();
     set_value(id, it.choices[(choice_index(it) + dir + n) % n].value);
 }
@@ -967,6 +987,64 @@ void begin_capture(int id)
 {
     s_capture = id;
     for (int vk = 0; vk < 256; vk++) s_cap_was[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
+    s_status = L"";
+}
+
+/* ---- typed text (F1 > GAME > Player name, game.player_name) ---- */
+
+void begin_text(int id)
+{
+    if (ui_dbg()) fprintf(stderr, "[settings-ui] typing %ls\n", items()[id].label);
+    s_text = id;
+    s_text_buf = s_edit.player_name;
+    for (int vk = 0; vk < 256; vk++) s_cap_was[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
+    s_status = L"";
+}
+
+/* The character key `vk` types on the player's keyboard layout, or 0. The
+ * page's thread does not own the keyboard, so Shift and Caps Lock are read
+ * directly and the layout is the game window's. */
+char text_char(int vk)
+{
+    BYTE ks[256] = {};
+    if (GetAsyncKeyState(VK_SHIFT) & 0x8000) ks[VK_SHIFT] = 0x80;
+    if (GetKeyState(VK_CAPITAL) & 1) ks[VK_CAPITAL] = 0x01;
+    const HKL layout = GetKeyboardLayout(s_game ? GetWindowThreadProcessId(s_game, nullptr) : 0);
+    wchar_t out[4] = {};
+    const UINT scan = MapVirtualKeyExW((UINT)vk, MAPVK_VK_TO_VSC, layout);
+    /* Flag 4: leave the keyboard's dead-key state alone (Windows 10 1607+). */
+    const int n = ToUnicodeEx((UINT)vk, scan, ks, out, 4, 4, layout);
+    if (n != 1 || out[0] > 0x7F) return 0;
+    const char c = (char)out[0];
+    return isalnum((unsigned char)c) || c == ' ' || c == '.' || c == '-' || c == '_' || c == 0x27 ? c : 0;
+}
+
+void text_commit()
+{
+    std::string v = s_text_buf;
+    while (!v.empty() && v.back() == ' ') v.pop_back();
+    while (!v.empty() && v.front() == ' ') v.erase(v.begin());
+    if (!v.empty() && !gt5p_player_name_valid(v)) { s_status = L"That name cannot be used."; return; }
+    const int id = s_text;
+    s_text = -1;
+    if (v == s_edit.player_name) { s_status = L"No change."; return; }
+    s_edit.player_name = v;
+    set_value(id, 0);   /* saves, and says whether a restart is needed */
+    fprintf(stderr, "[settings-ui] player name \"%s\"\n", v.empty() ? "User" : v.c_str());
+}
+
+void text_key(int vk)
+{
+    if (s_text < 0) return;
+    if (vk == VK_ESCAPE) { s_text = -1; s_status = L"Not changed."; return; }
+    if (vk == VK_RETURN) { text_commit(); return; }
+    if (vk == VK_BACK) { if (!s_text_buf.empty()) s_text_buf.pop_back(); return; }
+    if (vk == VK_DELETE) { s_text_buf.clear(); return; }
+    const char c = text_char(vk);
+    if (!c) return;
+    if (s_text_buf.size() >= 16) { s_status = L"16 characters at most."; return; }
+    if (c == ' ' && s_text_buf.empty()) return;
+    s_text_buf += c;
     s_status = L"";
 }
 
@@ -1492,6 +1570,32 @@ void paint(HDC dc)
             if (sel && !cap) cursor(dc, fx + kKeyFieldW - 18, y + (rh > 30 ? 8 : 5));
             continue;
         }
+        if (it.text) {
+            /* Typed text: the value in the field, red with a caret while typing. */
+            const bool typing = s_text == id;
+            const bool later_t = !over && it.get(s_edit) != it.get(s_boot);
+            if (i + 1 < r.size() && r[i + 1] >= 0) {
+                const int rule_y = (y + kFieldH + sl[i + 1].y) / 2;
+                for (int x = kPx0 + 26; x < kPx1 - 26; x += 7)
+                    fill(dc, x, rule_y, x + 2, rule_y + 1, grey(96));
+            }
+            text_in(dc, fRow, kPx0 + 20, y, kFieldX - 20, y + kFieldH - 2, over ? grey(100) : grey(190), it.label, DT_RIGHT);
+            fill(dc, kFieldX - 1, y - 1, kFieldX + kFieldW + 1, y + kFieldH + 1, typing || sel ? RGB(168, 0, 0) : RGB(0, 4, 0));
+            fill(dc, kFieldX, y, kFieldX + kFieldW, y + kFieldH, RGB(0, 4, 0));
+            fill(dc, kFieldX, y + kFieldH - 1, kFieldX + kFieldW, y + kFieldH, RGB(99, 101, 107));
+            const std::string& shown = typing ? s_text_buf : s_edit.player_name;
+            const std::wstring v = typing ? widen(shown) + L"_" : shown.empty() ? std::wstring(L"User") : widen(shown);
+            text_in(dc, fRow, kFieldX + 12, y, kFieldX + kFieldW - 8, y + kFieldH - 2,
+                    typing ? RGB(237, 60, 60) : over ? grey(100) : shown.empty() ? grey(130) : grey(204),
+                    v.c_str(), DT_LEFT | DT_END_ELLIPSIS);
+            if (later_t)
+                text_in(dc, fTag, kPx0 + 28, y, kFieldX, y + kFieldH - 2, RGB(237, 60, 60), L"after restart", DT_LEFT);
+            else if (over)
+                text_in(dc, fTag, kPx0 + 28, y, kFieldX, y + kFieldH - 2, grey(110),
+                        (L"set by " + widen(it.env)).c_str(), DT_LEFT);
+            if (sel && !typing) cursor(dc, kFieldX + kFieldW - 18, y + 5);
+            continue;
+        }
         const bool later = !it.apply && !over && it.get(s_edit) != it.get(s_boot);
         /* A dotted rule centred between every row and the next. */
         if (i + 1 < r.size() && r[i + 1] >= 0) {
@@ -1549,6 +1653,9 @@ void paint(HDC dc)
         if (s_capture >= 0)
             help = std::wstring(L"Press the key for ") + items()[s_capture].label +
                    L". Escape (or Circle) cancels.";
+        else if (s_text >= 0)
+            help = L"Type the name: letters, digits, spaces or . - _ ' (up to 16). Backspace deletes. "
+                   L"Enter (or Cross) keeps it, Escape (or Circle) cancels. Empty is \"User\".";
         else if (s_wcap >= 0) {
             const int ws = items()[s_wcap].wmap;
             help = (ws == 0 ? L"Turn your steering wheel to bind " : ws <= 3 ? L"Press the pedal to bind " : L"Press a wheel button to bind ")
@@ -2318,7 +2425,9 @@ void switch_section(int dir)
     s_drop = false;
     s_capture = -1;
     s_wcap = -1;
+    s_text = -1;
     if (s_sel != 0) s_sel = 1;
+    if (ui_dbg()) fprintf(stderr, "[settings-ui] page %ls\n", sections()[s_section]);
 }
 
 /* Left/Right: on the bar, switch pages; on an item, step its value; between
@@ -2365,6 +2474,7 @@ void press()
     if (r[s_sel] == kRowHead) { switch_section(+1); return; }
     if (r[s_sel] >= 0 && items()[r[s_sel]].key >= 0) { begin_capture(r[s_sel]); return; }
     if (r[s_sel] >= 0 && items()[r[s_sel]].wmap >= 0) { begin_wheel_capture(r[s_sel]); return; }
+    if (r[s_sel] >= 0 && items()[r[s_sel]].text) { begin_text(r[s_sel]); return; }
     if (r[s_sel] >= 0) { s_drop = true; s_drop_sel = choice_index(items()[r[s_sel]]); return; }
     change(r[s_sel], +1);
 }
@@ -2373,6 +2483,7 @@ void press()
 void back()
 {
     if (s_capture >= 0) { s_capture = -1; s_status = L"Not changed."; }
+    else if (s_text >= 0) { s_text = -1; s_status = L"Not changed."; }
     else if (s_wcap >= 0) { s_wcap = -1; s_status = L"Not changed."; }
     else if (s_drop) s_drop = false;
     else set_open(false);
@@ -2410,6 +2521,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             return 0;
         }
         if (s_capture >= 0) { capture_key((int)w); redraw(); return 0; }
+        if (s_text >= 0) { text_key((int)w); redraw(); return 0; }
         if (s_wcap >= 0) {
             if (w == VK_ESCAPE || w == VK_BACK) { s_wcap = -1; s_status = L"Not changed."; redraw(); }
             return 0;
@@ -2548,14 +2660,15 @@ DWORD WINAPI ui_thread(LPVOID)
             for (int vk : keys) key_was[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
         modal_was = modal;
         /* Waiting for a binding's key: every key, its first new press. */
-        if (s_capture >= 0 && s_open && s_overlay && game_fg) {
+        if ((s_capture >= 0 || s_text >= 0) && s_open && s_overlay && game_fg) {
             for (int vk = 8; vk < 256; vk++) {
                 const bool held = (GetAsyncKeyState(vk) & 0x8000) != 0;
                 const bool hit = held && !s_cap_was[vk];
                 s_cap_was[vk] = held;
                 if (hit && s_capture >= 0) { capture_key(vk); redraw(); }
+                else if (hit && s_text >= 0) { text_key(vk); redraw(); }
             }
-            if (s_capture < 0)   /* the key that ended the wait is not a page press */
+            if (s_capture < 0 && s_text < 0)   /* the key that ended the wait is not a page press */
                 for (int vk : keys) key_was[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
         } else if (modal && game_fg) {
             const ULONGLONG t = GetTickCount64();
@@ -2645,8 +2758,9 @@ DWORD WINAPI ui_thread(LPVOID)
             else if (act & kCircle) set_quit(false);
         } else if ((down & kSelect) && !s_open && s_in_options && hint_enabled() && game_fg) set_open(true);
         else if ((down & kPs) && (s_open || game_fg)) set_open(!s_open);
-        else if (s_open && (s_capture >= 0 || s_wcap >= 0)) {
+        else if (s_open && (s_capture >= 0 || s_wcap >= 0 || s_text >= 0)) {
             if (act & kCircle) { back(); redraw(); }
+            else if ((act & kCross) && s_text >= 0) { text_key(VK_RETURN); redraw(); }
         }
         else if (s_open) {
             if (act & kUp) move_sel(-1);

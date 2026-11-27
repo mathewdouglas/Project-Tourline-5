@@ -126,5 +126,8 @@ bool gt5p_settings_overridden(const char* env_name);
 /* False under GT5P_NO_SETTINGS: there is no file to save to. */
 bool gt5p_settings_enabled();
 
+/* A usable game.player_name: 1-16 letters, digits, spaces or . - _ ' (F1 > GAME > Player name). */
+bool gt5p_player_name_valid(const std::string& v);
+
 /* Save `s` as the file's values (and remember them as such). */
 bool gt5p_settings_store(const Gt5pSettings& s);

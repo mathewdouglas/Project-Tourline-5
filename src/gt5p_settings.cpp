@@ -986,3 +986,6 @@ void gt5p_settings_load()
            g_settings.vsync ? 1 : 0, g_settings.shader_cache ? 1 : 0,
            g_settings.sdl_controllers ? 1 : 0, g_settings.keyboard ? 1 : 0);
 }
+
+/* The name check for the F1 page (gt5p_settings.h). */
+bool gt5p_player_name_valid(const std::string& v) { return gt5p_player_name_ok(v); }

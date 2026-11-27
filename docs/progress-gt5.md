@@ -4,6 +4,18 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## F1 > GAME > Player name (2026-11-28)
+
+The user asked for the PSN/player name (`game.player_name`, `PS3_USER_NAME`, #60) on the F1 page. The page had
+only list and key-binding rows; an item can now be typed text (`Item::text`). Cross or Enter starts typing,
+characters come from the game window's keyboard layout (`ToUnicodeEx` with Shift and Caps Lock read directly,
+since the page's thread does not own the keyboard), Backspace deletes, Delete clears, Enter or Cross keeps it,
+Escape or Circle cancels. Only the characters `game.player_name` accepts are taken, up to 16; empty is "User".
+The name is saved to the settings file and takes effect after a restart (the game reads it at boot).
+`GT5P_SETTINGS_UI_DBG=1` now also logs page switches and typing; a kept name always logs
+`[settings-ui] player name "..."`. Checked with posted keys against a scratch settings file: typed
+`mat d-5` saved, `;` ignored, Escape kept the saved name. A controller cannot type a name.
+
 ## Display scaling: real pixels at any Windows scale (#97, 2026-11-28)
 
 #97: at 300% Windows scaling on a 3840x2160 screen the game looked far softer than at 100%. `gt5.exe` declared

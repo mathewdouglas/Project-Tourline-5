@@ -468,7 +468,8 @@ captured frame's small textures. See progress-gt5.md.
 **Player name (#60, 2026-11-21).** `game.player_name` in gt5p_settings.toml
 (1-16 letters, digits, spaces, `.-_'`; empty = "User") sets `PS3_USER_NAME`,
 which the runtime's current-user name (cellSysutil, cellUserInfo) returns.
-Shown on GT Life; not on the F1 page yet.
+Shown on GT Life. F1 > GAME > Player name types it (keyboard; Enter keeps,
+Escape cancels; takes effect after a restart). Item rows with `text = true` are typed text.
 
 **Garage thumbnails (runtime, 2026-11-21).** Were noise: 1:1 blits of a
 GPU-only surface over 64x64 now read back (`RSX_BLIT_READBACK_LARGE=0` off),
