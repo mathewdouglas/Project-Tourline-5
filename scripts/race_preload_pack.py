@@ -19,6 +19,11 @@ Little-endian layout:
 * Payload. Offsets are from the first payload byte. Each shader, recipe and
   driver blob starts 16-byte aligned; the pad bytes are part of the payload.
 
+The pack lists the race set, ``warmup-v1/race-set-v1.txt`` (recorded races
+first, then the race index, at most ``RSX_RACE_SET_MAX``), when the renderer
+has written one, else the race index ``race-v1.txt`` (``RSX_RACE_SET=0``).
+This tool uses the same file.
+
 That is version 1. Version 2, which the renderer writes by default
 (``RSX_RACE_PACK_STREAM``, ``=0`` writes version 1), has the same header and
 tables but puts the payload straight after the header and the tables at the
@@ -244,6 +249,11 @@ def check(warmup, index_name='race-v1.txt'):
                 (warmup / 'race-pack-v1.bin').read_bytes())
 
 
+def race_list(warmup):
+    """The list the renderer packs: the race set when it exists, else the race index."""
+    return 'race-set-v1.txt' if (Path(warmup) / 'race-set-v1.txt').exists() else 'race-v1.txt'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('action', choices=('check', 'build'))
@@ -251,7 +261,8 @@ def main():
     parser.add_argument('--dest', type=Path, help='build: write here instead of warmup-v1/race-pack-v1.bin')
     args = parser.parse_args()
     warmup = args.cache / 'warmup-v1'
-    report = check(warmup) if args.action == 'check' else build(warmup, dest=args.dest)
+    name = race_list(warmup)
+    report = check(warmup, name) if args.action == 'check' else build(warmup, name, dest=args.dest)
     for key, value in report.items():
         print(f'{key}: {value}')
 

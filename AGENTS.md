@@ -114,7 +114,12 @@ The pack now matches member by member (`RSX_RACE_PACK_MEMBERS=0` whole index), r
 `RSX_RACE_PACK_REFRESH_PCT` (10) drift; a full preload cap rejects before any file read
 (`RSX_PSO_ROOM_FIRST=0` old); recipes recorded under other settings no longer mark it stale
 (`RSX_RACE_PACK_DESC_STALE=1` old); leftover `race-pack-v1.bin.*.tmp` are removed at worker start
-(`RSX_RACE_PACK_TMP_CLEAN=0`). Monza gate 48-60 s -> ~2 s, no rewrite. See progress-gt5.md.
+(`RSX_RACE_PACK_TMP_CLEAN=0`). Monza gate 48-60 s -> ~2 s, no rewrite. Each race's drawn pipelines
+are recorded (`warmup-v1/race-sessions/`, `RSX_RACE_SESSIONS=0` off); the derived race set
+`race-set-v1.txt` (recorded races newest first, then the index, `RSX_RACE_SET_MAX` 4096;
+`RSX_RACE_SET=0` whole index) is what the gate prepares and the pack holds (402 -> 115 MB). The startup
+menu phase leaves the race set's room (`RSX_RACE_SET_RESERVE=0` old). A race draws 600-1,800
+pipelines, decided mostly by the car; the track is not knowable at the gate. See progress-gt5.md.
 
 **Prologue renderer ports (GT5 Phase 47).** All default on, measured at High Speed Ring:
 `RSX_PSO_FAST_LOOKUP` (learned table `warmup-v1/fp-lookup-gt5-v1-<tag>.bin`: a miss whose mapped

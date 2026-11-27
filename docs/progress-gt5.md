@@ -4,6 +4,71 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Race sessions and the race set: prepare and pack what races draw (`perf/v0.3.3-field-gpu`, 2026-11-27)
+
+The user asked for smarter race packs. The race index is one newest-first list over every track and car
+(16,384 members). The loading gate prepared 4,200-8,500 of them, as many as fitted under the shared
+preload cap after the menu pass, and the pack carried all 16,384 (400 MB).
+
+**Track identity is not available at the gate.** File logs of Monza/car 37, Monza/car 0 and the default
+track/car 37 open the same files from Transmission to RaceAssets; `FS_READLOG` shows only a stream
+(0x780 bytes every 94 ms) on `GT.VOL` before the RaceLoad marker. Track data is read after the gate.
+Naming the track there would need the game's selected-course variable, per executable.
+
+**Race sessions** (runtime, `RSX_RACE_SESSIONS=0` off): each race's drawn race-scope pipelines, in
+first-draw order with ms since the load, go to `warmup-v1/race-sessions/s-<time>.txt`. The file is
+rewritten every 15 s while it grows and at the race's end, and the newest `RSX_RACE_SESSIONS_KEEP`
+(32) are kept. Seven races (Monza car 37 twice, Monza car 0, default track cars 37 and 0, Rome, Eiger):
+
+| | |
+| --- | --- |
+| pipelines per race | 600-700 (car 0), 1,600-1,800 (car 37) |
+| car 37, same track twice | 96% shared |
+| car 37, different tracks | ~70% shared |
+| car 0 vs car 37 | 6-29% shared |
+| all seven races | 3,284 distinct |
+| earlier races cover a new one | 71-98% |
+
+The car decides the set more than the track. A premium car brings ~1,100 pipelines of its own.
+
+**Race set** (runtime, `RSX_RACE_SET=0` whole index as before): `warmup-v1/race-set-v1.txt` is derived from:
+recorded races newest first in draw order, then the race index newest first, only race-index members, at
+most `RSX_RACE_SET_MAX` (4096). It is rebuilt when the worker starts and after each race. The gate, the
+pack and the startup pass's race phase use it; the race index stays the learning record. The startup
+menu phase now stops when only the race set's room is left under the preload cap
+(`RSX_RACE_SET_RESERVE=0` old). At Rome the menu pass had taken 9,581 slots and 1,386 race-set members
+were turned away. With `RSX_RACE_SET_MAX=9000` the menu phase stopped at 3,288 (12,288 - 9,000).
+`scripts/race_preload_pack.py` packs and checks `race-set-v1.txt` when it exists.
+
+Monza and Rome, user settings:
+
+| Run | Gate | Pack | Menu + race prepared | Heap busy |
+| --- | ---: | --- | --- | ---: |
+| set on, first (pack rewritten 402 -> 115 MB, 44 s) | 2.4 s | 16,384 -> 4,096 | 5,114 + 4,096 | 1,497 MB |
+| set on, Monza | 0.9 s | 4,096, read 143-194 ms | 5,894-7,846 + 4,096 | 1,551-1,662 MB |
+| set on, Rome, no reserve | 0.5 s | 4,096 | 9,581 + 2,710 (cap) | 1,601 MB |
+| set on + reserve, Rome | 2.7 s | 4,096 | 4,540 + 4,096 | 1,495 MB |
+| set off, Monza | 2.1 s | 16,384 | 8,903 + 3,388 (cap) | 1,725 MB |
+
+Heap follows the total prepared, and the menu side (3,300-9,600, depending on how long the menus were
+open) is now the larger part. Frames per 5 s match the earlier runs.
+
+Hitches are not what the selection decides:
+- `[pso-hitch]` logs any slow driver call on any thread and stops at 64. The Rome/Eiger "64" was the cap,
+  mostly on the draw-miss builder threads.
+- These calls are full builds with no blob. Rome's second visit still created 192 new blobs and Monza
+  8-71 per race; car-0 races 0. Arcade opponents are random, so each race brings car shaders never
+  built before. No learned set can hold them.
+- The car list builds 7-11 pipelines without a blob in every run, before the race; a separate menu
+  item.
+
+Test: `race_prewarm.py` step 13 (sessions first in draw order, newest race first, index fill, the
+limit, non-members left out, `RSX_RACE_SET=0`).
+
+Next, if wanted: a menu set the same way (menu sessions, a menu budget). The menu pass prepares
+3,300-9,600 pipelines, while a menu visit draws a few hundred to ~1,500. That is the remaining RAM
+lever (~70 KB of driver heap per pipeline).
+
 ## The race pack matches member by member; full-cap and other-settings members cost nothing (`perf/v0.3.3-field-gpu`, 2026-11-27)
 
 The pack was used only when its member list equalled the race index exactly. The index gains a few

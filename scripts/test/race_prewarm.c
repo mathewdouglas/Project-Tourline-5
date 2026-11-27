@@ -384,6 +384,33 @@ int main(int argc,char** argv){
     wait_released();session_end();
     puts("PASS: a load label opens race scope and runs the gate; a menu label ends it; unlisted and malformed labels do nothing");
 
+    /* 13. Race set: recorded races first, newest race first and in draw order, then the race
+     *     index; only race-index members; at most RSX_RACE_SET_MAX. RSX_RACE_SET=0 removes it. */
+    {
+        char sdir[760],s1[800],s2[800],setp[760];
+        snprintf(sdir,sizeof sdir,"%s/race-sessions",warm);CreateDirectoryA(sdir,NULL);
+        snprintf(s1,sizeof s1,"%s/s-20260101-000000.txt",sdir);snprintf(s2,sizeof s2,"%s/s-20260102-000000.txt",sdir);
+        snprintf(setp,sizeof setp,"%s/race-set-v1.txt",warm);
+        FILE* f=fopen(s1,"w");CHECK(f);
+        for(u32 i=40;i<N;i++)fprintf(f,"%016llx %u\n",(unsigned long long)hashes[i],i);
+        fprintf(f,"%016llx 99\n",0x1234567812345678ull);   /* not in the race index: left out */
+        CHECK(!fclose(f));
+        f=fopen(s2,"w");CHECK(f);   /* the newer race comes first */
+        fprintf(f,"%016llx 5\n%016llx 6\n",(unsigned long long)hashes[45],(unsigned long long)hashes[3]);CHECK(!fclose(f));
+        _putenv_s("RSX_RACE_SET_MAX","12");_putenv_s("RSX_RACE_PREWARM_PACK","0");
+        CHECK(pso_race_set_build(warm));
+        u64 got[64];const u32 k=pso_read_hashes(setp,got,64);
+        const u32 want[12]={45,3,40,41,42,43,44,46,47,0,1,2};
+        CHECK(k==12);for(u32 i=0;i<12;i++)CHECK(got[i]==hashes[want[i]]);
+        load_race();CHECK(resident_count(N)==12 && resident(hashes[45]) && !resident(hashes[4]));
+        wait_released();session_end();
+        _putenv_s("RSX_RACE_SET","0");
+        load_race();CHECK(!file_exists(setp) && resident_count(N)==N);wait_released();session_end();
+        _putenv_s("RSX_RACE_SET","");_putenv_s("RSX_RACE_SET_MAX","");
+        CHECK(DeleteFileA(s1) && DeleteFileA(s2) && RemoveDirectoryA(sdir));
+        puts("PASS: the race set takes recorded races first (newest, draw order), then the index, within RSX_RACE_SET_MAX; RSX_RACE_SET=0 prepares the whole index");
+    }
+
     /* Leave a pack of the full set for the Python cross-check. */
     _putenv_s("RSX_RACE_PREWARM_PACK","");_putenv_s("RSX_RACE_PREWARM_THREADS","");
     DeleteFileA(packp);stored=s_pack_stored;
