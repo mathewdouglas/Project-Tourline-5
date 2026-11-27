@@ -41,6 +41,8 @@
 
 #include <string>
 
+#include "gt5p_dpi.h"
+
 extern "C" {
 extern volatile LONG g_rsx_shader_busy;            /* rsx_d3d12_backend.c */
 extern volatile LONG g_rsx_shader_demand_total;
@@ -238,6 +240,7 @@ void update(Badge& b, bool want, ULONGLONG now)
 
 DWORD WINAPI badge_thread(LPVOID)
 {
+    gt5p_dpi::make_thread_unaware();   /* fixed-pixel badges, scaled by Windows */
     while (!s_game) { Sleep(500); EnumWindows(find_game, 0); }
     HINSTANCE inst = GetModuleHandleW(NULL);
     create(s_main, inst);

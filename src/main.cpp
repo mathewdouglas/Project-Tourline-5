@@ -39,6 +39,7 @@
 #include "gt5p_debug_export.h"
 #include "gt5p_glyphs.h"
 #include "gt5p_keymap.h"
+#include "gt5p_dpi.h"
 
 /* The lifter's function table, defined in the generated sources. Declared here
  * rather than including generated/ppu_recomp.h: that header defines its own
@@ -917,6 +918,8 @@ int main(int argc, char* argv[])
      * settings turn that option into PAD_SKIP_MOVIE. */
     if (GT5P_MOVIE_SCREEN[0] && !getenv("GT5P_MOVIE_SCREEN")) _putenv_s("GT5P_MOVIE_SCREEN", GT5P_MOVIE_SCREEN);
     gt5p_settings_load();
+    /* Real pixels at any Windows display scale (#97), before any window. */
+    gt5p_dpi::make_process_aware();
 
     /* Quiet for every launch path, including IDE output pipes and the debug
      * export's log pipes. The runtime otherwise treats redirected stderr as

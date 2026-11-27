@@ -24,6 +24,7 @@
 #include <tlhelp32.h>
 #include <windowsx.h>
 #include "gt5p_debug_export.h"
+#include "gt5p_dpi.h"
 
 #include "ppu_context.h"
 #include "sys_ppu_thread.h"
@@ -308,6 +309,7 @@ LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 
 DWORD WINAPI view_thread(LPVOID)
 {
+    gt5p_dpi::make_thread_unaware();   /* fixed-pixel layout, scaled by Windows */
     WNDCLASSA wc = {};
     wc.lpfnWndProc = wndproc; wc.hInstance = GetModuleHandleA(NULL);
     wc.lpszClassName = "gt5p_profview"; wc.hCursor = LoadCursor(NULL, IDC_ARROW);

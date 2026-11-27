@@ -383,6 +383,11 @@ resolve MSAA straight into the snapshot (`RSX_SELF_RESOLVE=0`); `RSX_SELF_TRACE=
 `RSX_SELF_SCISSOR=1` (region copy) stays off: mip chains read outside their viewport. Test:
 `scripts/test/self_read_share.py`. See progress-gt5.md.
 
+**Display scaling (#97, 2026-11-28).** `gt5.exe` is per-monitor DPI aware (`src/gt5p_dpi.h`,
+`GT5P_DPI_AWARE=0` old): at 300% scaling it rendered at a third of the screen's pixels. The F3 profiler and
+shader badges run DPI-unaware threads (fixed-pixel layouts, scaled by Windows). New overlay windows with
+fixed pixel layouts must do the same.
+
 **Steering wheels (`release/v0.2.0`).** GT5 drives Logitech wheels
 with its own `cellUsbd` driver; the runtime now shows it an emulated G27
 whatever wheel the PC has (DirectInput, force feedback), plus `cellPadLdd*`.

@@ -4,6 +4,26 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Display scaling: real pixels at any Windows scale (#97, 2026-11-28)
+
+#97: at 300% Windows scaling on a 3840x2160 screen the game looked far softer than at 100%. `gt5.exe` declared
+no DPI awareness, so Windows reported the monitor as 1280x720: the borderless window, swap chain and output
+pass were all 1280x720 and the desktop compositor stretched the picture 3x. `main()` now makes the process
+per-monitor DPI aware (v2) before any window exists (`src/gt5p_dpi.h`; `SetProcessDPIAware` fallback, both
+looked up at run time). The F3 profiler and the shader badges are laid out in fixed pixels; their threads are
+made DPI-unaware, so Windows still scales them (mixed-mode DPI). The F1 page draws into the frame and maps the
+mouse through the backend's output rectangle in the same (now physical) pixels. `GT5P_DPI_AWARE=0` restores
+the old process.
+
+Checked at 100% only (this machine): `[dpi] per-monitor DPI aware`, `[D3D12] output 3440x1440 borderless`,
+menu renders as before. The 300% case still needs the reporter's confirmation.
+
+Also looked at, not changed: #94/#95 (2.11 with Master Mod: the save `GT5.0` is read whole, 2 MiB, and the
+game's own decoder runs out at stream byte 2,025,482, then 2,048,010 a session later; whether the file was
+cut short on write or outgrew 2 MiB is not known without the file), #96 (Intel Arc B390, device removed
+entering GT Mode at frame 3001; no graphics ZIP attached), #93 (Standard-car reflections still reported
+after v0.3.2's cube-mip fix).
+
 ## Race sessions and the race set: prepare and pack what races draw (`perf/v0.3.3-field-gpu`, 2026-11-27)
 
 The user asked for smarter race packs. The race index is one newest-first list over every track and car
