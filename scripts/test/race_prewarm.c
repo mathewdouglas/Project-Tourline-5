@@ -217,8 +217,11 @@ int main(int argc,char** argv){
 
     /* 4. Pack hit with every per-file input moved away: the pack alone prepares the set. */
     hide_files(1);
+    char leftover[760];snprintf(leftover,sizeof leftover,"%s.4242.tmp",packp);   /* a rewrite cut short by closing the game */
+    {unsigned char junk[64]={0};spit(leftover,junk,sizeof junk);}
     const LONG64 calls=s_driver_pso_calls,cached=s_driver_pso_cached;stored=s_pack_stored;
     load_race();
+    CHECK(!file_exists(leftover));   /* worker start removes unfinished pack files */
     CHECK(s_pack_hits==1 && resident_count(N)==N && s_race_loaded==N && !s_race_rejected);
     CHECK(s_driver_pso_calls-calls>=N);
     if(blobs)CHECK(s_driver_pso_cached-cached==N && s_driver_pso_calls-calls==N && !s_pack_stale);
@@ -240,15 +243,38 @@ int main(int argc,char** argv){
         session_end();_putenv_s("RSX_RACE_PACK_KEEP","");_putenv_s("RSX_RACE_PREWARM_THREADS","");
         puts("PASS: reordered index with repeated lines still hits; items follow the live order; single-thread pack walk and RSX_RACE_PACK_KEEP work");
 
-        /* 6. Membership changed: no hit, per-file fallback, pack rewritten for the new set. */
+        /* 6. Membership changed. RSX_RACE_PACK_MEMBERS=0: no hit, per-file fallback, pack rewritten. */
+        _putenv_s("RSX_RACE_PACK_MEMBERS","0");
         write_index(hashes,N-5);stored=s_pack_stored;
         load_race();CHECK(!s_pack_hits && resident_count(N)==N-5 && s_race_loaded==N-5);
         wait_stored(stored);wait_released();CHECK(pack_count()==N-5);
-        session_end();
+        session_end();_putenv_s("RSX_RACE_PACK_MEMBERS","");
+        puts("PASS: RSX_RACE_PACK_MEMBERS=0 rejects a pack whose membership differs and rewrites it");
+
+        /* 6b. Member-wise (default): the 43-member pack serves the 48-member index; the 5 it
+         *     lacks come from their files. Under the refresh limit (here 50%) it is not rewritten. */
+        _putenv_s("RSX_RACE_PACK_REFRESH_PCT","50");_putenv_s("RSX_RACE_PACK_KEEP","1");
         write_index(hashes,N);stored=s_pack_stored;
-        load_race();CHECK(!s_pack_hits && resident_count(N)==N);wait_stored(stored);wait_released();CHECK(pack_count()==N);
+        load_race();CHECK(s_pack_hits==1 && s_pack_absent==5 && !s_pack_unused && s_pack_n==N);
+        CHECK(resident_count(N)==N && s_race_loaded==N && !s_race_rejected && !s_pack_stale);
+        for(u32 i=0;i<N;i++)CHECK(s_pack_items[i].hash==hashes[i] && s_pack_items[i].absent==(i>=N-5));
+        CHECK(s_pack_stored==stored && pack_count()==N-5);   /* RSX_RACE_PACK_KEEP=1: bytes stay bound */
+        session_end();_putenv_s("RSX_RACE_PACK_REFRESH_PCT","");_putenv_s("RSX_RACE_PACK_KEEP","");
+        puts("PASS: member-wise match prepares packed members from the pack and the rest from files, without a rewrite");
+
+        /* 6c. Past the default 10% (5 of 48 missing): still used, then rewritten for the index. */
+        stored=s_pack_stored;
+        load_race();CHECK(s_pack_hits==1 && s_pack_absent==5 && resident_count(N)==N && !s_race_rejected);
+        wait_stored(stored);wait_released();CHECK(pack_count()==N);
         session_end();
-        puts("PASS: a changed race index rejects the old pack, prepares from files and rewrites the pack");
+        /* 6d. Two members dropped from the index (4%): a hit that skips them, no rewrite. */
+        write_index(hashes,N-2);stored=s_pack_stored;_putenv_s("RSX_RACE_PACK_KEEP","1");
+        load_race();CHECK(s_pack_hits==1 && resident_count(N)==N-2 && s_race_loaded==N-2);
+        CHECK(!s_pack_absent && s_pack_unused==2 && s_pack_n==N-2);
+        CHECK(s_pack_stored==stored && pack_count()==N);
+        session_end();_putenv_s("RSX_RACE_PACK_KEEP","");
+        write_index(hashes,N);
+        puts("PASS: drift past RSX_RACE_PACK_REFRESH_PCT rewrites the pack; members dropped from the index are skipped");
 
         /* 7. Damaged pack bytes: payload checksum rejects it, files serve the load, pack is rewritten. */
         size_t n=0;unsigned char* good=slurp(packp,&n);CHECK(good && n>4096);
@@ -290,6 +316,7 @@ int main(int argc,char** argv){
 
         /* 9b. RSX_RACE_PACK_STREAM=0 writes the version-1 layout from memory; it still hits,
          *     and the streamed rewrite afterwards is the version-2 file again. */
+        _putenv_s("RSX_RACE_PACK_MEMBERS","0");   /* whole-index matching: a changed index rewrites */
         _putenv_s("RSX_RACE_PACK_STREAM","0");write_index(hashes,N-1);stored=s_pack_stored;
         load_race();CHECK(!s_pack_hits);wait_stored(stored);wait_released();session_end();
         again=slurp(packp,&n2);CHECK(again && pack_version(again)==1 && pack_count()==N-1);free(again);
@@ -298,6 +325,7 @@ int main(int argc,char** argv){
         _putenv_s("RSX_RACE_PACK_STREAM","");write_index(hashes,N);stored=s_pack_stored;
         load_race();CHECK(!s_pack_hits);wait_stored(stored);wait_released();session_end();
         again=slurp(packp,&n2);CHECK(again && pack_version(again)==2 && n2==n && !memcmp(again,good,n));free(again);
+        _putenv_s("RSX_RACE_PACK_MEMBERS","");
         puts("PASS: RSX_RACE_PACK_STREAM=0 writes and reads the version-1 layout; the streamed version 2 is rewritten byte for byte");
         free(good);free(bad);
 

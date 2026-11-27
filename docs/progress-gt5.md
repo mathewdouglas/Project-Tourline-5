@@ -4,6 +4,54 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## The race pack matches member by member; full-cap and other-settings members cost nothing (`perf/v0.3.3-field-gpu`, 2026-11-27)
+
+The pack was used only when its member list equalled the race index exactly. The index gains a few
+pipelines every race (compaction keeps it newest-first at 16,384), so the pack missed on nearly every
+load. The gate then prepared the set from per-file reads (48-60 s on four helpers here), and the pack was
+rewritten in the race's first one to two minutes. Measured on the real cache: 16,384 members shared, 20
+new in the index.
+
+Changes (runtime, each with a switch):
+
+- **Member-wise matching** (`RSX_RACE_PACK_MEMBERS`, `=0` whole-index as before). The pack's own record
+  list must still match its checksum. Index members the pack lacks are prepared from their files; pack
+  members the index dropped are skipped. The pack is rewritten only when either share passes
+  `RSX_RACE_PACK_REFRESH_PCT` (default 10).
+- **Room before reads** (`RSX_PSO_ROOM_FIRST`, `=0` old). Once the preload cap (12,288 with the 4,096
+  reserve) is full, every later member was turned away only after reading its recipe file. The pack path
+  even fell back to the files for it. A full cap now rejects without any read: 7,155-10,806 members per
+  load here.
+- **Recipes for other settings are not "stale"** (`RSX_RACE_PACK_DESC_STALE=1` old). 1,615 race recipes
+  fail the description hash under the current root signature: they were recorded with other renderer
+  settings. A rewrite copies the same files back, so counting them stale rewrote the pack after every
+  load for nothing. They are now a plain rejection.
+- **Unfinished pack files are removed** at worker start (`RSX_RACE_PACK_TMP_CLEAN=0` keeps them). A game
+  closed during a rewrite left a `race-pack-v1.bin.<tid>.tmp` of up to 400 MB; two runs here left 152 and
+  353 MB.
+- The prep split line now gives stale reasons and `cap_full`; F8 has a "Race pack members" line.
+
+Monza, user settings (1440p ultrawide, DLAA, 4x MSAA), same build otherwise:
+
+| Run | Pack | Gate (helpers) | RaceLoad -> RaceAssets | Pack rewritten |
+| --- | --- | ---: | ---: | --- |
+| earlier runs today (mem1-3) | miss, files | 48-60 s | | yes |
+| pm1 (member-wise only) | hit, 19 from files | 21.0 s | 36.7 s | started (stale 1,615) |
+| pm2 (+ room first) | hit, 32 from files | 7.8 s | 23.5 s | started (stale 1,615) |
+| pm3 (all) | hit, 109 from files | 2.3 s | 17.9 s | no |
+| pm4 (all) | hit, 122 from files | 1.7 s | 17.5 s | no |
+
+The pack read itself is 525-630 ms. Frames per 5 s in the race match the earlier runs (the full-field
+drops to 120-190 are unchanged; that is the open GPU/CPU issue, not this). Test:
+`scripts/test/race_prewarm.py` (new steps 6-6d: whole-index rollback, member-wise hit with files for the
+rest, rewrite past the limit, dropped members skipped; leftover temp file removed).
+
+Open, the user's "smarter race packs": most of a learned race set never becomes resident. The cap fills
+after about 5,500-7,600 race members (the menu set and earlier preparation take the rest), so the
+remaining ~9,000-10,800 pack members are read and never used. In the earlier report only ~1,700 of
+12,288 preloaded pipelines were drawn. A per-track set, or one ordered by actual use, would fit in the
+cap and shrink the pack.
+
 ## Where the RAM goes in a race; the race pack is written as it is built (`perf/v0.3.3-field-gpu`, 2026-11-27)
 
 The user's 22:15 report: working set 4,327 MB (peak 4,764), 1,056 MB of 16 GB free, 5.9 M page faults.

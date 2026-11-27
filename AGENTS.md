@@ -109,8 +109,12 @@ complete" dialog are answered by the runtime (`PAD_AUTO_INSTALL`, from `install_
 **Race RAM (2026-11-27).** A race's ~1.6 GB process heap is mostly driver pipeline objects
 (~16,600 alive, ~60-100 KB each; `RSX_PSO_RESIDENT_MAX=4096` saves ~1.2 GB but adds hitches, so not
 default). The race pack is streamed to disk (version 2, `RSX_RACE_PACK_STREAM=0` old in-memory v1): it
-held up to 768 MB in the race's first minute. `GT5P_HEAP_LOG=<s>` and the F8 report show heap use. The
-pack almost never matches (whole-index hash) and is rewritten nearly every race. See progress-gt5.md.
+held up to 768 MB in the race's first minute. `GT5P_HEAP_LOG=<s>` and the F8 report show heap use.
+The pack now matches member by member (`RSX_RACE_PACK_MEMBERS=0` whole index), rewritten only past
+`RSX_RACE_PACK_REFRESH_PCT` (10) drift; a full preload cap rejects before any file read
+(`RSX_PSO_ROOM_FIRST=0` old); recipes recorded under other settings no longer mark it stale
+(`RSX_RACE_PACK_DESC_STALE=1` old); leftover `race-pack-v1.bin.*.tmp` are removed at worker start
+(`RSX_RACE_PACK_TMP_CLEAN=0`). Monza gate 48-60 s -> ~2 s, no rewrite. See progress-gt5.md.
 
 **Prologue renderer ports (GT5 Phase 47).** All default on, measured at High Speed Ring:
 `RSX_PSO_FAST_LOOKUP` (learned table `warmup-v1/fp-lookup-gt5-v1-<tag>.bin`: a miss whose mapped
