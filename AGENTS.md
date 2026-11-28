@@ -71,6 +71,12 @@ update; 2.17 is refused). One launcher and one ZIP carry both engines; owned
 DLC offline support remains acceptance work. Private 2.11 inputs are present.
 Never upgrade the 01.04 RPCS3 install in place or carry v104 addresses across.
 
+**2.11 Options hint (#79, 2026-11-28).** Returning from Options to GT Mode
+re-reads `9/B5/X4` (measured on 2.11). `GTLife=9/B5/X4` and `GTLife:screen`
+in its target config clear the hint through the same screen hook as 01.04.
+The older options-word check alone still left the hint visible in 0.3.2.
+See the newest #79 entry in `docs/progress-gt5.md` for live verification and rollback.
+
 **2.11 player setup (2026-11-15).** Optional RecompLauncher update-package
 folder (all 21 packages through 2.11), or an existing complete installation.
 Native setup verifies the chain, installs with its isolated headless RPCS3 behind one progress window, decrypts

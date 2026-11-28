@@ -4,6 +4,37 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 2.11 Options hint clears on return to GT Mode (#79, 2026-11-28)
+
+The 0.2.1 options-word check was still present in 0.3.2, but #79 reproduced on
+unmodified 2.11: enter GT Mode, choose the sidebar gear > Options, then Circle
+and confirm OK. The PC settings hint remained over GT Life. The 01.04 screen-file
+fix in `c9f40569` did not cover 2.11.
+
+`PAD_FILE_LOG=2` measured `9/B5/X4` as the first PDIPFS file read both on entering
+GT Mode (60,953 ms in the baseline) and on returning from Options (202,453 ms).
+`9/QA/B5` followed about 1.5 s later. Added `GTLife=9/B5/X4` to 2.11's `screen_files`
+and `GTLife:screen` to `screen_roles`, through the same existing screen hook as
+01.04. No 01.04 address or file marker was copied, and no runtime change is needed.
+Rollback: override `PAD_MILESTONE_FILES` with the old 2.11 list without `GTLife`.
+
+Private test root and logs are on D: (paths in this checkout's `AGENTS.local.md`).
+It was made from a copy of the 01.04 install plus all 21 updates through 2.11 in
+order, with a copied save; the original installation and save were preserved.
+Baseline used the packaged 0.3.2 `gt5_211.exe`. Verification supplies the changed
+config lists as `PAD_MILESTONE_FILES` and `GT5P_SCREEN_ROLES`, the same values
+CMake compiles into `main.cpp`; a new engine build has not been made for this
+configuration-only fix.
+
+Live verification passed twice in one boot: Options still shows the hint, then
+Circle > OK returns to GT Life without it. The production hook logged Options
+at host tick 1379721500, GTLife at 1379764921, Options again at 1379792781,
+and GTLife again at 1379805468. The second return matters because milestones
+are printed once but screen hooks must fire on every read. Logs:
+`D:/Tourline5-211-test/hint-enter.{out,err}` (baseline, hint stuck) and
+`hint-fixed.{out,err}` (fixed). Config validation also confirms that only the
+two intended 2.11 lists changed; every other target is identical to HEAD.
+
 ## Saves over 2 MiB load again (#94, #95, #99; runtime, 2026-11-28)
 
 #94/#95/#99 (one reporter, 2.11 with Master Mod 2.0.0) quit at boot with `read error at 2025482` then
