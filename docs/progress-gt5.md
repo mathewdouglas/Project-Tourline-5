@@ -4,6 +4,32 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## Release 0.3.3 built & verified (2026-11-29; VirusTotal pending)
+
+Tag `v0.3.3` = `341f187` (branch `perf/v0.3.3-field-gpu`): #79 (2.11), #94/#95/#99, #97, F1 player name,
+full-field race fixes, race sessions/set and the member-matched, streamed race pack. CHANGELOG now also
+has the 0.3.1 and 0.3.2 entries that those releases shipped without.
+
+- **Profile:** fresh 4-route PGO (`hsr,rome,eiger,carlist`) from a re-lift of the tag in this checkout:
+  `d5e6938ad16c`, **0** functions lost counts, 930 without a record. Two failed attempts first, both
+  environment, not code: the checkout's `generated/`, `third_party/{ffmpeg,dxc,dlss}` were junctions into
+  the removed `release-v0.2.0` worktree (re-lifted with the release steps; pinned copies from the clean
+  build), and its rebuilt `input/` lacked `pkg` (virtual-install records need `input/pkg/USRDIR/GT.VOL`;
+  Rome's loading re-opened `5W/KC` for ever). A profile trained without FFmpeg headers lost 4
+  `codec_ffmpeg.c` functions; retrained with them.
+- **2.11 engine:** clean engine-only build from the tag; its private inputs are the
+  `feat-gt5-v211` worktree (2.11 job captures `j0B07CA3D`, `j18DE3719`, `jCB9BD024`, `jCF635263`,
+  `t4C414F6C` are only there; with GT5-work's the lift changes `spu_workloads_bcus98114_v211.c`).
+- **ZIP:** `project-tourline-5-v0.3.3-windows-x64.zip`, 134 files, no game data, SHA-256
+  `eed3c0d2c7adaee6ecd6f69e575ab5e159166eb3735f429995ec85b789270332` (work folders on D:, paths in
+  `AGENTS.local.md`).
+- **Packaged 01.04 High Speed Ring 60 s frame test** (`RSX_CMD_CHECK=1`, 0 reports, 0 `PSO FAIL`):
+  **59.9 FPS**, 0.6% late, median 16.6 ms, p99 19.2 ms, max 34.1 ms, walk 5.75 ms/frame. Two dips in
+  frames per 5 s (190/159 and 151/150, then 300-301) during first-race pipeline builds on this cache.
+- **Defender** (`MpCmdRun -Scan -ScanType 3`): 0 threats on the ZIP and the extracted folder.
+- **Open before publishing:** VirusTotal (`scripts/release/vt.py scan`; the key is one-use and was not
+  supplied). Not run: a packaged 2.11 boot, and a 2.11 save over 2 MiB.
+
 ## 2.11 Options hint clears on return to GT Mode (#79, 2026-11-28)
 
 The 0.2.1 options-word check was still present in 0.3.2, but #79 reproduced on
