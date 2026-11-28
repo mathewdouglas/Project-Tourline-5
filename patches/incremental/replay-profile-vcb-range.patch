@@ -1,0 +1,313 @@
+diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
+index c67ce561..24f1bccb 100644
+--- a/libs/video/rsx_d3d12_backend.c
++++ b/libs/video/rsx_d3d12_backend.c
+@@ -565,6 +565,11 @@ typedef struct {
+     ID3DBlob* vs;
+     int uses_c03;
+     int gpu;                /* fetches its own inputs (rsx_vp_decompile_gpufetch) */
++    /* The constant registers the program can read, [c_lo, c_hi), from its
++     * HLSL (vp_hlsl_const_range); c_known 0 = any (relative addressing, or
++     * not measured), so its draws copy the whole bank. RSX_VCB_RANGE. */
++    u16 c_lo, c_hi;
++    u8 c_known;
+ } VPVSEntry;
+ #define VP_VS_CACHE 4096 /* 256 until Phase 59: entries are never evicted or renumbered (see vp_get_vs_mode_impl) */
+                          /* wave uses 5+ distinct VPs; at 4 the cache
+@@ -1134,6 +1139,60 @@ static void dp_report(void)
+     memset(s_dp, 0, sizeof s_dp); memset(s_dp_n, 0, sizeof s_dp_n);
+     t0 = now; tsc0 = tsc; q0 = q; f0 = s_d3d.frame_count;
+ }
++/* RSX_REPLAYPROF=1: every 5 s, the replay thread's draw loop split by stage,
++ * in ms per frame, beside RSX_DRAWPROF's split of recording. Stages follow
++ * the loop in order: target (retargeting and depth ownership), pipeline
++ * (pipeline lookup and SetPipelineState), state (stencil, blend colour,
++ * viewport, scissor), textures (snapshots, resolves and transitions before
++ * binding), bind (descriptor table, constants, vertex and index views),
++ * draw (the Draw call) and rest (whatever follows a draw, and draws left
++ * out). Also counted: draws issued, pipeline changes, target switches, and
++ * how many issued draws in a row share a pipeline -- the runs an
++ * ExecuteIndirect batch could cover. Timed with the TSC on the replay
++ * thread only; unset, each probe is one predictable branch. */
++enum { RP_TARGET, RP_PSO, RP_STATE, RP_TEX, RP_BIND, RP_DRAW, RP_REST, RP_N };
++static const char* const s_rp_name[RP_N] = { "target", "pipeline", "state", "textures", "bind", "draw", "rest" };
++static unsigned long long s_rp[RP_N];
++static unsigned s_rp_draws, s_rp_pso_changes, s_rp_rt_switches;
++static unsigned s_rp_runs[6];        /* same-pipeline runs: 1, 2-3, 4-7, 8-15, 16-63, 64+ */
++static unsigned long long s_rp_run_draws[6];
++static int rp_on(void)
++{
++    static int v = -1;
++    if (v < 0) v = getenv("RSX_REPLAYPROF") ? 1 : 0;
++    return v;
++}
++#define RP_LAP(k, t) do { if (rp_on()) { const unsigned long long _n = __rdtsc(); s_rp[k] += _n - (t); (t) = _n; } } while (0)
++static void rp_run_end(unsigned run)
++{
++    if (!run) return;
++    const int b = run == 1 ? 0 : run < 4 ? 1 : run < 8 ? 2 : run < 16 ? 3 : run < 64 ? 4 : 5;
++    s_rp_runs[b]++; s_rp_run_draws[b] += run;
++}
++static void rp_report(void)
++{
++    static ULONGLONG t0; static unsigned long long tsc0, f0; static LARGE_INTEGER q0;
++    const ULONGLONG now = GetTickCount64();
++    if (!t0) { t0 = now; tsc0 = __rdtsc(); QueryPerformanceCounter(&q0); f0 = s_d3d.frame_count; return; }
++    if (now - t0 < 5000) return;
++    LARGE_INTEGER q, f; QueryPerformanceCounter(&q); QueryPerformanceFrequency(&f);
++    const unsigned long long tsc = __rdtsc();
++    const double tsc_per_ms = (double)(tsc - tsc0) / ((double)(q.QuadPart - q0.QuadPart) * 1000.0 / (double)f.QuadPart);
++    const double frames = (double)(s_d3d.frame_count - f0) > 0 ? (double)(s_d3d.frame_count - f0) : 1.0;
++    double total = 0;
++    for (int k = 0; k < RP_N; k++) total += (double)s_rp[k];
++    fprintf(stderr, "[replayprof] %.0f frames: total %.2f ms", frames, total / tsc_per_ms / frames);
++    for (int k = 0; k < RP_N; k++) fprintf(stderr, " %s %.2f", s_rp_name[k], (double)s_rp[k] / tsc_per_ms / frames);
++    fprintf(stderr, " | per frame: %.0f draws, %.0f pipeline changes, %.0f target switches | same-pipeline runs"
++                    " (runs/draws per frame) 1: %.0f/%.0f 2-3: %.0f/%.0f 4-7: %.0f/%.0f 8-15: %.0f/%.0f 16-63: %.0f/%.0f 64+: %.0f/%.0f%c",
++            s_rp_draws / frames, s_rp_pso_changes / frames, s_rp_rt_switches / frames,
++            s_rp_runs[0] / frames, s_rp_run_draws[0] / frames, s_rp_runs[1] / frames, s_rp_run_draws[1] / frames,
++            s_rp_runs[2] / frames, s_rp_run_draws[2] / frames, s_rp_runs[3] / frames, s_rp_run_draws[3] / frames,
++            s_rp_runs[4] / frames, s_rp_run_draws[4] / frames, s_rp_runs[5] / frames, s_rp_run_draws[5] / frames, 10);
++    memset(s_rp, 0, sizeof s_rp); memset(s_rp_runs, 0, sizeof s_rp_runs); memset(s_rp_run_draws, 0, sizeof s_rp_run_draws);
++    s_rp_draws = s_rp_pso_changes = s_rp_rt_switches = 0;
++    t0 = now; tsc0 = tsc; q0 = q; f0 = s_d3d.frame_count;
++}
+ /* RSX_VTXSTAT=1: every 5 s, per vertex upload path, the calls, vertices asked
+  * for and written, the time spent, how much of it was vp_stage_commit, and a
+  * histogram of call sizes. The paths: non-indexed quads, triangles, strips and
+@@ -3631,6 +3690,50 @@ static int vp_memo_on(void)
+ #define VS_PENDING (-2)
+ static int vp_get_vs_mode(const rsx_state* st, int gpu);
+ static int vp_get_vs(const rsx_state* st) { return vp_get_vs_mode(st, 0); }
++/* RSX_VCB_RANGE=1 (off by default until measured): a draw copies into its
++ * constant slot only the vertex-constant registers its program can read,
++ * instead of the whole 8 KB bank. Most of a race frame's ~3,000 draws change
++ * the bank (each car part has its own matrices), so the full copy was 8 KB of
++ * upload-heap writes per draw. Exact: the registers left out of a slot are
++ * never read by that slot's program, and a later draw reuses the slot only
++ * when its own range lies inside the one copied. Programs with relative
++ * addressing (vp_c[(n + a0.x) & 511u]) copy the whole bank. The capture and
++ * constant diagnostics (RSX_CAP*, VP_MVP, RSX_DBG_CB, RSX_VCB_DBG) read whole
++ * slots, so they turn it off. */
++static int vcb_range_on(void)
++{
++    static int on = -1;
++    if (on < 0) {
++        const char* e = getenv("RSX_VCB_RANGE");
++        on = e && e[0] == '1' && !getenv("RSX_CAP") && !getenv("RSX_CAP_VPC") && !getenv("VP_MVP") &&
++             !getenv("RSX_DBG_CB") && !getenv("RSX_VCB_DBG") && !getenv("VP_FIXPROJ");
++    }
++    return on;
++}
++/* The literal constant registers a decompiled vertex program's HLSL reads.
++ * The decompiler writes a constant operand as vp_c[<n>] or, with the address
++ * register, vp_c[(<n>u + a<i>.<c>) & 511u] (rsx_vp_decompiler.c); the
++ * declaration "float4 vp_c[512];" is skipped. Anything else, and any relative
++ * read, leaves *known 0 (the whole bank). */
++static void vp_hlsl_const_range(const char* hlsl, u16* lo, u16* hi, u8* known)
++{
++    unsigned l = RSX_MAX_VERTEX_CONSTANTS, h = 0;
++    *lo = 0; *hi = RSX_MAX_VERTEX_CONSTANTS; *known = 0;
++    if (!hlsl) return;
++    for (const char* p = strstr(hlsl, "vp_c["); p; p = strstr(p + 5, "vp_c[")) {
++        if (p - hlsl >= 7 && !strncmp(p - 7, "float4 ", 7)) continue;   /* the declaration */
++        const char* q = p + 5;
++        if (*q < '0' || *q > '9') return;                                 /* relative */
++        unsigned v = 0;
++        while (*q >= '0' && *q <= '9') { v = v * 10u + (unsigned)(*q - '0'); if (v > 4096u) return; q++; }
++        if (*q != ']') return;
++        if (v >= RSX_MAX_VERTEX_CONSTANTS) return;
++        if (v < l) l = v;
++        if (v + 1u > h) h = v + 1u;
++    }
++    if (h == 0) l = 0;                    /* reads no constant: an empty range */
++    *lo = (u16)l; *hi = (u16)h; *known = 1;
++}
+ /* gpu: the variant that fetches its inputs from raw guest bytes. */
+ static int vp_get_vs_mode_impl(const rsx_state* st, int gpu);
+ /* Every draw record looked its program up afresh: find the END instruction,
+@@ -3707,11 +3810,13 @@ static int vp_get_vs_mode_impl(const rsx_state* st, int gpu)
+     /* 1024 entries (was 256): an untracked pending program was decompiled
+      * again on every lookup until its compile finished. */
+     enum { VS_PEND_N = 1024 };
+-    static struct { u32 vp; u64 shc; u8 c03; } s_vs_pend[VS_PEND_N]; static int s_vs_pend_n = 0;
++    static struct { u32 vp; u64 shc; u8 c03; u8 c_known; u16 c_lo, c_hi; } s_vs_pend[VS_PEND_N]; static int s_vs_pend_n = 0;
+     ID3DBlob* memo_vb = NULL; int memo_c03 = 0;
++    u16 memo_lo = 0, memo_hi = RSX_MAX_VERTEX_CONSTANTS; u8 memo_known = 0;
+     for (int i = 0; i < s_vs_pend_n; i++)
+         if (s_vs_pend[i].vp == hash) {
+             if (shc_pending(s_vs_pend[i].shc)) return VS_PENDING;
++            memo_lo = s_vs_pend[i].c_lo; memo_hi = s_vs_pend[i].c_hi; memo_known = s_vs_pend[i].c_known;
+             /* Done. RSX_VP_MEMO (default on): the worker left the bytecode in
+              * the memory cache (RSX_SHADER_HANDOFF), so the program is not
+              * decompiled a second time just to find it. =0: decompile again. */
+@@ -3735,6 +3840,8 @@ static int vp_get_vs_mode_impl(const rsx_state* st, int gpu)
+         s_d3d.vp_vs[slot].vs   = memo_vb;
+         s_d3d.vp_vs[slot].gpu  = gpu;
+         s_d3d.vp_vs[slot].uses_c03 = (u8)memo_c03;
++        s_d3d.vp_vs[slot].c_lo = memo_lo; s_d3d.vp_vs[slot].c_hi = memo_hi;
++        s_d3d.vp_vs[slot].c_known = memo_known;
+         if (!s_d3d.vp_ready && st && st->vp_ucode_bytes >= 16) {
+             const rsx_state* prev = s_d3d.current_rsx_state;
+             s_d3d.current_rsx_state = st;
+@@ -3826,6 +3933,8 @@ static int vp_get_vs_mode_impl(const rsx_state* st, int gpu)
+             s_vs_pend[s_vs_pend_n].vp = hash; s_vs_pend[s_vs_pend_n].shc = shc_h;
+             s_vs_pend[s_vs_pend_n].c03 = (strstr(hlsl, "vp_c[0]") || strstr(hlsl, "vp_c[1]") ||
+                                           strstr(hlsl, "vp_c[2]") || strstr(hlsl, "vp_c[3]")) ? 1 : 0;
++            vp_hlsl_const_range(hlsl, &s_vs_pend[s_vs_pend_n].c_lo, &s_vs_pend[s_vs_pend_n].c_hi,
++                                &s_vs_pend[s_vs_pend_n].c_known);
+             s_vs_pend_n++;
+         }
+         return VS_PENDING;
+@@ -3873,6 +3982,7 @@ static int vp_get_vs_mode_impl(const rsx_state* st, int gpu)
+     s_d3d.vp_vs[slot].uses_c03 =
+         (strstr(hlsl, "vp_c[0]") || strstr(hlsl, "vp_c[1]") ||
+          strstr(hlsl, "vp_c[2]") || strstr(hlsl, "vp_c[3]")) ? 1 : 0;
++    vp_hlsl_const_range(hlsl, &s_d3d.vp_vs[slot].c_lo, &s_d3d.vp_vs[slot].c_hi, &s_d3d.vp_vs[slot].c_known);
+     { static int _n=0; if ((_n < 6 && ++_n)) printf("[VP] per-draw VS cached (hash=0x%08X, %d instrs, slot %d)\n", hash, ni, slot); }
+     /* Build the base VP pipeline here if it does not exist yet. render_frame's
+      * trigger reads s_d3d.current_rsx_state, which by frame end no longer has
+@@ -8494,7 +8604,7 @@ static int fplk_env_ignored(const char* name)
+     static const char* const skip[] = { "RSX_PSO_FAST_LOOKUP", "RSX_PSO_TIMING", "RSX_HITCH_LOG", "RSX_TEXUPSTAT",
+         "RSX_TEX_", "RSX_SHADER_CACHE", "RSX_SHADER_WARMUP", "RSX_SHADER_PACK", "RSX_RACE_", "RSX_PSO_ASYNC",
+         "RSX_PSO_RESIDENT", "RSX_PSO_RECIPE", "RSX_PSO_HITCH", "RSX_PSO_RACE", "RSX_PSO_MENU", "RSX_DXBC_",
+-        "RSX_SHADER_INDICATOR", "RSX_DRAWPROF", "RSX_GPU_TIME", "RSX_CAP", "RSX_RDOC", "RSX_WINDOW",
++        "RSX_SHADER_INDICATOR", "RSX_DRAWPROF", "RSX_REPLAYPROF", "RSX_VCB_RANGE", "RSX_GPU_TIME", "RSX_CAP", "RSX_RDOC", "RSX_WINDOW",
+         "RSX_OUTPUT_", "RSX_PRESENT_", "RSX_HOT_METHODS", "RSX_OVERLAY", "RSX_FP_CATALOG", "FP_DUMP_DIR", NULL };
+     for (int i = 0; skip[i]; i++) if (!strncmp(name, skip[i], strlen(skip[i]))) return 1;
+     return 0;
+@@ -12463,6 +12573,7 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
+  * class match the previous record of this frame binds that record's slot
+  * instead. RSX_VCB_REUSE=0: copy every time. */
+ static u32 s_vcb_copies, s_vcb_calls;   /* per 5 s, on the [present-thread] line */
++static unsigned long long s_vcb_bytes;  /* bytes those copies wrote (RSX_VCB_RANGE copies less) */
+ static int jit_draw(const D3D12DrawRecord* dr, float out[2]);   /* [jitter] defined with the walker side */
+ static int jit_cur_px(float out[2]);
+ static void scene_consts_note(const D3D12DrawRecord* dr, const rsx_state* st);   /* [scene] RSX_SCENE_CONSTS */
+@@ -12781,14 +12892,25 @@ static u32 vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+     if (dr) ((D3D12DrawRecord*)dr)->uw_edge = uw_edge > 0.0f;   /* every draw: records are reused */
+     const int c03 = (vs_idx >= 0 && vs_idx < s_d3d.vp_vs_n) ? s_d3d.vp_vs[vs_idx].uses_c03 : s_d3d.vp_uses_c03;
+     const float vz0 = st->viewport_scale[2], vz1 = st->viewport_offset[2];
++    /* RSX_VCB_RANGE: the registers this draw's program reads (whole bank
++     * otherwise); l_lo/l_hi are what the last copied slot holds. */
++    u32 c_lo = 0, c_hi = RSX_MAX_VERTEX_CONSTANTS;
++    if (vcb_range_on() && vs_idx >= 0 && vs_idx < s_d3d.vp_vs_n && s_d3d.vp_vs[vs_idx].c_known) {
++        c_lo = s_d3d.vp_vs[vs_idx].c_lo; c_hi = s_d3d.vp_vs[vs_idx].c_hi;
++        if (c_hi <= c_lo) c_lo = c_hi = 0;
++    }
++    static u32 l_lo, l_hi = RSX_MAX_VERTEX_CONSTANTS;
+     if (vreuse && l_ok && l_st == st && l_gen == st->vc_gen && l_fgen == FR->ix_gen &&
+         l_c03 == (u32)c03 && l_vz[0] == vz0 && l_vz[1] == vz1 && l_uw == uw_edge && l_slot < slot &&
+-        l_jon == jit_xy_on && l_jit[0] == jit_xy[0] && l_jit[1] == jit_xy[1])
++        l_jon == jit_xy_on && l_jit[0] == jit_xy[0] && l_jit[1] == jit_xy[1] &&
++        (c_hi <= c_lo || (l_lo <= c_lo && c_hi <= l_hi)))
+         return l_slot;
+     char* dst = (char*)s_d3d.vp_cb_mapped
+         + ((u64)FR->parity * s_draw_cap + slot) * VP_CB_STRIDE;
+-    memcpy(dst, st->vertex_constants, RSX_MAX_VERTEX_CONSTANTS * 16);
+-    s_vcb_copies++;
++    if (c_hi > c_lo)
++        memcpy(dst + (size_t)c_lo * 16u, st->vertex_constants[c_lo], (size_t)(c_hi - c_lo) * 16u);
++    l_lo = c_lo; l_hi = c_hi;
++    s_vcb_copies++; s_vcb_bytes += (unsigned long long)(c_hi - c_lo) * 16u;
+     /* RSX_VCB_DBG=<hex VS hash>[,<n>]: c460..c467 as snapshot for the first n
+      * (default 4) draws of that vertex program (vs_<slot>_<hash>.hlsl). */
+     { static u32 want = 1; static int left = 4;
+@@ -17612,13 +17734,13 @@ static void rt_submit(void)
+           LONG64 sb = InterlockedExchange64(&s_self_bytes, 0);
+           LONG sr = InterlockedExchange(&s_self_resolved, 0);
+           LONG ss = InterlockedExchange(&s_self_shared, 0);
+-          fprintf(stderr, "[present-thread] 5 s: %u frames; per frame replay %.2f ms, walker waited %.2f ms for it and %.2f ms for the GPU; caches: %d pipelines, %d vertex shaders; peaks vb %u KiB ib %u raw %u KiB draws %u; constant banks %.0f/%.0f per frame; self copies %.1f (%.0f MiB, %.1f resolved into the copy, %.1f shared) per frame; copy waits %.2f (%.2f ms), replay copies %.2f per frame%c",
++          fprintf(stderr, "[present-thread] 5 s: %u frames; per frame replay %.2f ms, walker waited %.2f ms for it and %.2f ms for the GPU; caches: %d pipelines, %d vertex shaders; peaks vb %u KiB ib %u raw %u KiB draws %u; constant banks %.0f/%.0f per frame (%.0f KiB); self copies %.1f (%.0f MiB, %.1f resolved into the copy, %.1f shared) per frame; copy waits %.2f (%.2f ms), replay copies %.2f per frame%c",
+                   s_rt_n, 1e3 * s_rt_t_replay / n, 1e3 * s_rt_t_idle / n, 1e3 * s_rt_t_gpu / n,
+                   s_d3d.vp_fp_n, s_d3d.vp_vs_n, s_peak_vb >> 10, s_peak_ib, s_peak_vraw >> 10, s_peak_draws,
+-                  s_vcb_copies / n, s_vcb_calls / n, (double)sc / n, (double)sb / n / 1048576.0, (double)sr / n, (double)ss / n,
++                  s_vcb_copies / n, s_vcb_calls / n, (double)s_vcb_bytes / 1024.0 / n, (double)sc / n, (double)sb / n / 1048576.0, (double)sr / n, (double)ss / n,
+                   s_copysnap_waits / n, 1e3 * s_copysnap_wait_s / n, s_copysnap_replay / n, 10);
+           s_copysnap_waits = 0; s_copysnap_wait_s = 0; s_copysnap_replay = 0;
+-          s_vcb_copies = s_vcb_calls = 0;
++          s_vcb_copies = s_vcb_calls = 0; s_vcb_bytes = 0;
+           s_rt_last = now; s_rt_n = 0; s_rt_t_replay = s_rt_t_idle = s_rt_t_gpu = 0;
+           spack_checkpoint();
+       } }
+@@ -19961,7 +20083,11 @@ static void render_frame_body_inner(void)
+             u32 last_vb_sz = vbv.SizeInBytes, last_vb_st = vbv.StrideInBytes;
+             #define D3D_SD_RESET() do { last_pso = NULL; vp_valid = 0; last_sref = 0xFFFFFFFFu; \
+                 last_cb0 = last_cb2 = last_cb4 = last_srv3 = last_gh1 = last_vb_loc = 0; } while (0)
++            /* RSX_REPLAYPROF: the lap clock and the open same-pipeline run. */
++            unsigned long long rp_t = rp_on() ? __rdtsc() : 0ull;
++            const ID3D12PipelineState* rp_run_pso = NULL; unsigned rp_run = 0;
+             for (u32 d = 0; d < FR->draw_count && d < MAX_DRAWS; d++) {
++                RP_LAP(RP_REST, rp_t);
+                 const D3D12DrawRecord* dr = &FR->draws[d];
+                 if (!dr->is_vp) continue;
+                 if (dr->readback) { rb_replay(dr, cur_rt); D3D_SD_RESET(); continue; }
+@@ -20035,6 +20161,7 @@ static void render_frame_body_inner(void)
+                 if (want != cur_rt || wantm[0] != cur_m[0] ||
+                     wantm[1] != cur_m[1] || wantm[2] != cur_m[2] || wantz != cur_z || wantrz != cur_rtz ||
+                     (depth_keep_on() && cur_has_dsv && wantz < 0 && dr->zeta_off && !same_depth)) {
++                  if (rp_on()) s_rp_rt_switches++;
+                   if (wantz >= 0) {
+                     /* A depth-only pass: its own depth buffer, no colour target. */
+                     if (s_dz_want && cur_zeta == s_dz_want &&
+@@ -20226,6 +20353,7 @@ static void render_frame_body_inner(void)
+                         }
+                     continue;
+                 }
++                RP_LAP(RP_TARGET, rp_t);
+                 /* RSX_SKIPDBG_FP=<hex fp> (diagnostic): why draws of that program are left out. */
+                 static u32 skipdbg = 1; static int skipdbg_n;
+                 if (skipdbg == 1) { const char* e = getenv("RSX_SKIPDBG_FP"); skipdbg = e ? (u32)strtoul(e, NULL, 16) : 0; }
+@@ -20460,7 +20588,11 @@ static void render_frame_body_inner(void)
+                         s_d3d.cmd_list->lpVtbl->SetPipelineState(s_d3d.cmd_list, want_pso);
+                         last_pso = want_pso;
+                     }
++                    if (rp_on() && want_pso != rp_run_pso) {
++                        s_rp_pso_changes++; rp_run_end(rp_run); rp_run = 0; rp_run_pso = want_pso;
++                    }
+                 }
++                RP_LAP(RP_PSO, rp_t);
+                 if (dr->stencil & 1u) {
+                     const u32 sref = dr->stencil_ref & 0xFFu;
+                     if (!sd_on || sref != last_sref) {
+@@ -20583,6 +20715,7 @@ static void render_frame_body_inner(void)
+                     }
+                     vp_valid = 1;
+                 }
++                RP_LAP(RP_STATE, rp_t);
+                 /* Per-draw textures: bind this draw's t0-t3 SRV window.
+                  * Any sampled offscreen RT transitions to PSR first (never
+                  * one of the currently-bound colour targets). */
+@@ -20633,6 +20766,7 @@ static void render_frame_body_inner(void)
+                         rt != cur_m[0] && rt != cur_m[1] && rt != cur_m[2])
+                         off_rt_transition(rt, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                 }
++                RP_LAP(RP_TEX, rp_t);
+                 if (use_interp) {
+                     fp_interp_bind(dr, d, hdr_off);
+                     last_gh1 = 0;
+@@ -20741,6 +20875,7 @@ static void render_frame_body_inner(void)
+                     if (ml > 0)
+                         s_d3d.cmd_list->lpVtbl->SetMarker(s_d3d.cmd_list, 0, mk, (UINT)((ml + 1) * sizeof(wchar_t)));
+                 }
++                RP_LAP(RP_BIND, rp_t);
+                 const int _dti = dt_begin_draw(dr->fp_addr, use_interp,
+                     rt_is_small_offscreen(cur_rt),
+                     dr->zonly);
+@@ -20751,6 +20886,8 @@ static void render_frame_body_inner(void)
+                     s_d3d.cmd_list->lpVtbl->DrawInstanced(s_d3d.cmd_list,
+                         dr->vertex_count, 1, 0, 0);
+                 dt_end_draw(_dti);
++                if (rp_on()) { s_rp_draws++; rp_run++; }
++                RP_LAP(RP_DRAW, rp_t);
+                 /* A self-read may have resolved this target without rebinding
+                  * its RTV. This draw makes the multisample twin newer again. */
+                 if (cur_rt >= 0 && s_d3d.off_rt[cur_rt].ms) s_d3d.off_rt[cur_rt].ms_dirty = 1;
+@@ -20780,6 +20917,7 @@ static void render_frame_body_inner(void)
+                             dr->cull, dr->blend, 10); } }
+             }
+             #undef D3D_SD_RESET
++            if (rp_on()) { RP_LAP(RP_REST, rp_t); rp_run_end(rp_run); rp_report(); }
+             /* The batch may end on the scene target, with the passes that
+              * read its depth coming in the next one. */
+             (void)last_zeta_rt;

@@ -850,6 +850,17 @@ static int locate_project_root(void)
  *   (RSX_SHADER_INTERP_PSO_ASYNC=1, RSX_SHADER_INTERP_PSO_DISK=1). Cold
  *   cache: 90% fewer draws left out, offscreen waits 1.2 s -> 0.2 s
  *   (docs/progress-gt5.md, "C"). RSX_SHADER_INTERP=0 turns them off.
+ * - GT5P_LOW_END=1 (performance.low_end, F1 PERFORMANCE > Low-end PC; off
+ *   by default, not yet measured on a weak PC): the port's own extras that
+ *   no setting on the page covers, set lower for machines short of RAM,
+ *   cores or GPU:
+ *   - RSX_PSO_RESIDENT_MAX=4096: about 1.2 GB less heap in a Monza race
+ *     (2026-11-27; 7 pipeline hitches over 50 ms against 2);
+ *   - RSX_RACE_PREWARM_THREADS=2 (4): race-loading pipeline helpers;
+ *   - RSX_SHADER_WORKERS_RACE=1 (2): concurrent compiles during a race;
+ *   - RSX_SHADOW_SOFT=0: the console's shadow compare alone, not four.
+ *   Each still yields to its own variable. Switching it on in F1 also lowers
+ *   the page's own picture settings once (gt5p_settings_ui.cpp).
  * The settings file, loaded earlier, has already set any it covers. */
 static void apply_env_defaults()
 {
@@ -861,6 +872,8 @@ static void apply_env_defaults()
     const bool race_scope = GT5P_SCREEN_FILES[0] && GT5P_SCOPE_LABELS[0] && !(scope && scope[0] == '0');
     const char* ai = getenv("GT5P_AUTO_INSTALL");
     const bool auto_install = !(ai && ai[0] == '0');
+    const char* le = getenv("GT5P_LOW_END");
+    const bool low_end = le && le[0] == '1';
     const struct { const char* name; const char* value; bool when; } defaults[] = {
         {"PS3_PPU_PRIO_SCHED",   "2",                true},
         {"PS3_PPU_CORES",        "topo-ht",          true},
@@ -894,11 +907,48 @@ static void apply_env_defaults()
         {"RSX_SHADER_INTERP_VP", "1",                gt5},
         {"RSX_SHADER_INTERP_PSO_ASYNC", "1",         gt5},
         {"RSX_SHADER_INTERP_PSO_DISK",  "1",         gt5},
+        {"RSX_PSO_RESIDENT_MAX", "4096",             low_end},
+        {"RSX_RACE_PREWARM_THREADS", "2",            low_end},
+        {"RSX_SHADER_WORKERS_RACE",  "1",            low_end},
+        {"RSX_SHADOW_SOFT",      "0",                low_end},
     };
     for (const auto& d : defaults)
         if (d.when && d.value[0] && !getenv(d.name)) _putenv_s(d.name, d.value);
 }
 
+
+/* GT5P_CPU_MASK=<hex>: run the game on those logical CPUs only, set before any
+ * thread starts. For measuring a smaller CPU on a bigger one (for example
+ * F = four logical CPUs, FF = eight): the PPU and SPU-lane placement then
+ * pick cores inside the mask (ps3recomp PS3_CORES_PROCESS_MASK), and the
+ * helper counts that would read the whole machine's CPU count default to the
+ * mask's instead (RSX_SHADER_WORKERS half, RSX_SHADER_WARMUP_THREADS all but
+ * one, RSX_PSO_DEMAND_THREADS 1-3, as the backend computes them). Unset: the
+ * whole machine, as before. Not a full emulation: cache sizes, clocks and
+ * the other programs on the PC stay as they are. */
+static void apply_cpu_mask()
+{
+    const char* e = getenv("GT5P_CPU_MASK");
+    if (!e || !*e) return;
+    const DWORD_PTR want = (DWORD_PTR)strtoull(e, nullptr, 16);
+    DWORD_PTR proc = 0, sys = 0;
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys)) sys = ~(DWORD_PTR)0;
+    const DWORD_PTR m = want & sys;
+    if (!m || !SetProcessAffinityMask(GetCurrentProcess(), m)) {
+        fprintf(stderr, "[GT5P] GT5P_CPU_MASK=%s: not applied (system mask %llX)\n", e, (unsigned long long)sys);
+        return;
+    }
+    int n = 0;
+    for (DWORD_PTR b = m; b; b &= b - 1) n++;
+    auto def = [](const char* k, int v) {
+        if (getenv(k)) return;
+        char b[16]; snprintf(b, sizeof b, "%d", v); _putenv_s(k, b);
+    };
+    def("RSX_SHADER_WORKERS", n / 2 < 2 ? 2 : n / 2);
+    def("RSX_SHADER_WARMUP_THREADS", n - 1 < 1 ? 1 : n - 1);
+    def("RSX_PSO_DEMAND_THREADS", n >= 8 ? 3 : n >= 6 ? 2 : 1);
+    fprintf(stderr, "[GT5P] GT5P_CPU_MASK: %d logical CPUs (mask %llX)\n", n, (unsigned long long)m);
+}
 
 int main(int argc, char* argv[])
 {
@@ -918,6 +968,7 @@ int main(int argc, char* argv[])
      * settings turn that option into PAD_SKIP_MOVIE. */
     if (GT5P_MOVIE_SCREEN[0] && !getenv("GT5P_MOVIE_SCREEN")) _putenv_s("GT5P_MOVIE_SCREEN", GT5P_MOVIE_SCREEN);
     gt5p_settings_load();
+    apply_cpu_mask();   /* GT5P_CPU_MASK, before any thread starts */
     /* Real pixels at any Windows display scale (#97), before any window. */
     gt5p_dpi::make_process_aware();
 

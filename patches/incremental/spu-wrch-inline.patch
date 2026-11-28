@@ -1,0 +1,109 @@
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index ca283e05..768a8f6c 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -12,6 +12,7 @@
+  * embed one), in a small lazily-populated registry.
+  */
+ 
++#define SPU_WRCH_NO_MACRO   /* declares or defines spu_wrch (spu_wrch_inline.h) */
+ #include "spu_dma.h"
+ #include "spu_coherency.h" /* lock-line lock + PPU-write coherence bitmap */
+ #include "spu_helpers.h"   /* spu_splat_u32 / spu_ls_read128 (SMC microstep) */
+diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
+index 6c4547e0..51e77501 100644
+--- a/runtime/spu/spu_helpers.h
++++ b/runtime/spu/spu_helpers.h
+@@ -900,5 +900,6 @@ static inline u128 spu_iohl(u128 a, uint16_t imm){ u128 r; for(int i=0;i<4;i++)
+ #endif
+ 
+ #include "spu_codegen_helpers.h"
++#include "spu_wrch_inline.h"   /* SPU_WRCH_INLINE: MFC field writes inline */
+ 
+ #endif /* SPU_HELPERS_H */
+diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
+index 3ea718e6..9957025e 100644
+--- a/runtime/spu/spu_interp.c
++++ b/runtime/spu/spu_interp.c
+@@ -5,6 +5,7 @@
+  * spu_<mnemonic> helpers the lifter emits, so interpreted and lifted code are
+  * bit-identical. Uncommon opcodes trap loudly (never silently wrong).
+  */
++#define SPU_WRCH_NO_MACRO   /* declares or defines spu_wrch (spu_wrch_inline.h) */
+ #include "spu_interp.h"
+ #include "spu_helpers.h"
+ #include <stdio.h>
+diff --git a/runtime/spu/spu_wrch_inline.h b/runtime/spu/spu_wrch_inline.h
+new file mode 100644
+index 00000000..eb5f04f3
+--- /dev/null
++++ b/runtime/spu/spu_wrch_inline.h
+@@ -0,0 +1,68 @@
++/*
++ * Inline MFC field writes for lifted SPU code (SPU_WRCH_INLINE).
++ *
++ * The lifter turns every `wrch` into a call to spu_wrch(). Six of the MFC
++ * channels only latch a field of the context (local-store address, both
++ * halves of the effective address, size, tag, tag mask); spu_wrch() already
++ * stores them without touching the DMA engine when SPU_DMA_FAST is on
++ * (mfc_context_write, spu_dma.h), but each still costs an out-of-line call
++ * and the function's diagnostic checks. A DMA is typically five of these and
++ * one MFC_Cmd. Lifted code names the channel with its constant, so the test
++ * below folds away and the store is inlined; every other channel, and every
++ * write while the switch is off, goes to spu_wrch() as before.
++ *
++ * SPU_WRCH_INLINE=1 turns it on (off by default until measured). It is
++ * inert, and spu_wrch() runs for every write, when SPU_DMA_FAST=0 or
++ * SPU_CHHIST is set, since those need spu_wrch()'s own paths.
++ *
++ * Only translation units that call spu_wrch() and do not declare or define
++ * it may use the macro: spu_channels.c and spu_interp.c define
++ * SPU_WRCH_NO_MACRO first. The lifted spu_recomp.c files include their
++ * spu_recomp.h (which declares spu_wrch) before spu_helpers.h, so the
++ * prototype is not affected. A parenthesised (spu_wrch)(...) is the function.
++ */
++#ifndef SPU_WRCH_INLINE_H
++#define SPU_WRCH_INLINE_H
++
++#ifndef SPU_WRCH_NO_MACRO
++#include <stdlib.h>
++#include <stdint.h>
++
++void spu_wrch(spu_context* ctx, uint32_t channel, u128 value);
++
++static inline int spu_wrch_inline_on(void)
++{
++    /* Per translation unit: one getenv each, then a plain load. */
++    static volatile int on = -1;
++    int v = on;
++    if (v < 0) {
++        const char* e = getenv("SPU_WRCH_INLINE");
++        const char* f = getenv("SPU_DMA_FAST");
++        v = e && e[0] == '1' && !(f && f[0] == '0') && !getenv("SPU_CHHIST");
++        on = v;
++    }
++    return v;
++}
++
++static inline void spu_wrch_field(spu_context* ctx, uint32_t channel, u128 value)
++{
++    if (!spu_wrch_inline_on()) { (spu_wrch)(ctx, channel, value); return; }
++    const uint32_t v = value._u32[0];   /* channel writes use the preferred slot */
++    switch (channel) {
++    case MFC_LSA:       ctx->mfc_lsa = v; return;
++    case MFC_EAH:       ctx->mfc_eah = v; return;
++    case MFC_EAL:       ctx->mfc_eal = v; return;
++    case MFC_Size:      ctx->mfc_size = v; return;
++    case MFC_TagID:     ctx->mfc_tag = v & 0x1F; return;
++    case MFC_WrTagMask: ctx->mfc_tag_mask = v; return;
++    default:            (spu_wrch)(ctx, channel, value); return;
++    }
++}
++
++#define SPU_WRCH_IS_FIELD(ch) ((ch) == MFC_LSA || (ch) == MFC_EAH || (ch) == MFC_EAL || \
++                               (ch) == MFC_Size || (ch) == MFC_TagID || (ch) == MFC_WrTagMask)
++#define spu_wrch(ctx, ch, v) \
++    (SPU_WRCH_IS_FIELD(ch) ? spu_wrch_field((ctx), (ch), (v)) : (spu_wrch)((ctx), (ch), (v)))
++#endif /* SPU_WRCH_NO_MACRO */
++
++#endif /* SPU_WRCH_INLINE_H */

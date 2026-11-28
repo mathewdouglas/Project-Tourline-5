@@ -834,6 +834,21 @@ static int vblank_thread_on(void)
  * window (gt5p_settings_ui.cpp); the speed badge shows it above 1. */
 extern "C" volatile LONG g_gt5p_game_speed = 1;
 
+/* GT5P_FLIP_INTERVAL=<n> (1 by default; performance.frame_cap = 30 sets 2):
+ * a requested flip completes only on every n-th vblank, as a console flip
+ * with a vsync interval of n would. The vblank clock and its handlers still
+ * run at every vblank, so the game's own timing is unchanged; it sees its
+ * flips complete at 30 a second and holds an even 30 instead of swinging
+ * between 40 and 55 on a PC that cannot hold 60. Hypothesis until measured:
+ * that GT5's races keep real time with every frame two vblanks long (check
+ * with race.ps1 -RaceShots and the HUD timer), as its 30 fps scenes do. */
+static unsigned flip_interval(void)
+{
+    static int n = -1;
+    if (n < 0) { const char* e = getenv("GT5P_FLIP_INTERVAL"); n = e ? atoi(e) : 1; if (n < 1) n = 1; if (n > 4) n = 4; }
+    return (unsigned)n;
+}
+
 static DWORD WINAPI vblank_thread(LPVOID p)
 {
     fprintf(stderr, "[hostthread] vblank hosttid=%lu\n", (unsigned long)GetCurrentThreadId());
@@ -845,6 +860,8 @@ static DWORD WINAPI vblank_thread(LPVOID p)
     HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, 0x00000002 /* HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
     LARGE_INTEGER c; QueryPerformanceCounter(&c);
     LONGLONG next = c.QuadPart + period;
+    const unsigned flip_every = flip_interval();
+    unsigned long long vbl_n = 0;
     for (;;) {
         /* Sleep to within 0.4 ms, then spin the remainder: the
          * high-resolution timer alone can wake a few hundred us late. The
@@ -862,7 +879,7 @@ static DWORD WINAPI vblank_thread(LPVOID p)
             else YieldProcessor();
         }
         cellGcmTickVBlank();
-        cellGcmTickFlip();
+        if (++vbl_n % flip_every == 0) cellGcmTickFlip();
         InterlockedIncrement(&s_vbl_ticks);
         ps3_tl('V', 0, 0);
         const LONG speed = g_gt5p_game_speed;
@@ -1011,7 +1028,7 @@ static DWORD WINAPI present_thread(LPVOID)
         }
         while (!vbl_thread && now_q - next_tick >= 0 && fired < 240) {
             PROF_T(p_vbl, cellGcmTickVBlank());
-            PROF_T(p_flip, cellGcmTickFlip());
+            { static unsigned long long n_; if (++n_ % flip_interval() == 0) PROF_T(p_flip, cellGcmTickFlip()); }
             if (rsx_ok && cellGcm_take_flip_pending()) {
                 PROF_T(p_pres, backend_present()); p_pres_n++; p_pres_total++; log_frame();
                 gt5p_pv_frame(c_p_fifo, c_p_pres, c_p_pump, c_p_vbl, c_p_flip, c_p_wait);

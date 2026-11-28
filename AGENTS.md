@@ -71,6 +71,19 @@ update; 2.17 is refused). One launcher and one ZIP carry both engines; owned
 DLC offline support remains acceptance work. Private 2.11 inputs are present.
 Never upgrade the 01.04 RPCS3 install in place or carry v104 addresses across.
 
+**0.3.4 first pass (`0.3.4`, 2026-11-29, unmeasured).** Builds use a private copy of the 0.3.3
+runtime: `PS3RECOMP_DIR=<worktree>/scratch/runtime` (0.3.3 itself built against `../ps3recomp-v031-fix`,
+not the manifest's `ps3recomp-tourline5`). New, all off by default until measured: `gt5boot.ps1 -Monza`
+(full-field benchmark with recording/replay splits) and a `monza` PGO route; `RSX_REPLAYPROF=1` (replay
+stages, same-pipeline runs); `RSX_VCB_RANGE=1` (copy only the vertex constants a program reads);
+`SPU_WRCH_INLINE=1` (inline MFC field writes, no re-lift); `performance.frame_cap = 30`
+(`GT5P_FLIP_INTERVAL=2`, race clock unverified); `performance.low_end` (`GT5P_LOW_END=1`);
+`GT5P_CPU_MASK=<hex>` to approximate a smaller CPU (placement now stays inside the process mask,
+`PS3_CORES_PROCESS_MASK=0` old). Refresh the runtime patch by copying `scratch/runtime`'s working
+tree into a fresh `5244db9` checkout, `git add -N` the untracked files only, and `git diff --binary
+HEAD`: that reproduced 0.3.3's patch byte for byte. Measurements owed and deferred items:
+progress-gt5.md, newest entry.
+
 **2.11 Options hint (#79, 2026-11-28).** Returning from Options to GT Mode
 re-reads `9/B5/X4` (measured on 2.11). `GTLife=9/B5/X4` and `GTLife:screen`
 in its target config clear the hint through the same screen hook as 01.04.

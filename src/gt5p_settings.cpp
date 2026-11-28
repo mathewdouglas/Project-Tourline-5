@@ -43,7 +43,7 @@ const char* const kEnvNames[] = {
     "PAD_MODERN_CONTROLS", "PAD_TRIGGER_DEADZONE", "PAD_TRIGGER_CURVE", "PAD_ADAPTIVE_TRIGGERS", "PAD_TRIGGER_RUMBLE", "PAD_SDL_RUMBLE",
     "PAD_RS_DPAD", "GT5P_SPEED_PAD", "GT5P_SPEED_KEY",
     "PAD_NO_SDL", "PAD_NO_KEYBOARD", "PS3_VERBOSE",
-    "GT5P_VBLANK_HZ", "SPURS_LANE_PIN", "SPURS_JL_SPU3", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_STARTUP", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "PAD_SKIP_MOVIE", "RSX_SHADER_INTERP",
+    "GT5P_VBLANK_HZ", "SPURS_LANE_PIN", "SPURS_JL_SPU3", "GT5P_FLIP_INTERVAL", "GT5P_LOW_END", "RSX_SHADER_ASYNC", "RSX_SHADER_WARMUP", "RSX_SHADER_WARMUP_STARTUP", "RSX_PSO_ASYNC", "RSX_RACE_PREWARM", "PAD_SKIP_MOVIE", "RSX_SHADER_INTERP",
     "AUDIO_OUTPUT_CHANNELS", "PS3_USER_NAME",
     "GT5_PATCH_LOOSER_CHASE_CAMERA", "GT5_CHASE_CAM_DAMPER", "GT5_CHASE_CAM_MAX_ANGLE", "GT5_PATCH_UNLOCK_FPS",
     "PS3_WHEEL", "PS3_WHEEL_RANGE", "PS3_WHEEL_FFB", "PS3_WHEEL_FFB_INVERT", "PS3_WHEEL_FFB_SPRING",
@@ -166,6 +166,15 @@ void read_vblank(toml::node_view<const toml::node> v, int& out)
     warn("performance.vblank_hz must be 59.94 or 62.5; keeping " + std::to_string(out / 100.0));
 }
 
+void read_frame_cap(toml::node_view<const toml::node> v, int& out)
+{
+    if (!v) return;
+    if (auto n = v.value<int64_t>()) {
+        if (*n == 60 || *n == 30) { out = (int)*n; return; }
+    }
+    warn("performance.frame_cap must be 60 or 30; keeping " + std::to_string(out));
+}
+
 void read_audio_output(toml::node_view<const toml::node> v, int& out)
 {
     if (!v) return;
@@ -250,6 +259,7 @@ bool known_key(std::string_view section, std::string_view key)
         {"audio", "output"},
         {"performance", "vblank_hz"}, {"performance", "lane_pinning"},
         {"performance", "fifth_spu_lane"},
+        {"performance", "frame_cap"}, {"performance", "low_end"},
         {"performance", "lane_cores"},   /* the old key (off by default then): read no more */
         {"debug", "verbose_log"},
         {"debug", "export_enabled"},
@@ -505,6 +515,8 @@ void parse_into(const toml::table& tbl, Gt5pSettings& s)
     read_vblank(tbl["performance"]["vblank_hz"], s.vblank_hz100);
     read_lane_cores(tbl["performance"]["lane_pinning"], s.lane_cores);
     read_bool(tbl["performance"]["fifth_spu_lane"], "performance.fifth_spu_lane", s.fifth_spu_lane);
+    read_frame_cap(tbl["performance"]["frame_cap"], s.frame_cap);
+    read_bool(tbl["performance"]["low_end"], "performance.low_end", s.low_end);
     read_tristate(tbl["debug"]["verbose_log"], "debug.verbose_log", s.verbose_log);
     read_bool(tbl["debug"]["export_enabled"], "debug.export_enabled", s.debug_export);
 }
@@ -582,6 +594,8 @@ void apply_env(const Gt5pSettings& s)
     set_default_env("SPURS_LANE_PIN", s.lane_cores == 2 ? "2" : s.lane_cores == 1 ? "1" : "0");
     /* SPU 3 only gets jobs if its lane is sent every time. */
     if (s.fifth_spu_lane) { set_default_env("SPURS_JL_SPU3", "1"); set_default_env("SPURS_LANE_PRUNE", "0"); }
+    if (s.frame_cap == 30) set_default_env("GT5P_FLIP_INTERVAL", "2");
+    if (s.low_end) set_default_env("GT5P_LOW_END", "1");   /* src/main.cpp sets its knobs */
 }
 
 /* After apply_env: make the struct say what is actually in effect, so code
@@ -683,6 +697,8 @@ void reflect_env(Gt5pSettings& s)
     if (const char* e = getenv("GT5P_VBLANK_HZ")) s.vblank_hz100 = atof(e) > 62.0 ? 6250 : 5994;
     if (const char* e = getenv("SPURS_LANE_PIN")) s.lane_cores = atoi(e) >= 2 ? 2 : atoi(e) == 1 ? 1 : 0;
     s.fifth_spu_lane = getenv("SPURS_JL_SPU3") != nullptr;
+    if (const char* e = getenv("GT5P_FLIP_INTERVAL")) s.frame_cap = atoi(e) >= 2 ? 30 : 60;
+    if (const char* e = getenv("GT5P_LOW_END")) s.low_end = e[0] == '1';
 }
 
 }  // namespace
@@ -912,6 +928,15 @@ bool gt5p_settings_save(const Gt5pSettings& s, const std::string& path)
          "# console has. Freezes the dealer pages: SPU 3's own bookkeeping row is the\n"
          "# render lists' progress row (Phase 64). For testing only. [SPURS_JL_SPU3]\n"
          "fifth_spu_lane = " << (s.fifth_spu_lane ? "true" : "false") << "\n"
+         "# Frame rate cap: 60 (the default), or 30 for an even 30 fps on a PC that\n"
+         "# cannot hold 60 (frames then complete on every second vblank; the game's\n"
+         "# clock still runs on every vblank). Not yet measured. [GT5P_FLIP_INTERVAL]\n"
+         "frame_cap = " << s.frame_cap << "\n"
+         "# Low-end PC: lower the port's own extras that no other setting covers\n"
+         "# (fewer resident pipelines, about 1.2 GB less RAM in races; fewer shader\n"
+         "# helper threads; the console's plain shadow filter). Not yet measured on\n"
+         "# a weak PC. Restart to apply. [GT5P_LOW_END]\n"
+         "low_end = " << (s.low_end ? "true" : "false") << "\n"
          "\n"
          "[debug]\n"
          "# Full runtime log: \"auto\" (off for all launch methods), true or false.\n"

@@ -8,7 +8,7 @@ A profile comes from running the game, so it is derived data like the
 lift: it stays in scratch/pgo/ and is never committed.
 
     pgo.py gen [--jobs 2]        instrumented build: build_pgo_gen/gt5.exe
-    pgo.py play [--runs 1] [--routes hsr,rome,eiger,carlist] [NAME=VALUE ...]
+    pgo.py play [--runs 1] [--routes hsr,rome,eiger,carlist,monza] [NAME=VALUE ...]
                                  selected routes (High Speed Ring by default:
                                  boot, menus, car list, loading and racing)
                                  on the instrumented
@@ -17,7 +17,7 @@ lift: it stays in scratch/pgo/ and is never committed.
                                  loses nothing
     pgo.py merge                 scratch/pgo/profraw/*.profraw -> scratch/pgo/gt5.profdata
     pgo.py use [--jobs 4]        optimised build: build_pgo_use/gt5.exe
-    pgo.py ab [--rounds 4] [--route hsr|rome|eiger|carlist]
+    pgo.py ab [--rounds 4] [--route hsr|rome|eiger|carlist|monza]
                                frame/CPU tests alternating build/gt5.exe and
                                  build_pgo_use/gt5.exe (after bringing build/
                                  up to date), with a paired summary
@@ -115,7 +115,12 @@ ROUTES = {
     'rome': ('race', ('-Tab', '2')),
     'eiger': ('race', ('-Track', '6')),
     'carlist': ('carlist', ('-ShotsFrom', 'CarList')),
+    # Monza with a premium field (McLaren, car 37): the 25-30 s after the start
+    # where recording and replay of 3,000-4,000 draws a frame are the limit,
+    # paths the other routes barely reach (progress-gt5.md, 2026-11-26).
+    'monza': ('race', ('-Tab', '1', '-Track', '2', '-Car', '37')),
 }
+ROUTE_NAMES = ','.join(ROUTES)
 
 
 def gt5boot(tag, exe, extra=(), frame_test=True, settle=40, route='hsr', cpu=False):
@@ -170,7 +175,7 @@ def cmd_play(a):
     env = [f'LLVM_PROFILE_FILE={raw.as_posix()}/gt5-%p%c.profraw'] + a.vars
     routes = a.routes.split(',')
     if not routes or any(route not in ROUTES for route in routes):
-        sys.exit('[pgo] --routes must be comma-separated hsr,rome,eiger,carlist')
+        sys.exit(f'[pgo] --routes must be comma-separated {ROUTE_NAMES}')
     for i in range(a.runs):
         for route in routes:
             out = gt5boot(f'pgo-play-{route}{i + 1}', exe, env, settle=a.settle, route=route)
@@ -288,7 +293,7 @@ def main():
     sub = p.add_subparsers(dest='cmd', required=True)
     g = sub.add_parser('gen'); g.add_argument('--jobs', type=int, default=2); g.set_defaults(fn=cmd_gen)
     g = sub.add_parser('play'); g.add_argument('--runs', type=int, default=1); g.add_argument('--settle', type=int, default=60)
-    g.add_argument('--routes', default='hsr', help='comma-separated hsr,rome,eiger,carlist')
+    g.add_argument('--routes', default='hsr', help=f'comma-separated {ROUTE_NAMES}')
     g.add_argument('vars', nargs='*', help='NAME=VALUE for the game'); g.set_defaults(fn=cmd_play)
     g = sub.add_parser('merge'); g.set_defaults(fn=cmd_merge)
     g = sub.add_parser('use'); g.add_argument('--jobs', type=int, default=4); g.add_argument('--profile')

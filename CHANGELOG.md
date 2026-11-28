@@ -3,6 +3,19 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
+## [Unreleased] - 0.3.4
+
+Work in progress; nothing below has been measured in game yet, and every new behaviour is off by default.
+
+### Added
+- **F1 > SYSTEM > Frame rate cap:** 60 or 30 fps (`performance.frame_cap`, `GT5P_FLIP_INTERVAL=2`), for an even 30 on PCs that cannot hold 60.
+- **F1 > SYSTEM > Low-end PC** (`performance.low_end`, `GT5P_LOW_END=1`): fewer resident pipelines (less RAM in races), fewer shader helper threads and the plain shadow filter; turning it on also lowers the picture settings once.
+- **Diagnostics:** replay-stage profile (`RSX_REPLAYPROF=1`), a Monza full-field benchmark (`scripts/test/gt5boot.ps1 -Monza`) and PGO route, and `GT5P_CPU_MASK=<hex>` to run on fewer CPUs.
+
+### Changed
+- **Experimental CPU savings, opt-in:** copy only the vertex constants a program reads (`RSX_VCB_RANGE=1`); inline SPU DMA setup writes (`SPU_WRCH_INLINE=1`).
+- **Thread placement** keeps to the CPUs the process may use (`PS3_CORES_PROCESS_MASK=0` old); no change when the whole PC is allowed.
+
 ## [0.3.3] - 2026-11-28
 
 Full-field race smoothness, smarter race shader packs, 2.11 save and menu fixes, and display scaling.

@@ -1,0 +1,76 @@
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 76a18fd4..42849c7f 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -2414,6 +2414,23 @@ static void spurs_group_end(struct spurs_wkl_group* g)
+  * within the same boot. Returns -1 with no topology or no spare core. */
+ static volatile int g_lane_pin = 0;   /* SPURS_LANE_PIN_AB: this window pinned */
+ extern DWORD_PTR ppu_sched_mask(void);
++/* PS3_CORES_PROCESS_MASK (on; =0 old): the logical CPUs this process may
++ * run on (GetProcessAffinityMask), so the core lists below leave out CPUs a
++ * restricted process cannot use. Pinning a thread outside the process mask
++ * fails, so a restricted process (GT5P_CPU_MASK, or `start /affinity`) used to
++ * leave those threads unpinned while the topology still counted every core.
++ * With the whole machine allowed (the normal case) nothing changes. */
++static DWORD_PTR spurs_process_cpus(void)
++{
++    static DWORD_PTR m = 0;
++    if (!m) {
++        DWORD_PTR p = 0, s = 0;
++        const char* e = getenv("PS3_CORES_PROCESS_MASK");
++        if ((e && e[0] == '0') || !GetProcessAffinityMask(GetCurrentProcess(), &p, &s) || !p) p = ~(DWORD_PTR)0;
++        m = p;
++    }
++    return m;
++}
+ static int spurs_lane_cpu(int w, int i)
+ {
+     /* Built once under a lock: the lanes of a workload start together, and a
+@@ -2437,7 +2454,7 @@ static int spurs_lane_cpu(int w, int i)
+                 for (DWORD off = 0; off < len && nc < 64; ) {
+                     PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX x = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)(buf + off);
+                     if (x->Relationship == RelationProcessorCore && x->Processor.GroupMask[0].Group == 0) {
+-                        const KAFFINITY m = x->Processor.GroupMask[0].Mask;
++                        const KAFFINITY m = x->Processor.GroupMask[0].Mask & spurs_process_cpus();
+                         /* Without a known PPU mask, keep the core with CPU 0 for them anyway. */
+                         if (!((ppu ? ppu : (DWORD_PTR)1) & m)) {
+                             int n = 0;
+diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread.c
+index a7fa5543..299d014f 100644
+--- a/runtime/syscalls/sys_ppu_thread.c
++++ b/runtime/syscalls/sys_ppu_thread.c
+@@ -419,6 +419,23 @@ static int host_sched_cores(void)
+  * mask 3 17.2 fps, two separate cores 16.2, unpinned 15.5. Sharing one core
+  * is faster there, so mask 3 stays the default and the topology choice is
+  * PS3_PPU_CORES=topo. PS3_PPU_CORES=<hex mask> picks the CPUs. */
++/* PS3_CORES_PROCESS_MASK (on; =0 old): the logical CPUs this process may
++ * run on (GetProcessAffinityMask), so the core lists below leave out CPUs a
++ * restricted process cannot use. Pinning a thread outside the process mask
++ * fails, so a restricted process (GT5P_CPU_MASK, or `start /affinity`) used to
++ * leave those threads unpinned while the topology still counted every core.
++ * With the whole machine allowed (the normal case) nothing changes. */
++static DWORD_PTR host_process_cpus(void)
++{
++    static DWORD_PTR m = 0;
++    if (!m) {
++        DWORD_PTR p = 0, s = 0;
++        const char* e = getenv("PS3_CORES_PROCESS_MASK");
++        if ((e && e[0] == '0') || !GetProcessAffinityMask(GetCurrentProcess(), &p, &s) || !p) p = ~(DWORD_PTR)0;
++        m = p;
++    }
++    return m;
++}
+ static DWORD_PTR s_sched_mask = 0;
+ DWORD_PTR ppu_sched_mask(void) { return s_sched_mask; }
+ static DWORD_PTR host_sched_mask(int n)
+@@ -447,8 +464,8 @@ static DWORD_PTR host_sched_mask(int n)
+                 (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buf, &len)) {
+             for (char* p = buf; p < buf + len && nc < 64; ) {
+                 PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX r = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)p;
+-                if (r->Processor.GroupMask[0].Group == 0 && r->Processor.GroupMask[0].Mask) {
+-                    KAFFINITY m = r->Processor.GroupMask[0].Mask;
++                if (r->Processor.GroupMask[0].Group == 0 && (r->Processor.GroupMask[0].Mask & host_process_cpus())) {
++                    KAFFINITY m = r->Processor.GroupMask[0].Mask & host_process_cpus();
+                     c[nc].first = m & (~m + 1);           /* lowest logical CPU */
+                     c[nc].all = m;
+                     c[nc].cls = r->Processor.EfficiencyClass; c[nc].idx = nc;

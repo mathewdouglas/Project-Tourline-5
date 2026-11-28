@@ -4,6 +4,112 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
+## 0.3.4 first pass: profiling, cheaper constants and DMA setup, low-end options (`0.3.4`, 2026-11-29)
+
+The non-architectural items from the 2026-11-28/29 review of Codex's suggestions, written while
+0.3.3 was being deployed. **Nothing here has been built into a game or run yet**: the user asked
+for no testing. Each changed file passed a syntax-only compile (`clang-cl /Zs`) with the 0.3.3
+build's own flags, and the runtime patch applies forward and in reverse. Every new behaviour is
+**off by default** until measured, so 0.3.4 as committed plays like 0.3.3 unless a switch is set.
+
+**Runtime base.** The 0.3.3 builds compile against `../ps3recomp-v031-fix` (`PS3RECOMP_DIR` in
+`build/` and `build_pgo_gen/`), not the manifest's `../ps3recomp-tourline5`, which is three days
+older. 0.3.4 uses a private copy of the 0.3.3 runtime in `scratch/runtime` (a no-hardlinks clone at
+`5244db9` with `ps3recomp-v031-fix`'s working tree copied over, untracked files included). Build
+with `PS3RECOMP_DIR=<this worktree>/scratch/runtime`. Regenerating the tracked patch from the 0.3.3
+runtime this way (copy the working tree into a fresh `5244db9` checkout, `git add -N` only the
+untracked files, `git diff --binary HEAD`) reproduces the old `patches/ps3recomp-5244db9-local.patch`
+byte for byte, so the new patch differs from it in exactly the seven files below.
+`patches/incremental/`: `replay-profile-vcb-range.patch`, `spu-wrch-inline.patch`,
+`cores-process-mask.patch`.
+
+### Done
+
+- **Monza benchmark (`scripts/test/gt5boot.ps1 -Monza`).** The full-field slow stretch after a Monza
+  start: `-Route race -Tab 1 -Track 2 -Car 37 -FrameTest`, sampled from 2 s after `RaceStart` for 30 s
+  (explicit values win), with `GT5P_PRESENT_PROF`, `RSX_DRAWPROF` and `RSX_REPLAYPROF` on. Beside the
+  frame test it averages the profiler lines printed inside the window (taken by the error log's line
+  count at the window's start and end) into `scratch\pv\<t>.prof.txt`. `pgo.py` has a `monza` route
+  for `play --routes ...` and `ab --route monza`: no training route reached 3,000-4,000 draws a frame.
+- **Replay profile (`RSX_REPLAYPROF=1`, runtime).** Every 5 s, the replay thread's draw loop in ms per
+  frame by stage: target (retargeting, depth ownership), pipeline (lookup and SetPipelineState),
+  state, textures (snapshots, resolves, transitions), bind (descriptors, constants, vertex/index
+  views), draw, rest (after the draw, and draws left out). Also draws, pipeline changes and target
+  switches per frame, and the draws in same-pipeline runs of 1, 2-3, 4-7, 8-15, 16-63 and 64+: how
+  much an ExecuteIndirect batch could cover, since it cannot change the pipeline. TSC laps on the
+  replay thread; unset, each probe is one branch. It answers the open item of 2026-11-26 ("per-draw CPU
+  cost in ... replay") before any draw-packet design.
+- **Vertex constants by range (`RSX_VCB_RANGE=1`, runtime).** A draw copied the whole 8 KB bank into
+  its slot whenever the bank changed, which on a race frame is most draws (each car part has its own
+  matrices; the `[present-thread]` line's "constant banks" counts them, and now their KiB). With the
+  switch it copies only the registers its program can read, taken from the program's HLSL
+  (`vp_hlsl_const_range`: literal `vp_c[n]` reads; any relative `vp_c[(n + a0.x) & 511u]` read, or an
+  unknown form, keeps the whole bank). A later draw reuses a slot only when its own range lies inside
+  the copied one. Exact by construction: a slot's other registers are never read by its program; the
+  vertex interpreter runs the same program. Capture/constant diagnostics (`RSX_CAP*`, `VP_MVP`,
+  `RSX_DBG_CB`, `RSX_VCB_DBG`, `VP_FIXPROJ`) read whole slots and turn it off. The range rides on the
+  pending-shader table too, so warm runs (shaders from the memo) have it.
+  - *Refined from the review.* The review proposed fragment-constant reuse. Reading the code, the
+    fragment block (`vp_record_cb`'s b1) is only about 20 + 4k + 44 floats a draw, and render-target
+    textures rewrite units 0-3 of a draw's own block after recording, so sharing it would need
+    copy-on-write for a few hundred bytes. The vertex bank is the 8 KB copy, so that is what changed.
+- **Inline MFC field writes (`SPU_WRCH_INLINE=1`, runtime, no re-lift).** `runtime/spu/spu_wrch_inline.h`,
+  included at the end of `spu_helpers.h`, makes the lifted code's `spu_wrch()` a macro. The six
+  channels that only latch a context field (LSA, EAH, EAL, Size, TagID, WrTagMask) store inline when the
+  switch is on, as `mfc_context_write` already does inside `spu_wrch()` under `SPU_DMA_FAST`. Every
+  other channel, and every write with the switch off, `SPU_DMA_FAST=0` or `SPU_CHHIST`, calls
+  `spu_wrch()`. `spu_channels.c` and `spu_interp.c` define `SPU_WRCH_NO_MACRO`; the lifted files
+  include their `spu_recomp.h` prototype first (checked for every file in `generated/` and `src/`).
+  Preprocessing `b0165A700` shows its 14 field-write sites take the inline path. Lifted SPU code
+  recompiles, so a PGO profile goes stale for those functions. No lane profile so far lists
+  `spu_wrch` among workload 4's top runtime functions (4-8% each), so expect a small gain; measure with
+  `GT5P_SAMPLE_WID=4` at Monza.
+- **Frame rate cap (`performance.frame_cap = 30`, F1 SYSTEM > Frame rate cap, `GT5P_FLIP_INTERVAL=2`).**
+  A requested flip completes only on every n-th vblank (`src/gt5p_present.cpp`, both the vblank thread
+  and the fallback loop); the vblank clock and its handlers still tick every vblank. *Hypothesis:* GT5's
+  races keep real time with every frame two vblanks long, as its 30 fps scenes do. Check with
+  `race.ps1 -RaceShots` and the HUD timer before recommending it.
+- **Low-end PC (`performance.low_end`, F1 SYSTEM > Low-end PC, `GT5P_LOW_END=1`).** `src/main.cpp`'s
+  defaults table sets `RSX_PSO_RESIDENT_MAX=4096` (about 1.2 GB less heap at Monza, 2026-11-27, with 7
+  hitches over 50 ms against 2), `RSX_RACE_PREWARM_THREADS=2`, `RSX_SHADER_WORKERS_RACE=1` and
+  `RSX_SHADOW_SOFT=0`; each yields to its own variable, and it works under `GT5P_NO_SETTINGS=1`.
+  Turning it on in F1 also sets 1280 x 720, MSAA off, 4x filtering, Smooth colour off and no frame
+  generation once; the player can change them afterwards. `RSX_SHADOW_SOFT=0` changes shader text, so
+  the first run after switching rebuilds shaders.
+- **Placement inside the process mask (`PS3_CORES_PROCESS_MASK`, runtime, on; `=0` old) and
+  `GT5P_CPU_MASK=<hex>` (src/main.cpp).** The PPU and lane core lists (`host_sched_mask`,
+  `spurs_lane_cpu`) now leave out logical CPUs outside the process affinity mask; with the whole
+  machine allowed nothing changes. `GT5P_CPU_MASK` sets that mask before any thread starts and
+  defaults `RSX_SHADER_WORKERS`, `RSX_SHADER_WARMUP_THREADS` and `RSX_PSO_DEMAND_THREADS` to the
+  mask's CPU count, so `GT5P_CPU_MASK=FF` (4 cores, 8 threads) or `=55` (4 cores, one thread each)
+  approximates a smaller CPU on this i5-12400F for the potato-mode measurements. Cache sizes and
+  clocks stay this machine's.
+
+### Not done, and why
+
+- **Off-thread vertex/index copies.** The upload stage interleaves index conversion, the cross-frame
+  vertex cache and GPU-fetch setup; the copies' sources can be reused by the guest once the walker
+  writes a label, semaphore or get pointer. A worker design needs a flush before each of those and
+  must not break the readers of the copied data. Not attempted without being able to run it; decide
+  after `-Monza` shows how upload compares with replay.
+- **Smarter race packs.** Largely done in 0.3.3 (race sets from recorded sessions, member-wise
+  packs); the remaining RAM lever is `RSX_PSO_RESIDENT_MAX`, now in Low-end PC.
+- **FSR and SMAA.** Both need third-party source (FidelityFX SDK, SMAA's shaders and area/search
+  textures), and this pass used only the local files from 0.3.3. FSR 3.1 has its plan in the
+  `research/fsr3-xess` worktree (`docs/plan-fsr3-xess.md`, not merged).
+- **Draw packets, the whole native car job, native geometry to draws, a SPURS task graph.**
+  Architectural; they wait for the `-Monza` and `GT5P_SAMPLE_WID=4` profiles.
+
+### Measurements owed (in order)
+
+1. Build with the private runtime and run `gt5boot.ps1 -Monza` with nothing set: the baseline split.
+2. `-Monza RSX_VCB_RANGE=1` and `-Monza SPU_WRCH_INLINE=1`, A/B against 1, and the "constant banks
+   ... KiB" field. Then HSR/car list frame tests for regressions, and `RSX_CMD_CHECK=1`.
+3. `race.ps1 -RaceShots` with `GT5P_FLIP_INTERVAL=2`: does the HUD timer keep real time?
+4. `GT5P_CPU_MASK=FF` and `=55` HSR and Monza frame tests, with and without `GT5P_LOW_END=1`, and the
+   race clock: does a 4-core CPU bring back Phase 102's slow motion?
+5. Turn on by default only what measured faster and exact; refresh PGO with `--routes ...,monza`.
+
 ## 2.11 Options hint clears on return to GT Mode (#79, 2026-11-28)
 
 The 0.2.1 options-word check was still present in 0.3.2, but #79 reproduced on

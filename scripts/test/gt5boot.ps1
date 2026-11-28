@@ -24,13 +24,27 @@
 #   build_pgo_use\gt5.exe (scripts\pgo\pgo.py).
 #   -ExtraHold "<presses>": appended to the PAD_HOLD script (e.g. a camera
 #   change: "@RaceStart+3000-3200:TRIANGLE").
+#   -Monza: the full-field slow stretch after a Monza start (progress-gt5.md,
+#   2026-11-26): -Route race -Tab 1 -Track 2 -Car 37 -FrameTest, sampled from
+#   2 s after RaceStart for 30 s (any of those given explicitly wins), with
+#   GT5P_PRESENT_PROF, RSX_DRAWPROF and RSX_REPLAYPROF on. Besides the frame
+#   test it averages their lines printed inside the window (recording stages,
+#   replay stages, same-pipeline runs, walk/GPU) into scratch\pv\<t>.prof.txt.
 #   -> scratch\pv\<t>.out/.err, <t>.menu<N>.png
 [CmdletBinding(PositionalBinding = $false)]
 param([string]$Tag = "gt5", [int]$Settle = 60, [int]$Gap = 10, [switch]$Fresh, [switch]$FreshSave, [switch]$Movie,
       [ValidateSet("menu", "carlist", "grid", "race")][string]$Route = "menu", [string]$ShotsFrom = "",
       [switch]$FrameTest, [int]$SampleDelay = 20, [switch]$Cpu, [string]$ExtraHold = "", [string]$Exe = "",
-      [int]$Track = 0, [int]$Car = 0, [int]$Tab = 0,
+      [int]$Track = 0, [int]$Car = 0, [int]$Tab = 0, [switch]$Monza,
       [Parameter(ValueFromRemainingArguments = $true)] $Vars)
+if ($Monza) {
+    $Route = "race"; $FrameTest = $true
+    if (-not $PSBoundParameters.ContainsKey("Tab")) { $Tab = 1 }
+    if (-not $PSBoundParameters.ContainsKey("Track")) { $Track = 2 }
+    if (-not $PSBoundParameters.ContainsKey("Car")) { $Car = 37 }
+    if (-not $PSBoundParameters.ContainsKey("SampleDelay")) { $SampleDelay = 2 }
+    if (-not $PSBoundParameters.ContainsKey("Settle")) { $Settle = 30 }
+}
 . "$PSScriptRoot\milestone.ps1"
 Add-Type -AssemblyName System.Drawing
 if (-not ("WinShot" -as [type])) {
@@ -65,6 +79,7 @@ if ($Route -eq "race") { $set.PAD_HOLD = Get-GT5RaceRoute $Track $Car $Tab; if (
 if ($Movie) { $set.Remove("PAD_HOLD") }
 if ($FrameTest) { $set.GT5P_FRAME_LOG = "$dir\$Tag.frames.csv"; $set.PAD_HOLD += ",@RaceStart+1000-900000:CROSS" }
 if ($ExtraHold) { $set.PAD_HOLD += ",$ExtraHold" }
+if ($Monza) { $set.GT5P_PRESENT_PROF = "1"; $set.RSX_DRAWPROF = "1"; $set.RSX_REPLAYPROF = "1" }
 foreach ($v in $Vars) { if (-not $v) { continue }; $k, $val = "$v" -split "=", 2; $set[$k] = $val }
 $p = $null
 function Stop-GT5 {
@@ -102,6 +117,7 @@ else {
     "$ms at $tm s"; if ($ShotsFrom) { "$ShotsFrom $t2 s after that" }
     if ($FrameTest) { Start-Sleep -Seconds $SampleDelay }
     $tS0 = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $errLine0 = if ($Monza) { @(Get-Content "$dir\$Tag.err" -ErrorAction SilentlyContinue).Count } else { 0 }
     if ($Cpu) { $p.Refresh(); $cpu0 = $p.TotalProcessorTime.TotalSeconds; $thr0 = @{}; foreach ($t in $p.Threads) { $thr0[$t.Id] = $t.TotalProcessorTime.TotalSeconds } }
     $sw = [Diagnostics.Stopwatch]::StartNew(); $i = 0
     while ($sw.Elapsed.TotalSeconds -lt $Settle) {
@@ -115,6 +131,7 @@ else {
         $bmp.Save("$dir\$Tag.menu$i.png"); $bmp.Dispose()
     }
     $tS1 = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $errLine1 = if ($Monza) { @(Get-Content "$dir\$Tag.err" -ErrorAction SilentlyContinue).Count } else { 0 }
     if ($Cpu -and -not $p.HasExited) {
         $p.Refresh(); $span = ($tS1 - $tS0) / 1000.0
         $rows = foreach ($t in $p.Threads) { $d = $t.TotalProcessorTime.TotalSeconds - [double]$thr0[$t.Id]
@@ -150,6 +167,38 @@ else {
                 spu_dma_fast = $set.SPU_DMA_FAST; ps3_verbose = $set.PS3_VERBOSE
             } | ConvertTo-Json | Set-Content "$dir\$Tag.frames.json"
         } else { "FrameTest: too few frames in the window ($($fr.Count))" }
+    }
+    if ($Monza) {
+        # The 5 s profiler lines printed between the window's start and end.
+        $lines = @(Get-Content "$dir\$Tag.err" -ErrorAction SilentlyContinue)
+        $last = [Math]::Min($errLine1, $lines.Count) - 1
+        $win = if ($last -ge $errLine0) { @($lines[$errLine0..$last]) } else { @() }
+        function Get-ProfAvg([string[]]$rows, [string]$pattern) {
+            $sum = [ordered]@{}; $n = 0
+            foreach ($r in $rows) {
+                $n++
+                foreach ($m in [regex]::Matches($r, $pattern)) {
+                    $k = $m.Groups['k'].Value; $sum[$k] = [double]$sum[$k] + [double]$m.Groups['v'].Value
+                }
+            }
+            if ($n -eq 0) { return "no lines in the window" }
+            "($n lines) " + (($sum.Keys | ForEach-Object { "{0} {1:N2}" -f $_, ($sum[$_] / $n) }) -join ", ")
+        }
+        $dp = @($win | Where-Object { $_ -like '`[drawprof`]*' })
+        $rp = @($win | Where-Object { $_ -like '`[replayprof`]*' })
+        $pt = @($win | Where-Object { $_ -like '`[present-thread`] 5 s:*' })
+        $pp = @($win | Where-Object { $_ -like '`[present-prof`]*' })
+        $rpStages = @($rp | ForEach-Object { ($_ -split '\|')[0] })
+        $prof = @(
+            "recording stages, ms/frame: " + (Get-ProfAvg $dp '(?<k>[a-z_]+) (?<v>[\d.]+) ms \(')
+            "replay stages, ms/frame: " + (Get-ProfAvg $rpStages '(?<k>[a-z]+) (?<v>[\d.]+)')
+            "replay counts per frame: " + (Get-ProfAvg $rp '(?<v>[\d.]+) (?<k>draws|pipeline changes|target switches)')
+            "draws per frame in same-pipeline runs of length: " + (Get-ProfAvg $rp '(?<k>1|2-3|4-7|8-15|16-63|64\+): [\d.]+/(?<v>[\d.]+)')
+            "present thread, ms/frame: " + (Get-ProfAvg $pt '(?<k>replay) (?<v>[\d.]+) ms|waited (?<v>[\d.]+) ms (?<k>for it)|(?<v>[\d.]+) ms (?<k>for the GPU)|\((?<v>[\d.]+) (?<k>KiB)\)')
+            "present loop, s per 5 s (gpu ms/frame): " + (Get-ProfAvg $pp '(?<k>fifo|present|pump) (?<v>[\d.]+)s|gpu (?<v>[\d.]+) ms (?<k>avg)')
+        )
+        $prof | Set-Content "$dir\$Tag.prof.txt"
+        $prof | ForEach-Object { "Monza: $_" }
     }
 }
 } finally { Stop-GT5 }

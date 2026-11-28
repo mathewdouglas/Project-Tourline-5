@@ -673,6 +673,27 @@ const std::vector<Item>& items()
           "SPURS_LANE_PIN", { {0, L"Off"}, {1, L"Hint"}, {2, L"Strict"} },
           [](const UiSettings& s) { return s.lane_cores; },
           [](UiSettings& s, int v) { s.lane_cores = v; }, nullptr },
+        { L"SYSTEM", L"Frame rate cap",
+          L"60, or 30 for an even 30 fps on a PC that cannot hold 60: frames then complete on "
+          L"every second vblank while the game's clock keeps running. Not yet measured. "
+          L"Takes effect after a restart.",
+          "GT5P_FLIP_INTERVAL", { {60, L"60 fps"}, {30, L"30 fps"} },
+          [](const UiSettings& s) { return s.frame_cap; },
+          [](UiSettings& s, int v) { s.frame_cap = v; }, nullptr },
+        { L"SYSTEM", L"Low-end PC",
+          L"Fewer resident pipelines (about 1.2 GB less RAM in races), fewer shader helper "
+          L"threads and the console's plain shadow filter. Turning it on also sets 1280 x 720, "
+          L"no MSAA, 4x filtering, Smooth colour off and no frame generation; change them after "
+          L"if you like. Not yet measured on a weak PC. Takes effect after a restart.",
+          "GT5P_LOW_END", kOnOff,
+          [](const UiSettings& s) { return s.low_end ? 1 : 0; },
+          [](UiSettings& s, int v) {
+              if (v && !s.low_end) {
+                  s.resolution = 720; s.msaa = 1; s.anisotropy = 4;
+                  s.smooth_colour = false; s.frame_gen = 0;
+              }
+              s.low_end = v != 0;
+          }, nullptr },
         /* "Fifth SPU lane" (fifth_spu_lane, SPURS_JL_SPU3) is left off the page:
          * it cannot work, as SPU 3's own bookkeeping row is the render lists'
          * progress row (Phase 64). The file key stays, for testing. */
