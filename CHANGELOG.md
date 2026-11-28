@@ -3,6 +3,50 @@
 All notable changes to this port. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/).
 
+## [0.3.3] - 2026-11-28
+
+Full-field race smoothness, smarter race shader packs, 2.11 save and menu fixes, and display scaling.
+
+### Added
+- **F1 > GAME > Player name:** type the PS3 user name shown on GT Life (`game.player_name`, 1-16 characters).
+- **Race sessions and the race set:** each race records the pipelines it actually draws (`RSX_RACE_SESSIONS=0` off); the loading screen prepares and packs a race set built from those sessions instead of the whole learned index (`RSX_RACE_SET=0` old), with room reserved for it (`RSX_RACE_SET_RESERVE=0` old).
+- **Heap usage in debug reports** (`GT5P_HEAP_REPORT=0` leaves it out; `GT5P_HEAP_LOG` logs it).
+
+### Fixed
+- **2.11 saves over 2 MiB would not load (#94, #95, #99):** 2.11 splits a large save into `GT5.0`, `GT5.1`, ...; the runtime now gives the game its save file list where 2.11 looks for the later parts (`PS3_SAVEDATA_LIST_IN_BUF=0` old), so the whole save loads instead of stopping with "read error" / "cannot convert Bool to STType". A save also removes old parts it did not write, only after it succeeds (`PS3_SAVEDATA_RECREATE=0` old).
+- **2.11 "PC Settings" hint stayed up after leaving Options (#79):** it now clears on return to GT Mode, as on 01.04.
+- **Blurry or wrongly sized picture with Windows display scaling (#97):** `gt5.exe` is per-monitor DPI aware and renders real pixels at any scale (`GT5P_DPI_AWARE=0` old).
+- **Full-field race slowdowns:** the FIFO walker no longer waits for the replay on guest copies (`RSX_COPY_SNAP_REPLAY=0` old; Monza 41.9 -> 46.6 FPS), headlamp-glass scene snapshots are shared per texture-cache invalidate (`RSX_SELF_EPOCH=0`, `RSX_SELF_READ_ONLY=0`, `RSX_SELF_RESOLVE=0` old), and frame generation pauses when the display cannot show it at 60 FPS (`RSX_FG_REFRESH_GUARD=0` old; DLAA + FG 2x 46.2 -> 58.7-59.3 FPS in the reported scene).
+
+### Changed
+- **Race pack:** matched member by member, so a few new pipelines no longer rebuild the whole pack (`RSX_RACE_PACK_REFRESH_PCT`, default 10); recipes for other settings are kept (`RSX_RACE_PACK_DESC_STALE=1` old); written to disk as it is built (`RSX_RACE_PACK_STREAM=0` old); unfinished pack files are cleaned up (`RSX_RACE_PACK_TMP_CLEAN=0` keeps them).
+
+## [0.3.2] - 2026-11-26
+
+### Added
+- **Right stick as D-Pad (#90)** for in-race RA functions (`[input] right_stick_dpad` / `PAD_RS_DPAD`: Off / In race / Always, default Off), and a **speed toggle** button and key to cycle 1x/2x/3x game speed (`speed_hotkey_pad` / `GT5P_SPEED_PAD`, `speed_hotkey_key` / `GT5P_SPEED_KEY`, default F2), all in **F1 > CONTROLLERS**.
+
+### Fixed
+- **Ford GT40 Mk.IV inverted in the main view on 0.3.1 (#92):** the mirror-only cull bit is set only for explicit clockwise mirror passes, keeping #86 fixed.
+- **Harsh/banded reflections on Standard and dealership cars (#93):** static cube maps upload their full mip chain (`RSX_TEX_CUBE_MIPS=0` old), with the correct DXT3/DXT5 face stride.
+- **Stale textures under write-watch tracking (#89):** a held texture whose pages were written is verified in full before it is kept (`RSX_TEX_WW_DENSE_DIRTY=0` old).
+- **2.11 package install "Log file open failed" (#91):** the headless RPCS3 log folder is created first, and install failures are logged.
+
+## [0.3.1] - 2026-11-25
+
+### Changed
+- **Shader interpreter overhaul:** a dynamic 16-sampler table (`RSX_SHADER_INTERP_DYN_SAMP=0` old) and parallel background variant compiles and pipeline builds (`RSX_SHADER_INTERP_BG_WORKERS`, `RSX_SHADER_INTERP_PSO_WORKERS`, default 2): cold variant compiles 3x faster and cold-cache pop-in down 97%. Border-addressed textures in the interpreter (`RSX_SHADER_INTERP_BORDER=0` old) and faster vertex interpretation and replay.
+- **DLSS Frame Generation:** hudless colour and the real camera projection are passed to DLSS-G (`RSX_FG_HUDLESS=0`, `RSX_FG_REAL_PROJ=0` old); per-object motion vectors are un-jittered (`RSX_MV_OBJ_UNJIT=0` old).
+
+### Fixed
+- **11 s freeze after changing F1 settings (#85):** unmapped jumps in SPU display lists are retried for up to 50 ms before resyncing (`GCM_BAD_BRANCH_RETRY_MS=0` old).
+- **Rear-view mirror white/chrome streaks on two-sided cars (#86)** (`RSX_CULL_FRONT_FACE_ALWAYS=0` old).
+- **2.11 boot crash `read error at 2044938` in GlobalStatus.ad (#87):** a missing guest catch site is registered.
+- **Missing body panels in car thumbnails (#88):** offscreen pipeline waits have a per-draw and a per-frame budget (`RSX_PSO_WAIT_OFFSCREEN_MS`, `RSX_PSO_WAIT_OFFSCREEN_FRAME_MS`).
+- **Stutter with DLSS Quality in the car select and 3D menus:** DLSS-scaled scene targets no longer take the small-offscreen pipeline wait.
+- **Post-race replay cars drawn over walls:** depth survives depth-less full-screen passes (`RSX_DEPTH_KEEP_ZETA=0` old).
+- **01.04 "PC settings" hint stuck after leaving Options to GT Life.**
+
 ## [0.3.0] - 2026-11-25
 
 NVIDIA DLSS / DLAA & Frame Generation release, plus a cleaner compact F1 settings UI, a dedicated **PATCHES** tab with Accurate Throttle Linearity, Arcade menu text fix (#83), and upstream `ps3recomp` v0.19/v0.20 runtime ports.
