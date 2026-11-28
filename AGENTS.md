@@ -493,8 +493,8 @@ old). Textures over a target bind it before sub-viewport captures
 See progress-gt5.md.
 
 **Release 0.3.3** (tag `v0.3.3`, commit `341f187`): built and verified
-(59.9 FPS packaged HSR, Defender clean); VirusTotal still to run before
-publishing. A 2.11 clean build needs `--private` = the `feat-gt5-v211`
+(59.9 FPS packaged HSR, Defender clean), published 2026-11-29;
+VirusTotal 1 engine each on the exes (Webroot/APEX heuristics, as 0.3.2). A 2.11 clean build needs `--private` = the `feat-gt5-v211`
 worktree (2.11 job captures). See progress-gt5.md.
 
 **Release 0.1.15** (tag `v0.1.15`, commit `bc00f98`): the #30 FACING fix;
