@@ -4,7 +4,7 @@ This log records measurements for the retail US disc build of Gran Turismo 5,
 separately from both GT5 Prologue targets. The working branch is `gt5`.
 Machine-specific dump and RPCS3 paths are in the ignored `AGENTS.local.md`.
 
-## Release 0.3.3 built & verified (2026-11-29; VirusTotal pending)
+## Release 0.3.3 published (2026-11-29)
 
 Tag `v0.3.3` = `341f187` (branch `perf/v0.3.3-field-gpu`): #79 (2.11), #94/#95/#99, #97, F1 player name,
 full-field race fixes, race sessions/set and the member-matched, streamed race pack. CHANGELOG now also
@@ -27,8 +27,11 @@ has the 0.3.1 and 0.3.2 entries that those releases shipped without.
   **59.9 FPS**, 0.6% late, median 16.6 ms, p99 19.2 ms, max 34.1 ms, walk 5.75 ms/frame. Two dips in
   frames per 5 s (190/159 and 151/150, then 300-301) during first-race pipeline builds on this cache.
 - **Defender** (`MpCmdRun -Scan -ScanType 3`): 0 threats on the ZIP and the extracted folder.
-- **Open before publishing:** VirusTotal (`scripts/release/vt.py scan`; the key is one-use and was not
-  supplied). Not run: a packaged 2.11 boot, and a 2.11 save over 2 MiB.
+- **VirusTotal:** ZIP 1/63, `gt5.exe` 1/65, `gt5_211.exe` 1/66 (`Webroot=W32.Malware.gen` only),
+  `tourline5.exe` 1/68 (`APEX=Malicious` only), all DLLs 0 (the same single-engine heuristics as
+  0.3.2; Bitdefender and Microsoft clean). Published as Latest with a note; `main` fast-forwarded to
+  `a62c376`. Commented on #79, #94, #95, #97, #99 (left open for the reporters to confirm).
+- **Not run:** a packaged 2.11 boot, and a 2.11 save over 2 MiB (#94/#95/#99 reporters asked to test).
 
 ## 2.11 Options hint clears on return to GT Mode (#79, 2026-11-28)
 
